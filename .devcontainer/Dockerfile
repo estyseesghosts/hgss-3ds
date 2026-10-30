@@ -29,13 +29,19 @@ RUN apt-get install -y --no-install-recommends \
 # Multilib g++-10 (host32 target needs -m32).
 RUN apt-get install -y --allow-downgrades g++-10-multilib gcc-10-multilib
 
-# Wine for MWCC: Ubuntu 24.04's own wine with i386 multiarch.
-# The decomp's image uses winehq-stable, but WineHQ 11.0 aborts in
-# ntdll/unix/virtual.c (anon_mmap_fixed assertion) under both Rosetta and QEMU
-# amd64 emulation on Apple silicon (see docs/decisions.md, docs/progress/phase-0.md).
+# Wine for MWCC and the SDK tools: WineHQ stable 10.0 (the decomp's image uses winehq-stable).
+# Findings (docs/decisions.md): WineHQ 11.0 aborts in ntdll/unix/virtual.c (anon_mmap_fixed)
+# under emulation; Ubuntu's distro Wine 9.0 runs MWCC but cannot load the Nitro SDK tools
+# (fixed image base 0x400000, no relocations: "failed to create main module, c0000018");
+# WineHQ 10.0 runs both.
 RUN dpkg --add-architecture i386 \
+ && mkdir -pm755 /etc/apt/keyrings \
+ && wget -q -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
+ && wget -q -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources \
  && apt-get update \
- && apt-get install -y --no-install-recommends wine wine32 wine64 libwine \
+ && V=$(apt-cache madison winehq-stable | awk '{print $3}' | grep '^10\.0' | head -1) \
+ && test -n "$V" \
+ && apt-get install -y --no-install-recommends winehq-stable=$V wine-stable=$V wine-stable-amd64=$V wine-stable-i386=$V \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # devkitPro via its Debian/Ubuntu pacman. The devkitpro/devkitarm image's
