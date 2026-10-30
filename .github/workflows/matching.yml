@@ -1,0 +1,48 @@
+# Byte-matching DS build of the pinned decomp. DISABLED: see docs/ci.md.
+#
+# Needs MWCC and the Nitro SDK, which are proprietary and must never be in a
+# public image, a public runner or an artifact. It runs only on a self-hosted
+# runner labelled `hgss-matching` that has the user's private folder at
+# /private (mwccarm/, NitroSDK/). To enable: set the repository variable
+# MATCHING_ENABLED=true and register such a runner on a PRIVATE repository.
+name: matching
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [upstream.lock, tools/install-ds-toolchain.sh, .github/workflows/matching.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  matching:
+    if: ${{ vars.MATCHING_ENABLED == 'true' }}
+    runs-on: [self-hosted, hgss-matching]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the pinned decomp (no patches applied)
+        run: |
+          . ./upstream.lock
+          rm -rf "$RUNNER_TEMP/decomp"
+          git clone "$url" "$RUNNER_TEMP/decomp"
+          git -C "$RUNNER_TEMP/decomp" checkout "$commit"
+        shell: bash
+
+      - name: Install the DS toolchain from /private
+        run: tools/install-ds-toolchain.sh "$RUNNER_TEMP/decomp" /private
+
+      - name: Build and verify HeartGold (US)
+        working-directory: ${{ runner.temp }}/decomp
+        run: |
+          make -j"$(nproc)"
+          echo "4fcded0e2713dc03929845de631d0932ea2b5a37  build/heartgold.us/pokeheartgold.us.nds" | sha1sum -c -
+
+      - name: Build and verify SoulSilver (US)
+        working-directory: ${{ runner.temp }}/decomp
+        run: |
+          make GAME_VERSION=SOULSILVER -j"$(nproc)"
+          echo "f8dc38ea20c17541a43b58c5e6d18c1732c7e582  build/soulsilver.us/pokesoulsilver.us.nds" | sha1sum -c -
+      # Deliberately no upload-artifact step: ROMs and ELFs contain game code.
