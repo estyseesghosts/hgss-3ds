@@ -1,0 +1,3 @@
+# The pokeplatinum-3ds commit whose 3ds_port/ (and tools/) we vendor byte-identical.
+url=https://github.com/GabeSud0/pokeplatinum-3ds.git
+commit=359fbec80a5c0664d4fa72caaae87465b640f9d6

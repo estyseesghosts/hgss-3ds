@@ -1,0 +1,5 @@
+# The exact decompilation commit this port builds against.
+# Update it deliberately (and fix the patches) rather than tracking master.
+# Bump only at phase boundaries: the fork renames types daily.
+url=https://github.com/ctrl-cheeb-del/pokeheartgold.git
+commit=8cbb4a19ab781611ff1767035dcaea6b47baeded

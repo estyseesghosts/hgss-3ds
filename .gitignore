@@ -1,0 +1,38 @@
+# ---- Game and SDK content: never commit these ----
+*.nds
+*.srl
+*.dsi
+*.3ds
+*.cia
+*.cci
+*.cxi
+*.sav
+*.dsv
+*.pak
+*.exe
+*.dll
+*.7z
+mwccarm*/
+roms/
+saves/
+extracted/
+data_pack/
+private/
+tests/golden/
+
+# ---- Build output ----
+build/
+.local-tools/
+*.3dsx
+*.smdh
+*.elf
+*.map
+*.shbin
+*_shbin.h
+*.o
+*.d
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
