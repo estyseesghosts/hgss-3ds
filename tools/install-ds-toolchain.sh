@@ -56,6 +56,23 @@ copy "$SPEC/ARM7-TS.lcf.template" sub/ARM7-TS.lcf.template
 copy "$SPEC/ARM9-TS.lcf.template" ARM9-TS.lcf.template
 copy "$SPEC/mwldarm.response.template" mwldarm.response.template
 
+# The SDK 4.2-jp templates carry Shift-JIS (cp932) comments in their revision
+# history; the decomp's scripts (tools/nitro-section-renames/*.py) read the
+# generated .lcf as UTF-8 and crash on them. Transcode the installed copies
+# only; /private is never modified and no non-comment content changes.
+for t in sub/ARM7-TS.lcf.template ARM9-TS.lcf.template; do
+    python3 - "$DECOMP/$t" <<'PY'
+import sys
+p = sys.argv[1]
+data = open(p, "rb").read()
+try:
+    data.decode("utf-8")
+except UnicodeDecodeError:
+    open(p, "wb").write(data.decode("cp932").encode("utf-8"))
+    print("transcoded cp932 -> utf-8:", p)
+PY
+done
+
 # Smoke-test the compiler under wine (also warms the wine prefix).
 if command -v wine >/dev/null; then
     out=$(cd "$DECOMP" && LM_LICENSE_FILE="$DECOMP/tools/mwccarm/license.dat" xvfb-run -a wine tools/mwccarm/2.0/sp2p2/mwccarm.exe 2>&1 | head -3 || true)
