@@ -1,0 +1,23 @@
+# New Game: Oak's speech -> gender -> naming (BUTTON entry) -> confirm ->
+# first bedroom frames.  Starts from a no-save boot.
+# UNCALIBRATED: all frame numbers and the naming key sequence are estimates;
+# the naming keyboard layout must be checked on the first capture.
+every: 5
+0 -
+1800 A
+1805 -
+2100 A
+2105 -
+2400 A
+2405 -
+# Oak's speech: advance dialogue with A every ~1.5 s
+2700 A
+2705 -
+3000 A
+3005 -
+3300 A
+3305 -
+3600 A
+3605 -
+# TODO(calibrate): gender choice, name entry via D-pad + A, Start/OK, confirm
+end: 9000

@@ -1,0 +1,12 @@
+# Boot with NO save file, skip logos/movie to the title, open the main menu.
+# UNCALIBRATED: frame numbers are estimates; tune on the first capture.
+# Press Start / A on the title (title screen is reached after the movie or
+# after skipping with A), then idle on the main menu.
+every: 10
+0 -
+1800 A
+1805 -
+2100 A
+2105 -
+2400 -
+end: 3000

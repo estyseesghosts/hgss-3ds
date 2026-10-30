@@ -1,0 +1,19 @@
+# New Game as newgame-buttons, but the naming keyboard is driven by STYLUS.
+# UNCALIBRATED: touch coordinates must be read off the first capture's
+# lower-screen frames (0-255 x 0-191).
+every: 5
+0 -
+1800 A
+1805 -
+2100 A
+2105 -
+2400 A
+2405 -
+2700 A
+2705 -
+3000 A
+3005 -
+3300 A
+3305 -
+# TODO(calibrate): "3600 - touch X Y" taps on keyboard keys, then OK
+end: 9000

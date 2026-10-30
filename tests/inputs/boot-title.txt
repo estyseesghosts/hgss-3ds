@@ -1,0 +1,7 @@
+# Cold boot -> Game Freak logo -> opening movie (watched in full, NOT skipped)
+# -> title screen idle.  Frame-indexed from power-on.  See tools/golden/README.md.
+# UNCALIBRATED: no input is sent, so only the 'end' frame needs tuning: it must
+# cover logo + full movie + several seconds of idle title.
+every: 10
+0 -
+end: 5400
