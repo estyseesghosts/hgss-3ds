@@ -1,0 +1,28 @@
+{
+    "name": "pokeheartgold-3ds",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "options": ["--platform=linux/amd64"]
+    },
+    "runArgs": ["--init", "--platform=linux/amd64"],
+    "mounts": [
+        // Proprietary inputs: MWCC, Nitro SDK, ROMs, saves. Read-only, never copied into an image.
+        // Host path: ~/hgss-private (see docs/devcontainer.md). Edit this line if yours differs.
+        "source=${localEnv:HOME}/hgss-private,target=/private,type=bind,readonly",
+        // Decomp checkout, build trees and caches live on a named volume: bind-mounted macOS builds are slow.
+        "source=hgss-work,target=/work,type=volume"
+    ],
+    "containerEnv": {
+        "HGSS_PRIVATE": "/private",
+        "CCACHE_DIR": "/work/.ccache"
+    },
+    "onCreateCommand": "/opt/devcontainer/onCreate.sh ${containerWorkspaceFolder}",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-python.python"
+            ]
+        }
+    }
+}
