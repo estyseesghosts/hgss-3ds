@@ -1,0 +1,31 @@
+# Public, GitHub-hosted. Synthetic data only: no ROMs, no MWCC, no Nitro SDK.
+# Uses the same dev container image as local development (it contains no
+# proprietary files; those come only from a read-only /private mount, which
+# this job does not have).
+name: port
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  port:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the dev container image
+        run: docker build --platform linux/amd64 -t hgss-dev .devcontainer
+
+      - name: Bootstrap and run unit tests (synthetic data only)
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w hgss-dev bash -euxc '
+            git config --global --add safe.directory /w
+            python3 tools/bootstrap.py
+            make test
+          '
+      # Deliberately no upload-artifact step.
