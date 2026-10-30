@@ -2,7 +2,7 @@
 # Runs once when the dev container is created.
 # Never downloads proprietary files: it only verifies that the user's own
 # copies are present under the read-only /private mount.
-set -u
+set -euo pipefail
 WORKSPACE="${1:-$PWD}"
 PRIVATE="${HGSS_PRIVATE:-/private}"
 
@@ -23,20 +23,19 @@ if [ "${#missing[@]}" -ne 0 ]; then
     exit 1
 fi
 
-# Build trees on the named volume (fast), reachable from the workspace.
-mkdir -p /work/build
-[ -e "$WORKSPACE/build" ] || ln -s /work/build "$WORKSPACE/build"
+# build/ and /work are named volumes (root-owned when new): hand them to the dev user.
+sudo chown "$(id -u):$(id -g)" /work "$WORKSPACE/build"
 
 # Set up wine under a virtual X server so its first-run GUI never prompts
 # during builds. Must run in the live container, not in the Dockerfile.
-xvfb-run -a wineboot
+xvfb-run -a wineboot || { echo "ERROR: wineboot failed; wine is not usable (see docs/devcontainer.md)" >&2; exit 1; }
 
 echo "== toolchain versions =="
-wine --version
 arm-none-eabi-ld --version | head -1
 gcc-10 --version | head -1
 python3 --version
 clang-format --version
-[ -x "$DEVKITARM/bin/arm-none-eabi-gcc" ] && "$DEVKITARM/bin/arm-none-eabi-gcc" --version | head -1
-for t in 3dsxtool smdhtool 3dslink tex3ds picasso; do command -v "$t" || echo "MISSING $t"; done
+"$DEVKITARM/bin/arm-none-eabi-gcc" --version | head -1
+for t in 3dsxtool smdhtool 3dslink tex3ds picasso; do command -v "$t" || { echo "MISSING $t" >&2; exit 1; }; done
+wine --version
 echo "onCreate OK"

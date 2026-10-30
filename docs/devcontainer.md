@@ -43,7 +43,7 @@ the decomp checkout only.
 | `/private` | proprietary inputs | host bind mount, read-only |
 | `/work` | decomp checkout (`/work/pokeheartgold`), Platinum clone (`/work/pokeplatinum-3ds`), `build/` trees, ccache | named volume `hgss-work` |
 | `/workspaces/pokeheartgold-3ds` | this repo | host bind mount |
-| `<repo>/build` | symlink to `/work/build` | volume (fast) |
+| `<repo>/build` | patched upstream checkout and outputs | named volume `hgss-build`, mounted over the workspace's `build/` (fast; the host sees an empty directory) |
 
 Bind-mounted builds of thousands of files are slow on macOS, hence the volume.
 

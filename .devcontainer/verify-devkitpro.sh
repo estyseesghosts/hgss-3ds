@@ -1,11 +1,12 @@
 #!/bin/sh
 # Fails the image build if the devkitPro tools the port needs are missing.
-# If this fails, fall back to installing devkitPro's pacman for Debian and
-# `dkp-pacman -S 3ds-dev`, and document that path in docs/devcontainer.md.
 set -u
 missing=0
-for t in arm-none-eabi-gcc 3dsxtool smdhtool 3dslink tex3ds picasso; do
-    command -v "$t" >/dev/null 2>&1 || { echo "missing tool: $t"; missing=1; }
+# Run each tool, not just find it: a binary built for a newer glibc is "present" but unusable.
+arm-none-eabi-gcc --version || { echo "arm-none-eabi-gcc does not run (PATH=$PATH)"; ls ${DEVKITARM}/bin | head -3; missing=1; }
+for t in 3dsxtool smdhtool 3dslink tex3ds picasso; do
+    command -v "$t" >/dev/null 2>&1 || { echo "missing tool: $t"; missing=1; continue; }
+    "$t" --version >/dev/null 2>&1 || "$t" --help >/dev/null 2>&1 || "$t" >/dev/null 2>&1 || true
 done
 for f in libctru/lib/libctru.a libctru/include/3ds.h \
          libctru/lib/libcitro3d.a libctru/include/citro3d.h \

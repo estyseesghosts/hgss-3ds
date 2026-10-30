@@ -41,8 +41,12 @@ copy() {  # copy SRC DEST_REL (recursive for dirs)
     local probe="$rel"; [ -d "$src" ] && probe="$rel/x"
     git -C "$DECOMP" check-ignore -q "$probe" || die "$rel is not git-ignored in $DECOMP; refusing to copy"
     mkdir -p "$(dirname "$DECOMP/$rel")"
-    rm -rf "$DECOMP/$rel"
-    cp -R "$src" "$DECOMP/$rel"
+    if [ -d "$src" ]; then
+        mkdir -p "$DECOMP/$rel"
+        cp -R "$src/." "$DECOMP/$rel/"
+    else
+        cp "$src" "$DECOMP/$rel"
+    fi
     echo "installed $rel"
 }
 

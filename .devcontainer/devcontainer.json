@@ -10,7 +10,9 @@
         // Host path: ~/hgss-private (see docs/devcontainer.md). Edit this line if yours differs.
         "source=${localEnv:HOME}/hgss-private,target=/private,type=bind,readonly",
         // Decomp checkout, build trees and caches live on a named volume: bind-mounted macOS builds are slow.
-        "source=hgss-work,target=/work,type=volume"
+        "source=hgss-work,target=/work,type=volume",
+        // The port's build/ tree (patched upstream checkout, outputs) on its own volume, mounted over the workspace's build/.
+        "source=hgss-build,target=${containerWorkspaceFolder}/build,type=volume"
     ],
     "containerEnv": {
         "HGSS_PRIVATE": "/private",

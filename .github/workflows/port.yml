@@ -23,7 +23,7 @@ jobs:
 
       - name: Bootstrap and run unit tests (synthetic data only)
         run: |
-          docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w hgss-dev bash -euxc '
+          docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/w" -w /w hgss-dev bash -euxc '
             git config --global --add safe.directory /w
             python3 tools/bootstrap.py
             make test
