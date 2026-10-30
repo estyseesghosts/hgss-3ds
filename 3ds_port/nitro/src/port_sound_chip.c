@@ -1,0 +1,698 @@
+/*
+ * Software model of the DS sound hardware.
+ * Only this file owns the playback cursor; the original ARM7 driver writes
+ * its control/timer/source registers. All public operations are plain C99.
+ *
+ * The ARM7 audio service serializes register access with mixing. Registers
+ * retain the DS layout so SDK ARM7 snd_channel.c/snd_capture.c can run
+ * without modification to their command logic.
+ */
+#include <nitro_port_sound_chip.h>
+#include <limits.h>
+#include <stdint.h>
+#include <string.h>
+
+#define SOUND_CLOCK 16756991ull
+#define PHASE_ONE (1ull << 32)
+#define CHANNEL_BASE(ch) (0x400u + (unsigned)(ch) * 16u)
+#define REG_CNT     0u
+#define REG_SAD     4u
+#define REG_TIMER   8u
+#define REG_LOOP    10u
+#define REG_LENGTH  12u
+
+volatile uint8_t NitroPort_SoundRegisters[NITRO_SOUND_REG_SIZE];
+
+static unsigned char reg8(unsigned offset)
+{
+    return NitroPort_SoundRegisters[offset];
+}
+
+static uint16_t reg16(unsigned offset)
+{
+    return (uint16_t)(reg8(offset) | ((uint16_t)reg8(offset + 1) << 8));
+}
+
+static uint32_t reg32(unsigned offset)
+{
+    return (uint32_t)reg16(offset) | ((uint32_t)reg16(offset + 2) << 16);
+}
+
+static void put8(unsigned offset, uint8_t value)
+{
+    NitroPort_SoundRegisters[offset] = value;
+}
+
+static void put32(unsigned offset, uint32_t value)
+{
+    put8(offset, (uint8_t)value);
+    put8(offset + 1, (uint8_t)(value >> 8));
+    put8(offset + 2, (uint8_t)(value >> 16));
+    put8(offset + 3, (uint8_t)(value >> 24));
+}
+
+static int16_t saturate(int32_t value)
+{
+    if (value < INT16_MIN) return INT16_MIN;
+    if (value > INT16_MAX) return INT16_MAX;
+    return (int16_t)value;
+}
+
+static int8_t pcm8(const uint8_t *data, uint32_t offset)
+{
+    return (int8_t)data[offset];
+}
+
+static int16_t pcm16(const uint8_t *data, uint32_t offset)
+{
+    return (int16_t)((unsigned)data[offset] | ((unsigned)data[offset + 1] << 8));
+}
+
+static const uint16_t sStep[89] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
+    34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+    130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
+    408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166,
+    1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024,
+    3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845,
+    8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818,
+    18500, 20350, 22385, 24623, 27086, 29794, 32767
+};
+static const int8_t sIndexDelta[8] = {-1,-1,-1,-1,2,4,6,8};
+
+static void adpcm_init(NitroSoundVoice *v, const uint8_t *source)
+{
+    v->predictor = pcm16(source, 0);
+    v->stepIndex = source[2] <= 88 ? source[2] : 88;
+}
+
+static void adpcm_step(NitroSoundVoice *v, uint8_t nibble)
+{
+    int32_t step = sStep[v->stepIndex];
+    int32_t change = step >> 3;
+    if (nibble & 1u) change += step >> 2;
+    if (nibble & 2u) change += step >> 1;
+    if (nibble & 4u) change += step;
+    v->predictor += (nibble & 8u) ? -change : change;
+    v->predictor = saturate(v->predictor);
+    v->stepIndex += sIndexDelta[nibble & 7u];
+    if (v->stepIndex < 0) v->stepIndex = 0;
+    if (v->stepIndex > 88) v->stepIndex = 88;
+}
+
+static int16_t adpcm_at(NitroSoundVoice *v, const uint8_t *source,
+                        uint32_t index)
+{
+    uint32_t nibble = index - 1;
+    uint8_t byte = source[4u + nibble / 2u];
+    adpcm_step(v, (nibble & 1u) ? byte >> 4 : byte & 15u);
+    return (int16_t)v->predictor;
+}
+
+static uint32_t total_samples(unsigned format, uint32_t bytes)
+{
+    if (format == 0) return bytes;
+    if (format == 1) return bytes / 2u;
+    if (format == 2) return bytes >= 4u ? 1u + (bytes - 4u) * 2u : 0u;
+    return 0;
+}
+
+static uint32_t loop_sample(unsigned format, uint32_t loopBytes)
+{
+    if (format == 0) return loopBytes;
+    if (format == 1) return loopBytes / 2u;
+    return loopBytes >= 4u ? 1u + (loopBytes - 4u) * 2u : 0u;
+}
+
+static void disable_channel(unsigned base, NitroSoundVoice *voice)
+{
+    put32(base + REG_CNT, reg32(base + REG_CNT) & 0x7fffffffu);
+    voice->running = 0;
+    voice->previousCtrl &= 0x7fffffffu;
+}
+
+static void restart_channel(NitroSoundVoice *voice, uint32_t ctrl,
+                            unsigned base)
+{
+    const uint8_t *source = (const uint8_t *)(uintptr_t)reg32(base + REG_SAD);
+    unsigned format = (ctrl >> 29) & 3u;
+    voice->running = 1;
+    voice->sampleIndex = 0;
+    voice->phase = 0;
+    voice->noise = 0x7fffu;
+    voice->predictor = 0;
+    voice->stepIndex = 0;
+    voice->lastSample = 0;
+    voice->loopSaved = 0;
+    voice->adpcmClean = 0;
+    if (format == 2u && source) {
+        adpcm_init(voice, source);
+        voice->adpcmClean = 1;
+        voice->adpcmSource = (uint32_t)(uintptr_t)source;
+    }
+}
+
+/*
+ * One channel during one NitroSound_Mix call. Only the mixer itself changes
+ * a channel's registers while it mixes (it switches a channel off at the end
+ * of its sound), so they're read once per call, not once per sample, and the
+ * sound's length, loop point and step are worked out once too. What comes
+ * out is exactly what reading them every sample gave.
+ */
+typedef struct Channel {
+    NitroSoundVoice *v;
+    unsigned channel;
+    unsigned base;
+    unsigned format;
+    unsigned repeat;
+    uint32_t ctrl;
+    uint32_t sourceAddr;
+    const uint8_t *source;
+    uint32_t nSamples;
+    uint32_t loopAt;
+    uint64_t step;
+    int32_t volume;
+    int32_t pan;
+    unsigned shift;
+    uint32_t endByte;      /* the channel reads [sourceAddr, sourceAddr + endByte) */
+    int dependent;         /* reads memory a capture writes: mixed frame by frame */
+    int interpolate;       /* NitroSoundChip.interpolate, for a sampled sound */
+} Channel;
+
+/* Between the sample before (a) and the sample now (b), as far along as
+ * the playback cursor is (phase's fraction). */
+static inline int32_t lerp(int32_t a, int32_t b, uint64_t phase)
+{
+    return a + (int32_t)(((int64_t)(b - a) * (int64_t)(uint32_t)phase) >> 32);
+}
+
+static int32_t wave_sample(const Channel *c)
+{
+    const NitroSoundVoice *v = c->v;
+
+    switch (c->format) {
+    case 0:
+        return c->source ? (int32_t)pcm8(c->source, v->sampleIndex) * 256 : 0;
+    case 1:
+        return c->source ? pcm16(c->source, v->sampleIndex * 2u) : 0;
+    case 2:
+        return c->source ? v->predictor : 0;
+    default:
+        if (c->channel >= 14) return (v->noise & 1u) ? -32767 : 32767;
+        if (c->channel < 8) return 0;
+        return (v->sampleIndex & 7u) <= ((c->ctrl >> 24) & 7u) ? 32767 : -32767;
+    }
+}
+
+/* The ADPCM decoder's state at the loop start, as it was when the sound
+ * first got there; without one saved (or for other data), decoded again
+ * from the start. */
+static void adpcm_to_loop(NitroSoundVoice *v, const Channel *c)
+{
+    uint32_t i;
+
+    if (c->loopAt != 0 && v->loopSaved && v->loopSource == c->sourceAddr &&
+        v->loopAt == c->loopAt) {
+        v->predictor = v->loopPredictor;
+        v->stepIndex = v->loopStepIndex;
+        return;
+    }
+    adpcm_init(v, c->source);
+    for (i = 1u; i <= c->loopAt; ++i) (void)adpcm_at(v, c->source, i);
+    v->adpcmClean = 1;
+    v->adpcmSource = c->sourceAddr;
+    if (c->loopAt != 0) {
+        v->loopSaved = 1;
+        v->loopSource = c->sourceAddr;
+        v->loopAt = c->loopAt;
+        v->loopPredictor = v->predictor;
+        v->loopStepIndex = v->stepIndex;
+    }
+}
+
+static void advance_voice(const Channel *c)
+{
+    NitroSoundVoice *v = c->v;
+
+    if (c->format == 3u) {
+        v->sampleIndex = (v->sampleIndex + 1u) & 7u;
+        if (c->channel >= 14u) {
+            unsigned carry = (v->noise ^ (v->noise >> 1u)) & 1u;
+            v->noise = (uint16_t)((v->noise >> 1u) | (carry << 14u));
+        }
+        return;
+    }
+    if (!c->source || !c->nSamples) {
+        disable_channel(c->base, v);
+        return;
+    }
+
+    if (c->interpolate) v->lastSample = wave_sample(c);
+    v->sampleIndex++;
+    if (v->sampleIndex >= c->nSamples) {
+        if (c->repeat != 1u || c->loopAt >= c->nSamples) {
+            disable_channel(c->base, v);
+            return;
+        }
+        v->sampleIndex = c->loopAt;
+        if (c->format == 2u) adpcm_to_loop(v, c);
+    } else if (c->format == 2u) {
+        (void)adpcm_at(v, c->source, v->sampleIndex);
+        if (v->sampleIndex == c->loopAt && v->adpcmClean) {
+            v->loopSaved = 1;
+            v->loopSource = c->sourceAddr;
+            v->loopAt = c->loopAt;
+            v->loopPredictor = v->predictor;
+            v->loopStepIndex = v->stepIndex;
+        }
+    }
+}
+
+/* Read a channel's registers at the start of a mix; 0 if it's off. */
+static int start_channel(NitroSoundChip *chip, unsigned channel, Channel *c)
+{
+    NitroSoundVoice *v = &chip->voice[channel];
+    unsigned base = CHANNEL_BASE(channel);
+    uint32_t ctrl = reg32(base);
+    uint32_t period, startByte, endByte, shift;
+
+    if (!(ctrl & 0x80000000u)) {
+        v->running = 0;
+        v->previousCtrl = ctrl;
+        return 0;
+    }
+    if (!v->running || !(v->previousCtrl & 0x80000000u))
+        restart_channel(v, ctrl, base);
+    v->previousCtrl = ctrl;
+
+    c->v = v;
+    c->channel = channel;
+    c->base = base;
+    c->ctrl = ctrl;
+    c->format = (ctrl >> 29) & 3u;
+    c->repeat = (ctrl >> 27) & 3u;
+    c->sourceAddr = reg32(base + REG_SAD);
+    c->source = (const uint8_t *)(uintptr_t)c->sourceAddr;
+    if (v->adpcmClean && v->adpcmSource != c->sourceAddr) {
+        /* The data changed under a sound playing on: its decoder state no
+         * longer comes from this data alone; don't keep it for the loop. */
+        v->adpcmClean = 0;
+    }
+    startByte = (uint32_t)reg16(base + REG_LOOP) * 4u;
+    endByte = startByte + (reg32(base + REG_LENGTH) & 0x3fffffu) * 4u;
+    c->endByte = endByte;
+    c->dependent = 0;
+    c->nSamples = total_samples(c->format, endByte);
+    c->loopAt = loop_sample(c->format, startByte);
+    c->volume = (int32_t)(ctrl & 127u);
+    c->pan = (int32_t)((ctrl >> 16) & 127u);
+    shift = (ctrl >> 8) & 3u;
+    c->shift = shift == 3u ? 4u : shift;
+    c->interpolate = chip->interpolate && c->format != 3u;
+
+    /* The step only changes with the timer: no 64-bit division (slow on
+     * the 3DS's CPU, which has no divide instruction) for every sample. */
+    period = 0x10000u - reg16(base + REG_TIMER);
+    if (v->stepPeriod != period || v->stepRate != chip->outputRate) {
+        v->stepPeriod = period;
+        v->stepRate = chip->outputRate;
+        v->step = (SOUND_CLOCK << 32) / ((uint64_t)period * chip->outputRate);
+    }
+    c->step = v->step;
+    return 1;
+}
+
+/* One sample of a running channel: adds it to the mix, returns it. */
+static int32_t voice_mix(Channel *c, int32_t *left, int32_t *right)
+{
+    NitroSoundVoice *v = c->v;
+    int32_t sample = wave_sample(c);
+    int32_t scaled;
+    unsigned guard = 0;
+
+    if (c->interpolate) sample = lerp(v->lastSample, sample, v->phase);
+    scaled = (sample * c->volume) / 127;
+
+    scaled >>= c->shift;
+    *left += (scaled * (127 - c->pan)) / 127;
+    *right += (scaled * c->pan) / 127;
+
+    v->phase += c->step;
+    while (v->phase >= PHASE_ONE && v->running && guard++ < 2048u) {
+        v->phase -= PHASE_ONE;
+        advance_voice(c);
+    }
+    return scaled;
+}
+
+/*
+ * A channel's samples for a run of frames, added to L and R: what
+ * voice_mix gives frame by frame, with the channel's settings and its
+ * decoder in local variables; values (if not NULL) gets each frame's
+ * sample. For channels that don't read what a capture writes: they don't
+ * depend on the other channels within a mix.
+ */
+static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_t frames)
+{
+    NitroSoundVoice *v = c->v;
+    const int32_t volume = c->volume, panL = 127 - c->pan, panR = c->pan;
+    const unsigned shift = c->shift;
+    const uint64_t step = c->step;
+    uint64_t phase = v->phase;
+    size_t i;
+
+    if (c->format == 2u && c->source && c->nSamples) {
+        /* ADPCM: the decoder's state kept in registers between samples. */
+        const uint8_t *source = c->source;
+        const uint32_t nSamples = c->nSamples, loopAt = c->loopAt;
+        const int interpolate = c->interpolate;
+        uint32_t index = v->sampleIndex;
+        int32_t predictor = v->predictor, stepIndex = v->stepIndex;
+        int32_t last = v->lastSample;
+
+        for (i = 0; i < frames; ++i) {
+            int32_t scaled = ((interpolate ? lerp(last, predictor, phase) : predictor) * volume) / 127;
+            uint32_t advances;
+
+            scaled >>= shift;
+            if (values) values[i] = scaled;
+            L[i] += (scaled * panL) / 127;
+            R[i] += (scaled * panR) / 127;
+            phase += step;
+            /* As voice_mix's loop: one source sample per whole step, at
+             * most 2048 per frame. */
+            advances = (uint32_t)(phase >> 32);
+            if (advances > 2048u) advances = 2048u;
+            while (advances--) {
+                phase -= PHASE_ONE;
+                index++;
+                if (index >= nSamples) {
+                    /* The end: what advance_voice does, with the state
+                     * written back first. */
+                    v->sampleIndex = index - 1u;
+                    v->predictor = predictor;
+                    v->stepIndex = stepIndex;
+                    v->phase = phase;
+                    v->lastSample = last;
+                    advance_voice(c);
+                    if (!v->running) return;
+                    index = v->sampleIndex;
+                    predictor = v->predictor;
+                    stepIndex = v->stepIndex;
+                    last = v->lastSample;
+                    continue;
+                } else {
+                    uint32_t nibble = index - 1u;
+                    uint8_t byte = source[4u + nibble / 2u];
+                    unsigned code = (nibble & 1u) ? byte >> 4 : byte & 15u;
+                    int32_t st = sStep[stepIndex];
+                    int32_t change = st >> 3;
+
+                    last = predictor;
+
+                    if (code & 1u) change += st >> 2;
+                    if (code & 2u) change += st >> 1;
+                    if (code & 4u) change += st;
+                    predictor += (code & 8u) ? -change : change;
+                    predictor = saturate(predictor);
+                    stepIndex += sIndexDelta[code & 7u];
+                    if (stepIndex < 0) stepIndex = 0;
+                    if (stepIndex > 88) stepIndex = 88;
+                    if (index == loopAt && v->adpcmClean) {
+                        v->loopSaved = 1;
+                        v->loopSource = c->sourceAddr;
+                        v->loopAt = loopAt;
+                        v->loopPredictor = predictor;
+                        v->loopStepIndex = stepIndex;
+                    }
+                }
+            }
+        }
+        v->sampleIndex = index;
+        v->predictor = predictor;
+        v->stepIndex = stepIndex;
+        v->phase = phase;
+        v->lastSample = last;
+        return;
+    }
+    if (c->format <= 1u && c->source && c->nSamples) {
+        /* PCM8 / PCM16 */
+        const uint8_t *source = c->source;
+        const uint32_t nSamples = c->nSamples;
+        const int pcm16bit = c->format == 1u;
+        const int interpolate = c->interpolate;
+        uint32_t index = v->sampleIndex;
+        int32_t last = v->lastSample;
+
+        for (i = 0; i < frames; ++i) {
+            int32_t sample = pcm16bit ? pcm16(source, index * 2u)
+                                      : (int32_t)pcm8(source, index) * 256;
+            int32_t scaled;
+            uint32_t advances;
+
+            if (interpolate) sample = lerp(last, sample, phase);
+            scaled = (sample * volume) / 127;
+
+            scaled >>= shift;
+            if (values) values[i] = scaled;
+            L[i] += (scaled * panL) / 127;
+            R[i] += (scaled * panR) / 127;
+            phase += step;
+            advances = (uint32_t)(phase >> 32);
+            if (advances > 2048u) advances = 2048u;
+            while (advances--) {
+                phase -= PHASE_ONE;
+                if (index + 1u < nSamples) {
+                    if (interpolate)
+                        last = pcm16bit ? pcm16(source, index * 2u)
+                                        : (int32_t)pcm8(source, index) * 256;
+                    index++;
+                    continue;
+                }
+                v->sampleIndex = index;
+                v->phase = phase;
+                advance_voice(c);
+                if (!v->running) return;
+                index = v->sampleIndex;
+                last = v->lastSample;
+            }
+        }
+        v->sampleIndex = index;
+        v->phase = phase;
+        v->lastSample = last;
+        return;
+    }
+    /* Anything else (PSG, noise, no data): frame by frame. */
+    for (i = 0; i < frames && v->running; ++i) {
+        int32_t scaled = voice_mix(c, &L[i], &R[i]);
+        if (values) values[i] = scaled;
+    }
+}
+
+/*
+ * Sound capture (SNDCAP0CNT/SNDCAP1CNT, 0x508/0x509): bit 7 on, bit 3 PCM8
+ * (else PCM16), bit 2 one-shot (else it loops over its buffer: the SDK's
+ * SND_CAPTURE_REPEAT_YES is 0), bit 1 records channel 0/2 (else the left /
+ * right mixer). It records at the rate of channel 1's / channel 3's timer,
+ * the channel that plays its buffer back: NitroSystem's reverb records the
+ * mix into a looping buffer and plays it back quietly on those channels.
+ * (Bit 0, adding channel 1/3 into channel 0/2, isn't done: nothing in the
+ * game uses it.)
+ */
+static void do_capture(NitroSoundChip *chip, unsigned slot, int32_t signal)
+{
+    NitroSoundCapture *cap = &chip->capture[slot];
+    unsigned controlReg = 0x508u + slot;
+    unsigned base = 0x510u + slot * 8u;
+    uint8_t ctl = reg8(controlReg);
+    unsigned bytesPerSample = (ctl & 8u) ? 1u : 2u;
+    uint32_t bufferSize = (uint32_t)reg16(base + 4u) * 4u;
+    uint8_t *dst = (uint8_t *)(uintptr_t)reg32(base);
+    uint32_t period;
+
+    if (!(ctl & 128u)) {
+        cap->running = 0;
+        return;
+    }
+    if (!cap->running) {
+        cap->index = 0;
+        cap->phase = 0;
+        cap->running = 1;
+    }
+    if (!dst || bufferSize < bytesPerSample) return;
+
+    period = 0x10000u - reg16(CHANNEL_BASE(slot ? 3u : 1u) + REG_TIMER);
+    if (cap->stepPeriod != period || cap->stepRate != chip->outputRate) {
+        cap->stepPeriod = period;
+        cap->stepRate = chip->outputRate;
+        cap->step = (SOUND_CLOCK << 32) / ((uint64_t)period * chip->outputRate);
+    }
+    cap->phase += cap->step;
+    while (cap->phase >= PHASE_ONE) {
+        cap->phase -= PHASE_ONE;
+        if (cap->index + bytesPerSample > bufferSize) {
+            if (ctl & 4u) {             /* one-shot: done */
+                put8(controlReg, (uint8_t)(ctl & 127u));
+                cap->running = 0;
+                return;
+            }
+            cap->index = 0;
+        }
+        if (bytesPerSample == 1u) {
+            dst[cap->index] = (uint8_t)((int8_t)(saturate(signal) >> 8));
+        } else {
+            int16_t value = saturate(signal);
+            dst[cap->index] = (uint8_t)value;
+            dst[cap->index + 1u] = (uint8_t)((uint16_t)value >> 8);
+        }
+        cap->index += bytesPerSample;
+    }
+}
+
+void NitroSound_Reset(NitroSoundChip *chip, uint32_t outputRate)
+{
+    if (!chip) return;
+    memset(chip, 0, sizeof(*chip));
+    memset((void *)NitroPort_SoundRegisters, 0, sizeof(NitroPort_SoundRegisters));
+    chip->outputRate = outputRate ? outputRate : NITRO_SOUND_RATE;
+    put8(0x500u, 127u);
+    put8(0x501u, 128u);
+}
+
+void NitroSound_KeyOn(NitroSoundChip *chip, unsigned channel)
+{
+    if (!chip || channel >= NITRO_SOUND_CHANNEL_COUNT) return;
+    if (!(reg8(CHANNEL_BASE(channel) + 3u) & 0x80u)) {
+        /* The next mix starts it again (start_channel). */
+        chip->voice[channel].running = 0;
+    }
+}
+
+void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
+{
+    Channel channels[NITRO_SOUND_CHANNEL_COUNT];
+    unsigned count = 0, channel, k;
+    unsigned control;
+    int32_t masterVolume;
+    int capturing, bypass1, bypass3;
+    unsigned leftFrom, rightFrom;
+    size_t i;
+
+    if (!chip || !stereo || !chip->outputRate || frames == 0) return;
+    for (channel = 0; channel < NITRO_SOUND_CHANNEL_COUNT; ++channel) {
+        if (start_channel(chip, channel, &channels[count])) ++count;
+    }
+    /* SOUNDCNT (0x500): bits 0-6 master volume, 8-9 / 10-11 what the left /
+     * right output plays (the mixer, channel 1, channel 3 or both), 12 / 13
+     * channel 1 / 3 kept out of the mixer, 15 on. */
+    control = reg8(0x501u);
+    masterVolume = (int32_t)(reg8(0x500u) & 127u);
+    leftFrom = control & 3u;
+    rightFrom = (control >> 2) & 3u;
+    bypass1 = (control & 0x10u) != 0;
+    bypass3 = (control & 0x20u) != 0;
+    capturing = ((reg8(0x508u) | reg8(0x509u)) & 128u) ||
+                chip->capture[0].running || chip->capture[1].running;
+
+    if (capturing) {
+        /* A channel that reads a capture's buffer (reverb plays the
+         * recorded mix back on channels 1 and 3) depends on what the
+         * capture writes frame by frame: those are mixed frame by frame,
+         * in their place before the capture. The others don't depend on
+         * anything in the mix and go a block at a time like the rest. */
+        unsigned slot;
+        for (slot = 0; slot < 2; ++slot) {
+            uint32_t dst = reg32(0x510u + slot * 8u);
+            uint32_t size = (uint32_t)reg16(0x514u + slot * 8u) * 4u;
+            if (!dst || !size) continue;
+            for (k = 0; k < count; ++k) {
+                Channel *c = &channels[k];
+                if (c->format == 3u || !c->source) continue;
+                if (c->sourceAddr < dst + size && dst < c->sourceAddr + c->endByte)
+                    c->dependent = 1;
+            }
+        }
+    }
+    {
+        /* Channel by channel, a block of frames at a time. */
+        enum { BLOCK = 128 };
+        size_t at;
+
+        for (at = 0; at < frames; at += BLOCK) {
+            int32_t mixL[BLOCK], mixR[BLOCK], ch1L[BLOCK], ch1R[BLOCK], ch3L[BLOCK], ch3R[BLOCK];
+            int32_t value0[BLOCK], value2[BLOCK];   /* channels 0 and 2, for captures */
+            size_t n = frames - at < BLOCK ? frames - at : BLOCK;
+
+            memset(mixL, 0, n * sizeof(int32_t));
+            memset(mixR, 0, n * sizeof(int32_t));
+            memset(ch1L, 0, n * sizeof(int32_t));
+            memset(ch1R, 0, n * sizeof(int32_t));
+            memset(ch3L, 0, n * sizeof(int32_t));
+            memset(ch3R, 0, n * sizeof(int32_t));
+            if (capturing) {
+                memset(value0, 0, n * sizeof(int32_t));
+                memset(value2, 0, n * sizeof(int32_t));
+            }
+            for (k = 0; k < count; ++k) {
+                Channel *c = &channels[k];
+
+                if (!c->v->running || c->dependent) continue;
+                if (c->channel == 1) mix_block(c, ch1L, ch1R, NULL, n);
+                else if (c->channel == 3) mix_block(c, ch3L, ch3R, NULL, n);
+                else mix_block(c, mixL, mixR,
+                               !capturing ? NULL : c->channel == 0 ? value0
+                               : c->channel == 2 ? value2 : NULL, n);
+            }
+            for (i = 0; i < n; ++i) {
+                int32_t outputL = 0, outputR = 0;
+
+                if (capturing) {
+                    for (k = 0; k < count; ++k) {
+                        Channel *c = &channels[k];
+                        int32_t value;
+
+                        if (!c->dependent || !c->v->running) continue;
+                        if (c->channel == 1) {
+                            (void)voice_mix(c, &ch1L[i], &ch1R[i]);
+                        } else if (c->channel == 3) {
+                            (void)voice_mix(c, &ch3L[i], &ch3R[i]);
+                        } else {
+                            value = voice_mix(c, &mixL[i], &mixR[i]);
+                            if (c->channel == 0) value0[i] = value;
+                            if (c->channel == 2) value2[i] = value;
+                        }
+                    }
+                }
+                if (!bypass1) {
+                    mixL[i] += ch1L[i];
+                    mixR[i] += ch1R[i];
+                }
+                if (!bypass3) {
+                    mixL[i] += ch3L[i];
+                    mixR[i] += ch3R[i];
+                }
+                if (capturing) {
+                    do_capture(chip, 0, (reg8(0x508u) & 2u) ? value0[i] : mixL[i]);
+                    do_capture(chip, 1, (reg8(0x509u) & 2u) ? value2[i] : mixR[i]);
+                }
+                if (control & 128u) {
+                    int32_t left = leftFrom == 0 ? mixL[i] : leftFrom == 1 ? ch1L[i]
+                                 : leftFrom == 2 ? ch3L[i] : ch1L[i] + ch3L[i];
+                    int32_t right = rightFrom == 0 ? mixR[i] : rightFrom == 1 ? ch1R[i]
+                                  : rightFrom == 2 ? ch3R[i] : ch1R[i] + ch3R[i];
+
+                    outputL = (left * masterVolume) / 127;
+                    outputR = (right * masterVolume) / 127;
+                }
+                stereo[2u * (at + i)] = saturate(outputL);
+                stereo[2u * (at + i) + 1u] = saturate(outputR);
+            }
+        }
+    }
+    /* Channels that ended: as reading their (now off) registers left them. */
+    for (k = 0; k < count; ++k) {
+        if (!channels[k].v->running) {
+            channels[k].v->previousCtrl = reg32(channels[k].base);
+        }
+    }
+}

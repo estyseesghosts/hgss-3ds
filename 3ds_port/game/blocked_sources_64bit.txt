@@ -1,0 +1,4 @@
+# Extra sources blocked only on a 64-bit PC (TARGET=host): files that need
+# 4-byte pointers to compile. None at present. (Overlay IDs became
+# constants, tools/prepare_game_overlay_ids.py; three tables of function
+# addresses take uintptr_t, patches/pokeplatinum/0008.)

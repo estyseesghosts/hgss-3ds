@@ -1,0 +1,4 @@
+# Original game sources the port leaves out of its build, and why. None at
+# present: every C file under build/upstream/src is compiled.
+#
+# Format: path relative to src/   # reason (first error)
