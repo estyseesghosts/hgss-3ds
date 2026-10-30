@@ -80,8 +80,9 @@ class Validate(unittest.TestCase):
         self.assertEqual((rep["status_name"], rep["newer_mirror"]), ("SLOT_FAIL", 1))
         rep = st.validate(make_image(counts=(5, 4), sub_counts=(5, 3), corrupt={(0, 0)}))
         self.assertEqual(rep["status_name"], "TOTAL_FAIL")  # counters disagree
+        # one good main + one good sub, same mirror and counter: IS_GOOD (last branch)
         rep = st.validate(make_image(counts=(5, 4), corrupt={(0, 0), (0, 1)}))
-        self.assertEqual((rep["status_name"], rep["newer_mirror"]), ("SLOT_FAIL", 1))
+        self.assertEqual((rep["status_name"], rep["newer_mirror"]), ("IS_GOOD", 1))
 
     def test_all_invalid_total_fail_or_missing(self):
         blank = bytes([0xFF]) * st.SAVE_SIZE
