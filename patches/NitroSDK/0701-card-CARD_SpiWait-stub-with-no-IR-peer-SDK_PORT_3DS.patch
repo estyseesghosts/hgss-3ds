@@ -1,0 +1,134 @@
+From 5192f99698677abd4bd1ffa676c67b1a73fd0d55 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 02:47:40 +0000
+Subject: [PATCH] card: CARD_SpiWait stub with no IR peer (SDK_PORT_3DS)
+
+The DS code bit-bangs the cart SPI bus through the MI registers.
+lib/NitroSDK/src/card/card_spi_wait.c:
+- CARD_SpiWaitReadRange (45-85) sends the READ command with chip select held,
+  clocks the length byte and then the block through reg_MI_MCD0, one
+  CARDi_SpiWaitWriteByte/ReadByte per byte (14-34). Each byte waits on
+  OS_GetTick and on reg_MI_MCCNT0 BUSY. A length above CARD_SPI_READ_MAX (185)
+  becomes 0. The bytes are XORed with 0xAA on the way in.
+- CARD_SpiWaitWriteRange (92-114) sends WRITE and the data the same way.
+- CARD_SpiWaitGetStatus (121-148) sends the STATUS command and returns the
+  byte read back.
+CARD_SpiWaitInit (card_spi_wait_init.c:23-29) and CARD_Set{Read,Write}WaitCycles
+(card_spi_wait_cycles.c:13-19) only store RAM fields and OS_GetLockID. They
+touch no register, so those two files are unchanged.
+
+On the port the MI registers are plain RAM, so these loops return garbage
+instead of hanging. Under SDK_PORT_3DS the three hardware functions become
+stubs that do not touch a register or wait on the tick:
+- CARD_SpiWaitReadRange writes buffer[0] = 0 and returns 0, a zero-length
+  block.
+- CARD_SpiWaitWriteRange drops the bytes.
+- CARD_SpiWaitGetStatus returns 0xAA, "IR chip present", with no peer behind it.
+The original bodies stay under #else. Preprocessed output
+(gcc -E -P, -DSDK_ARM9 with and without SDK_PORT_3DS) is identical to HEAD
+for all three files.
+
+Why each caller is safe with this stub:
+- pokewalker_ir.c:66 (PokewalkerIr_InitLink) ignores the length; the packet
+  buffer just stays empty.
+- pokewalker_ir.c:109 (PokewalkerIr_SendPacket) sends nothing. No peer ever
+  answers, so PokewalkerIr_CheckTimeout (164) fires after 100 ms of silence and
+  Poll (214-216) returns it as a timeout. PokewalkerIr_GetAndClearError
+  (pokewalker_ir_status.c:34) then reports "not connected" to the UI.
+- pokewalker_ir.c:216 (PokewalkerIr_Poll) sees length 0 every pass. The thread
+  (1078-1085) sleeps with OS_Sleep(4) between passes, so it does not spin.
+- pokewalker_ir.c:1099-1102 (PokewalkerIr_Start) takes the 0xAA branch and sets
+  the wait cycles to 0. The cycles have no effect with no peer.
+- fieldmap.c:775-776 (FieldMap_DSProtCardSpiCheck) needs the second probe to be
+  170 == 0xAA. Any other value starts Task_AntipiracyMath (fieldmap.c:227-229).
+- No game code busy-waits on the link state; the callers only poll it.
+
+Real infrared is Phase 9 (gameplan.md, Phase 9): port_cardspi.c and
+backend/ir_3ds.c. Each stub body is the one-line place to call it. The
+Phase 9 hook must also take the CARD_LockBackup and OS_LockCard the DS code
+takes, if the IR transport shares the card bus with save writes. This stub
+takes neither, since it never touches the bus.
+
+Test: tests/sdk/card_spi_wait/run.sh (19 checks). The MI register page is
+PROT_NONE in the test. A forked child proves that the guard faults, so a pass
+means no access. Mutation checks: GetStatus returning 0, a register write in
+WriteRange, and a dropped buffer[0] = 0 are each caught.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/card/card_spi_wait.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/src/card/card_spi_wait.c b/src/card/card_spi_wait.c
+index 8125842..7755779 100644
+--- a/src/card/card_spi_wait.c
++++ b/src/card/card_spi_wait.c
+@@ -42,6 +42,14 @@ static inline void CardSpiSetTransfer(const u8 *input, u8 *output) {
+ #pragma optimization_level 2
+ 
+ // Reads a block whose first byte is its length (bytes are stored XOR 0xAA); returns the length.
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: there is no IR peer until Phase 9, so a read always returns a zero-length block and does not
++// touch the MI registers or wait on the tick. Phase 9 replaces this body with a call into port_cardspi.c.
++int CARD_SpiWaitReadRange(u8 *buffer) {
++    buffer[0] = 0;
++    return 0;
++}
++#else
+ int CARD_SpiWaitReadRange(u8 *buffer) {
+     int size;
+     int i;
+@@ -83,12 +91,21 @@ int CARD_SpiWaitReadRange(u8 *buffer) {
+     CARD_UnlockBackup(gCardSpiLockId);
+     return size;
+ }
++#endif
+ 
+ #pragma pop
+ 
+ #pragma push
+ #pragma opt_rotateloops off
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: with no IR peer the written bytes go nowhere; the registers are not touched.
++// Phase 9 replaces this body with a call into port_cardspi.c.
++void CARD_SpiWaitWriteRange(const void *data, int size) {
++    (void)data;
++    (void)size;
++}
++#else
+ void CARD_SpiWaitWriteRange(const void *data, int size) {
+     int i;
+ 
+@@ -112,12 +129,21 @@ void CARD_SpiWaitWriteRange(const void *data, int size) {
+     OS_UnLockCard(gCardSpiLockId);
+     CARD_UnlockBackup(gCardSpiLockId);
+ }
++#endif
+ 
+ #pragma pop
+ 
+ #pragma push
+ #pragma opt_arithtransformation off
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: the status probe reports an IR chip that is present (0xAA), with no peer behind it.
++// fieldmap.c:776 and pokewalker_ir.c:1100 compare against exactly 0xAA. Phase 9 replaces this body with the
++// status byte that port_cardspi.c reports.
++int CARD_SpiWaitGetStatus(void) {
++    return 0xAA;
++}
++#else
+ int CARD_SpiWaitGetStatus(void) {
+     u8 status;
+     u64 start;
+@@ -146,5 +172,6 @@ int CARD_SpiWaitGetStatus(void) {
+     CARD_UnlockBackup(gCardSpiLockId);
+     return status;
+ }
++#endif
+ 
+ #pragma pop
+-- 
+2.43.0
+

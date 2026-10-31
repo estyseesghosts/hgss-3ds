@@ -34,11 +34,13 @@ Status: **in progress.** Phase 0 is complete (see `phase-0.md`). Nothing below i
 **DS-side gate: PASSED** for the tree with 0101+0201+0301(+NNS 0301): HeartGold ROM SHA1 `4fcded0e…`, 0 failed
 checks, 18m20s. Must be re-run once more at the end of Phase 1 with all patches (0401 and later were not in it).
 
-## Written by a subagent, NOT yet reviewed or committed
+## Added after the checkpoint (reviewed, committed)
 
-- NitroSDK 0701 (`CARD_SpiWait*` stub, no IR peer: status 0xAA, zero-length reads) + `tests/sdk/card_spi_wait/`
-  (19 checks, per its note). Agent note: `docs/progress/agent-notes/s6.md`. Lead to review the patch text,
-  normalize the trailer, commit.
+| Patch | What | Verified |
+| --- | --- | --- |
+| NitroSDK 0701 | `CARD_SpiWait*` stub, no IR peer (status 0xAA, zero-length reads); Phase 9 replaces the bodies | 19 host cases (register page PROT_NONE, mutation-checked); cpp identity; callers checked line by line in the message |
+
+From-scratch bootstrap with 0101-0701 + NNS 0301: 6 patches apply, survey **266/284**, all host suites pass.
 
 ## Started but lost (rate limit hit; clones are clean, nothing to recover)
 
