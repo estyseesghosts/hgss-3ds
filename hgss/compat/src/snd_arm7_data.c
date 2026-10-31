@@ -27,8 +27,21 @@
  * giving the ARM7 driver its own copies, exactly like the driver's code.
  */
 
+/* GAS spells the section and symbol types with @ on x86 and with % on ARM,
+ * where @ starts a comment. The ARM7 target assembles this file with
+ * arm-none-eabi-as: `@progbits` is "junk at end of line" and `@object` is
+ * "unrecognized symbol type". The x86 strings are byte-identical to before,
+ * so the host32 object is unchanged. */
+#if defined(__arm__)
+#define HGSS_ASM_RODATA "  .section .rodata,\"a\",%progbits\n"
+#define HGSS_ASM_TYPE_OBJECT(name) "  .type " name ",%object\n"
+#else
+#define HGSS_ASM_RODATA "  .section .rodata,\"a\",@progbits\n"
+#define HGSS_ASM_TYPE_OBJECT(name) "  .type " name ",@object\n"
+#endif
+
 __asm__(
-"  .section .rodata,\"a\",@progbits\n"
+HGSS_ASM_RODATA
 "  .balign 4\n"
 "	  .global SinTable\n"
 "\n"
@@ -85,95 +98,95 @@ __asm__(
 "	  .long 0x12345678\n"
 "  .bss\n"
 "  .balign 8\n"
-"  .type sSurroundDecay,@object\n"
+HGSS_ASM_TYPE_OBJECT("sSurroundDecay")
 "	  .global sSurroundDecay\n"
 "sSurroundDecay: \n"
 "  .space 0x4\n"
 "  .size sSurroundDecay,.-sSurroundDecay\n"
 "\n"
-"  .type sOrgPan,@object\n"
+HGSS_ASM_TYPE_OBJECT("sOrgPan")
 "	  .global sOrgPan\n"
 "sOrgPan: \n"
 "  .space 0x10\n"
 "  .size sOrgPan,.-sOrgPan\n"
 "\n"
-"  .type sOrgVolume,@object\n"
+HGSS_ASM_TYPE_OBJECT("sOrgVolume")
 "	  .global sOrgVolume\n"
 "sOrgVolume: \n"
 "  .space 0x10\n"
 "  .size sOrgVolume,.-sOrgVolume\n"
 "\n"
-"  .type initialized$3619,@object\n"
+HGSS_ASM_TYPE_OBJECT("initialized$3619")
 "	  .global initialized$3619\n"
 "initialized$3619: \n"
 "  .space 0x4\n"
 "  .size initialized$3619,.-initialized$3619\n"
 "\n"
-"  .type sndMesgBuffer,@object\n"
+HGSS_ASM_TYPE_OBJECT("sndMesgBuffer")
 "	  .global sndMesgBuffer\n"
 "sndMesgBuffer: \n"
 "  .space 0x20\n"
 "  .size sndMesgBuffer,.-sndMesgBuffer\n"
 "\n"
-"  .type sndMesgQueue,@object\n"
+HGSS_ASM_TYPE_OBJECT("sndMesgQueue")
 "	  .global sndMesgQueue\n"
 "sndMesgQueue: \n"
 "  .space 0x20\n"
 "  .size sndMesgQueue,.-sndMesgQueue\n"
 "\n"
-"  .type sndAlarm,@object\n"
+HGSS_ASM_TYPE_OBJECT("sndAlarm")
 "	  .global sndAlarm\n"
 "sndAlarm: \n"
 "  .space 0x2C\n"
 "  .size sndAlarm,.-sndAlarm\n"
 "\n"
-"  .type sndThread,@object\n"
+HGSS_ASM_TYPE_OBJECT("sndThread")
 "	  .global sndThread\n"
 "sndThread: \n"
 "  .space 0xA4\n"
 "  .size sndThread,.-sndThread\n"
-"  .type sWeakLockChannel,@object\n"
+HGSS_ASM_TYPE_OBJECT("sWeakLockChannel")
 "	  .global sWeakLockChannel\n"
 "sWeakLockChannel: \n"
 "  .space 0x4\n"
 "  .size sWeakLockChannel,.-sWeakLockChannel\n"
 "\n"
-"  .type sLockChannel,@object\n"
+HGSS_ASM_TYPE_OBJECT("sLockChannel")
 "sLockChannel: \n"
 "  .space 0x4\n"
 "  .size sLockChannel,.-sLockChannel\n"
 "\n"
-"  .type sMmlPrintEnable,@object\n"
+HGSS_ASM_TYPE_OBJECT("sMmlPrintEnable")
 "	  .global sMmlPrintEnable\n"
 "sMmlPrintEnable: \n"
 "  .space 0x4\n"
 "  .size sMmlPrintEnable,.-sMmlPrintEnable\n"
 "\n"
-"  .type seqCache,@object\n"
+HGSS_ASM_TYPE_OBJECT("seqCache")
 "	  .global seqCache\n"
 "seqCache: \n"
 "  .space 0x18\n"
 "  .size seqCache,.-seqCache\n"
 "\n"
-"  .type SNDi_SharedWork,@object\n"
+HGSS_ASM_TYPE_OBJECT("SNDi_SharedWork")
 "	  .global SNDi_SharedWork\n"
 "SNDi_SharedWork: \n"
 "  .space 0x4\n"
 "  .size SNDi_SharedWork,.-SNDi_SharedWork\n"
 "\n"
-"  .type SNDi_Work,@object\n"
+HGSS_ASM_TYPE_OBJECT("SNDi_Work")
 "	  .global SNDi_Work\n"
 "SNDi_Work: \n"
 "  .space 0x1180\n"
 "  .size SNDi_Work,.-SNDi_Work\n"
 "\n"
-"  .type sCommandMesgQueue,@object\n"
+HGSS_ASM_TYPE_OBJECT("sCommandMesgQueue")
 "	  .global sCommandMesgQueue\n"
 "sCommandMesgQueue: \n"
 "  .space 0x20\n"
 "  .size sCommandMesgQueue,.-sCommandMesgQueue\n"
 "\n"
-"  .type sCommandMesgBuffer,@object\n"
+HGSS_ASM_TYPE_OBJECT("sCommandMesgBuffer")
 "	  .global sCommandMesgBuffer\n"
 "sCommandMesgBuffer: \n"
 "  .space 0x20\n"

@@ -16,8 +16,21 @@
  * Compiled into libnitro.a by tools/hgss_nitro.py (hgss/compat/src).
  */
 
+/* GAS spells the section and symbol types with @ on x86 and with % on ARM,
+ * where @ starts a comment. The ARM7 target assembles this file with
+ * arm-none-eabi-as: `@progbits` is "junk at end of line" and `@object` is
+ * "unrecognized symbol type". The x86 strings are byte-identical to before,
+ * so the host32 object is unchanged. */
+#if defined(__arm__)
+#define HGSS_ASM_RODATA "  .section .rodata,\"a\",%progbits\n"
+#define HGSS_ASM_TYPE_OBJECT(name) "  .type " name ",%object\n"
+#else
+#define HGSS_ASM_RODATA "  .section .rodata,\"a\",@progbits\n"
+#define HGSS_ASM_TYPE_OBJECT(name) "  .type " name ",@object\n"
+#endif
+
 __asm__(
-"  .section .rodata,\"a\",@progbits\n"
+HGSS_ASM_RODATA
 "  .balign 4\n"
 "	  .weak DoTransfer2dBG0CharMain\n"
 "	  .weak DoTransfer2dBG0CharSub\n"
