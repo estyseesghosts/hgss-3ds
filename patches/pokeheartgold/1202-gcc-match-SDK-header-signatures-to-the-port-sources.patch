@@ -1,0 +1,563 @@
+From 1c395d090b7120cb4322435184937378225c90d5 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 05:11:59 +0000
+Subject: [PATCH] gcc: match SDK header signatures to the port sources
+ (SDK_PORT_3DS)
+
+Eight header/source mismatches stop the port host32 build with GCC 10
+"conflicting types" (s32/u32 are long, a different type from int/void *
+even with -m32; MWCC accepts either). Every hunk is guarded by
+SDK_PORT_3DS and the DS text is unchanged (identity proof below).
+
+1. lib/include/nitro/mi/memory.h:6 (was: 6-11)
+   GCC 10: "conflicting types" for MIi_CpuClear16/Copy16/Clear32/Copy32/
+   ClearFast/CopyFast at 3ds_port/nitro/src/mi_memory.c:21,31,53,63,102,107,
+   whose parameters are plain void *. Under the macro the six prototypes use
+   void * and the header gains the MIi_CpuSend16/Send32 declarations the port
+   defines (mi_memory.c:40,71); the DS branch is the original text.
+   lib/NitroSDK/include/MI_memory.h already uses void * throughout
+   (MIi_CpuSend32 there matches too), so it needs no change.
+
+2. lib/include/nitro/pxi/fifo.h:29 (was: 29-33)
+   GCC 10: "conflicting types" for PXI_SetFifoRecvCallback/IsCallbackReady/
+   SendWordByFifo at 3ds_port/nitro/src/pxi.c:92,106,119 (int tags vs s32)
+   and "unknown type name PXIFifoEmtpyCallback" at pxi.c:113. Under the macro
+   the three prototypes use int, and the header gains the EmptpyCallback
+   typedef (kept spelling) plus PXI_SetFifoSendCallback with the port's
+   single-callback signature. The DS branch is the original text.
+   lib/NitroSDK/src/pxi/PXI_fifo.c:61,85,96 (port-replaced) gets the same
+   signatures under the macro so the survey parse stays identical.
+
+3. lib/include/nitro/os/cache.h:6 and lib/NitroSDK/include/OS_cache.h:10
+   GCC 10: "conflicting types for DC_StoreRange" at
+   3ds_port/nitro/src/port_os.c:315, which takes const void *. No other
+   DC_*/IC_* in port_os.c differs (register is not part of the type;
+   DC_FlushRange already takes const void * in both headers). The DS branch
+   is the original line in each file.
+
+4. lib/include/nitro/spi/userInfo.h:26,80
+   GCC 10: "NVRAMConfigOwnerInfo has no member named favoriteColor" and
+   "NVRAMConfigOption has no member named input_favoriteColor" at
+   3ds_port/nitro/src/port_boot.c:46,55. A #define is out:
+   lib/include/nitro/os/ownerInfo.h:13 declares OSOwnerInfo.favoriteColor and
+   lib/NitroSDK/src/os/os_ownerInfo.c:10 (compiled into the port) touches
+   both spellings in one TU, so the macro would rewrite that TU to
+   info->favouriteColour, which does not exist. Instead, under the macro each
+   whole bitfield run sits in an anonymous union offering both spellings of
+   the one differing bit (other members keep a single declaration, so no
+   access is ambiguous); wrapping only the one bitfield would split the
+   storage unit, so the Option union repeats the full 16-bit run. Layout and
+   sizeof are unchanged (OwnerInfo 0x50, Option 0x0c, Data 0x70, Config 0x74).
+
+5. lib/NitroSDK/include/dgt.h:33
+   The port (3ds_port/nitro/src/dgt.c:92,120,205,230) defines
+   DGT_Hash1SetSource(const void *, unsigned long), DGT_Hash1GetDigest_R
+   (void *, ...) and DGT_Hash2SetSource(const unsigned char *, unsigned
+   long); the DS u8 * parameters conflict under GCC. Under the macro the
+   header uses the port's pointer types (u32 is unsigned long, so the length
+   spelling already agrees). lib/NitroSDK/src/math/math_dgt_internal.h:6,
+   which redeclares the same six functions, and the port-replaced
+   lib/NitroSDK/src/dgt_hash.c:53,90,170 get the same signatures under the
+   macro so the survey parse stays identical.
+
+6. lib/include/nitro/card/common.h:120 and lib/NitroSDK/include/CARD_common.h:120
+   GCC 10: "'CARDiCommandArg' has no member named 'dst'" at
+   3ds_port/nitro/src/port_card.c (ten uses: 254,271,274,278,282,285,288,
+   291,297,298), which spells the destination word dst (ntrtwl's name); the
+   SDK and the DS game spell it dest. A #define is out for the same reason
+   as favouriteColour: CARDiCommon has its own member named dst, used in the
+   same translation units (e.g. CARD_rom.c), which the macro would rewrite
+   to a nonexistent dest. Instead, under the macro the word sits in
+   union { u32 dest; u32 dst; }, so both spellings name offset 16 and
+   sizeof(CARDiCommandArg) is unchanged (96 bytes, verified by
+   tests/sdk/gcc_fixes). The DS branch is the original line in each file.
+
+7. lib/NitroSDK/src/mi/mi_dma_gxcommand.c:9-15
+   GCC 10: "redeclaration of enumerator 'GX_FIFOINTR_COND_*'" and
+   "conflicting types for 'GXFifoIntrCond'" once hgss/compat/include is on
+   the path: <nitro.h> already brings in GXFifoIntrCond (compat
+   nitro/gx/g3x.h) and OS_IE_GXFIFO (compat nitro/os/common/interrupt.h and
+   the shared-interrupt wrapper), so the file's local copies collide. Under
+   the macro each local copy is skipped when a header already provided it
+   (#ifndef OS_IE_GXFIFO, #ifndef HGSS_COMPAT_GX_G3X_H); without
+   hgss/compat/include on the path neither guard is defined and the locals
+   are still declared here, so standalone SDK builds keep working. The DS
+   branch is the original text.
+
+8. lib/NitroSDK/include/dgt.h:20 (struct DGTHash2Context)
+   GCC 10: dgt.c's ctx->h0..h4/Nl/Nh/num/data/dummy (dgt.c:151,195-211,230+)
+   have no members in the SDK's SAFE/endian-proof struct
+   (Intermediate_Hash/Length_Low/...), while MATH_CalcSHA1 (via MATH_dgt.c)
+   and the DS game use the HGSS fields. Under the macro the struct body is
+   an anonymous union of both layouts, so both spellings compile against the
+   one header; each member is 104 bytes, so sizeof(struct DGTHash2Context)
+   is unchanged (verified by tests/sdk/gcc_fixes). The DS branch is the
+   original struct. The compat header hgss/compat/include/nitro/dgt/dgt.h
+   (not part of this patch) now #includes <dgt.h> and typedefs
+   DGTHash1Context/DGTHash2Context instead of redefining the structs.
+
+Identity proof (gcc-10 -E -P -m32 -malign-double, the survey defines, CFLAGS
+and include order minus -DSDK_PORT_3DS, against the parent commit): the
+output is byte-identical for all twelve touched files. With -DSDK_PORT_3DS
+eleven differ only in the guarded hunks; mi_dma_gxcommand.c is identical
+either way without hgss/compat/include on the path (the guards find nothing
+to skip, which is also what keeps standalone SDK builds working).
+
+Checks: tools/sdk_compile_survey.py --m32 --gcc gcc-10: 269/284 before and
+after (same 15-file failing set; warnings unchanged at 563).
+tools/port_compile_survey.py: 45/46 before (only port_card.c: dst), 46/46
+after. python3 tools/hgss_nitro.py make --target host32 --out <dir> lib -k:
+exit 0, 0 error lines, libnitro.a produced (dgt.o, port_card.o,
+CARD_common.o and mi_dma_gxcommand.o all build).
+tests/sdk/gcc_fixes/run.sh: all 11 groups pass (7 new); on the previous
+1202 revision the 2 new positive checks fail the way the port build did
+(no member named 'dst' / 'h0') while (a)-(i) still pass.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/include/CARD_common.h        | 11 +++++
+ lib/NitroSDK/include/OS_cache.h           |  6 +++
+ lib/NitroSDK/include/dgt.h                | 42 ++++++++++++++++++
+ lib/NitroSDK/src/dgt_hash.c               | 14 ++++++
+ lib/NitroSDK/src/math/math_dgt_internal.h |  7 +++
+ lib/NitroSDK/src/mi/mi_dma_gxcommand.c    | 17 +++++++
+ lib/NitroSDK/src/pxi/PXI_fifo.c           | 15 +++++++
+ lib/include/nitro/card/common.h           | 11 +++++
+ lib/include/nitro/mi/memory.h             | 15 +++++++
+ lib/include/nitro/os/cache.h              |  6 +++
+ lib/include/nitro/pxi/fifo.h              | 13 ++++++
+ lib/include/nitro/spi/userInfo.h          | 54 +++++++++++++++++++++++
+ 12 files changed, 211 insertions(+)
+
+diff --git a/lib/NitroSDK/include/CARD_common.h b/lib/NitroSDK/include/CARD_common.h
+index 1ae31b7..9eaceb9 100644
+--- a/lib/NitroSDK/include/CARD_common.h
++++ b/lib/NitroSDK/include/CARD_common.h
+@@ -115,7 +115,18 @@ typedef struct CARDiCommandArg
+     CARDBackupType type;
+     u32 id;
+     u32 src;
++#ifdef SDK_PORT_3DS
++    // SDK_PORT_3DS: 3ds_port/nitro/src/port_card.c spells this dst (ntrtwl's name); the SDK and
++    // the DS game spell it dest. Both names address the same word: the union keeps the offset
++    // and sizeof(CARDiCommandArg) identical (verified by tests/sdk/gcc_fixes).
++    union
++    {
++        u32 dest;
++        u32 dst;
++    };
++#else
+     u32 dest;
++#endif
+     u32 len;
+ 
+     struct
+diff --git a/lib/NitroSDK/include/OS_cache.h b/lib/NitroSDK/include/OS_cache.h
+index 425eab3..06beff0 100644
+--- a/lib/NitroSDK/include/OS_cache.h
++++ b/lib/NitroSDK/include/OS_cache.h
+@@ -7,7 +7,13 @@ void DC_InvalidateAll(void);
+ void DC_StoreAll(void);
+ void DC_FlushAll(void);
+ void DC_InvalidateRange(register void *startAddr, register u32 nBytes);
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: 3ds_port/nitro/src/port_os.c:315 defines DC_StoreRange(const void *, u32); the DS
++// void * parameter is a different type under GCC, so it conflicts with the port definition.
++void DC_StoreRange(const void *startAddr, u32 nBytes);
++#else
+ void DC_StoreRange(register void *startAddr, register u32 nBytes);
++#endif
+ void DC_FlushRange(register const void *startAddr, register u32 nBytes);
+ void DC_WaitWriteBufferEmpty(void);
+ void IC_InvalidateAll(void);
+diff --git a/lib/NitroSDK/include/dgt.h b/lib/NitroSDK/include/dgt.h
+index 793dac8..ca162ce 100644
+--- a/lib/NitroSDK/include/dgt.h
++++ b/lib/NitroSDK/include/dgt.h
+@@ -18,6 +18,34 @@ struct DGTHash1Context {
+ };
+ 
+ struct DGTHash2Context {
++#ifdef SDK_PORT_3DS
++    // SDK_PORT_3DS: 3ds_port/nitro/src/dgt.c works the ntrtwl fields (h0..h4, Nl, Nh, num, data,
++    // dummy) while MATH_CalcSHA1 (via MATH_dgt.c) and the DS game use the HGSS fields below.
++    // Both live in one anonymous union, so both spellings compile against this single header and
++    // share one layout: each member is 104 bytes, so sizeof(struct DGTHash2Context) is unchanged
++    // (verified by tests/sdk/gcc_fixes).
++    union {
++        struct {
++            unsigned long h0, h1, h2, h3, h4;
++            unsigned long Nl, Nh;
++            int num;
++            unsigned long data[64 / 4];
++            int dummy[2];
++        };
++        struct {
++            unsigned long Intermediate_Hash[5];
++            unsigned long Length_Low;
++            unsigned long Length_High;
++            int Message_Block_Index;
++            union {
++                unsigned char Message_Block[64];
++                unsigned long Message_Block_Words[16];
++            };
++            int Computed;
++            int Corrupted;
++        };
++    };
++#else
+     unsigned long Intermediate_Hash[5];
+     unsigned long Length_Low;
+     unsigned long Length_High;
+@@ -28,13 +56,27 @@ struct DGTHash2Context {
+     };
+     int Computed;
+     int Corrupted;
++#endif
+ };
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: 3ds_port/nitro/src/dgt.c defines DGT_Hash1SetSource with (const void *, unsigned
++// long), DGT_Hash1GetDigest_R with (void *, ...) and DGT_Hash2SetSource with (const unsigned
++// char *, unsigned long). The DS u8 * parameters are a different type under GCC, so they conflict
++// with the port definitions. (u32 is unsigned long, so the length spelling alone already agrees.)
++void DGT_Hash1Reset(struct DGTHash1Context *context);
++void DGT_Hash1SetSource(struct DGTHash1Context *context, const void *input, unsigned long length);
++void DGT_Hash1GetDigest_R(void *digest, struct DGTHash1Context *context);
++void DGT_Hash2Reset(struct DGTHash2Context *context);
++void DGT_Hash2SetSource(struct DGTHash2Context *context, const unsigned char *input, unsigned long length);
++void DGT_Hash2GetDigest(struct DGTHash2Context *context, u8 *digest);
++#else
+ void DGT_Hash1Reset(struct DGTHash1Context *context);
+ void DGT_Hash1SetSource(struct DGTHash1Context *context, u8 *input, u32 length);
+ void DGT_Hash1GetDigest_R(u8 *digest, struct DGTHash1Context *context);
+ void DGT_Hash2Reset(struct DGTHash2Context *context);
+ void DGT_Hash2SetSource(struct DGTHash2Context *context, u8 *input, u32 length);
+ void DGT_Hash2GetDigest(struct DGTHash2Context *context, u8 *digest);
++#endif
+ 
+ #endif
+diff --git a/lib/NitroSDK/src/dgt_hash.c b/lib/NitroSDK/src/dgt_hash.c
+index e8d773c..cfc5cd1 100644
+--- a/lib/NitroSDK/src/dgt_hash.c
++++ b/lib/NitroSDK/src/dgt_hash.c
+@@ -50,7 +50,13 @@ void DGT_Hash1Reset(struct DGTHash1Context *context) {
+     context->length = 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: signature match for dgt.h (3ds_port/nitro/src/dgt.c). This file is port-replaced
++// (the port builds dgt.c instead); the guard keeps the survey parse under the macro identical.
++void DGT_Hash1SetSource(struct DGTHash1Context *context, const void *input, unsigned long length) {
++#else
+ void DGT_Hash1SetSource(struct DGTHash1Context *context, u8 *input, u32 length) {
++#endif
+     const u8 *src = input;
+     u32 used = (u32)context->length & 63;
+     u32 remaining = 64 - used;
+@@ -81,7 +87,11 @@ void DGT_Hash1SetSource(struct DGTHash1Context *context, u8 *input, u32 length)
+ }
+ 
+ // Pads the message (0x80, zeros, the bit length), writes the digest and clears the context.
++#ifdef SDK_PORT_3DS
++void DGT_Hash1GetDigest_R(void *digest, struct DGTHash1Context *context) {
++#else
+ void DGT_Hash1GetDigest_R(u8 *digest, struct DGTHash1Context *context) {
++#endif
+     u64 bits = context->length << 3;
+     u32 high = (u32)(bits >> 32);
+     u32 low = (u32)bits;
+@@ -157,7 +167,11 @@ void DGT_Hash2Reset(struct DGTHash2Context *context) {
+     context->Message_Block_Index = 0;
+ }
+ 
++#ifdef SDK_PORT_3DS
++void DGT_Hash2SetSource(struct DGTHash2Context *context, const unsigned char *input, unsigned long length) {
++#else
+ void DGT_Hash2SetSource(struct DGTHash2Context *context, u8 *input, u32 length) {
++#endif
+     const u8 *src = input;
+     u8 *block = context->Message_Block;
+     u32 n;
+diff --git a/lib/NitroSDK/src/math/math_dgt_internal.h b/lib/NitroSDK/src/math/math_dgt_internal.h
+index 4ec8eaa..7179253 100644
+--- a/lib/NitroSDK/src/math/math_dgt_internal.h
++++ b/lib/NitroSDK/src/math/math_dgt_internal.h
+@@ -3,8 +3,15 @@
+ #include <nitro/types.h>
+ #include "dgt.h"
+ typedef struct DGTHash1Context MATHMD5Context; typedef struct DGTHash2Context MATHSHA1Context;
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: same DGT signature match as dgt.h (3ds_port/nitro/src/dgt.c); the DS u8 *
++// parameters conflict with the port definitions under GCC.
++void DGT_Hash1Reset(struct DGTHash1Context *); void DGT_Hash1SetSource(struct DGTHash1Context *, const void *, unsigned long); void DGT_Hash1GetDigest_R(void *, struct DGTHash1Context *);
++void DGT_Hash2Reset(struct DGTHash2Context *); void DGT_Hash2SetSource(struct DGTHash2Context *, const unsigned char *, unsigned long); void DGT_Hash2GetDigest(struct DGTHash2Context *, u8 *);
++#else
+ void DGT_Hash1Reset(struct DGTHash1Context *); void DGT_Hash1SetSource(struct DGTHash1Context *, u8 *, u32); void DGT_Hash1GetDigest_R(u8 *, struct DGTHash1Context *);
+ void DGT_Hash2Reset(struct DGTHash2Context *); void DGT_Hash2SetSource(struct DGTHash2Context *, u8 *, u32); void DGT_Hash2GetDigest(struct DGTHash2Context *, u8 *);
++#endif
+ static inline void MATH_MD5Init(MATHMD5Context *c){DGT_Hash1Reset(c);} static inline void MATH_MD5Update(MATHMD5Context *c,const void *p,u32 n){DGT_Hash1SetSource(c,(u8 *)p,n);} static inline void MATH_MD5GetHash(MATHMD5Context *c,void *d){DGT_Hash1GetDigest_R((u8 *)d,c);}
+ static inline void MATH_SHA1Init(MATHSHA1Context *c){DGT_Hash2Reset(c);} static inline void MATH_SHA1Update(MATHSHA1Context *c,const void *p,u32 n){DGT_Hash2SetSource(c,(u8 *)p,n);} static inline void MATH_SHA1GetHash(MATHSHA1Context *c,void *d){DGT_Hash2GetDigest(c,(u8 *)d);}
+ void MATH_CalcMD5(void *,const void *,u32); void MATH_CalcSHA1(void *,const void *,u32);
+diff --git a/lib/NitroSDK/src/mi/mi_dma_gxcommand.c b/lib/NitroSDK/src/mi/mi_dma_gxcommand.c
+index bb8d61f..aa67ca7 100644
+--- a/lib/NitroSDK/src/mi/mi_dma_gxcommand.c
++++ b/lib/NitroSDK/src/mi/mi_dma_gxcommand.c
+@@ -6,6 +6,22 @@
+ #define MI_CNT_SEND32(size)    (0x84400000 | ((size) / 4))
+ #define MI_CNT_SEND32_IF(size) (0xc4400000 | ((size) / 4))
+ #define MI_CNT_GXCOPY_IF(size) (0xfc400000 | ((size) / 4))
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: <nitro.h> already brings in OS_IE_GXFIFO (compat nitro/os/common/interrupt.h,
++// and the shared-interrupt wrapper) and GXFifoIntrCond (compat nitro/gx/g3x.h), so the local
++// copies are skipped when they exist. Without hgss/compat/include on the path neither guard
++// is defined and they are still declared here, so standalone SDK builds keep working.
++#ifndef OS_IE_GXFIFO
++#define OS_IE_GXFIFO           0x200000
++#endif
++#ifndef HGSS_COMPAT_GX_G3X_H
++typedef enum {
++    GX_FIFOINTR_COND_DISABLE = 0,
++    GX_FIFOINTR_COND_UNDERHALF = 1,
++    GX_FIFOINTR_COND_EMPTY = 2
++} GXFifoIntrCond;
++#endif
++#else
+ #define OS_IE_GXFIFO           0x200000
+ 
+ typedef enum {
+@@ -13,6 +29,7 @@ typedef enum {
+     GX_FIFOINTR_COND_UNDERHALF = 1,
+     GX_FIFOINTR_COND_EMPTY = 2
+ } GXFifoIntrCond;
++#endif
+ 
+ typedef enum {
+     GX_FIFOSTAT_EMPTY = 6,
+diff --git a/lib/NitroSDK/src/pxi/PXI_fifo.c b/lib/NitroSDK/src/pxi/PXI_fifo.c
+index c067234..243a270 100644
+--- a/lib/NitroSDK/src/pxi/PXI_fifo.c
++++ b/lib/NitroSDK/src/pxi/PXI_fifo.c
+@@ -58,7 +58,14 @@ void PXI_InitFifo(void)
+     (void)OS_RestoreInterrupts(enabled);
+ }
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: signature match for nitro/pxi/fifo.h (3ds_port/nitro/src/pxi.c uses int tags).
++// This file is port-replaced (the port builds pxi.c instead); the guard keeps the survey parse
++// under the macro identical.
++void PXI_SetFifoRecvCallback(int fifotag, PXIFifoCallback callback)
++#else
+ void PXI_SetFifoRecvCallback(s32 fifotag, PXIFifoCallback callback)
++#endif
+ {
+     OSSystemWork *p = OS_GetSystemWork();
+     OSIntrMode enabled = OS_DisableInterrupts();
+@@ -75,14 +82,22 @@ void PXI_SetFifoRecvCallback(s32 fifotag, PXIFifoCallback callback)
+     (void)OS_RestoreInterrupts(enabled);
+ }
+ 
++#ifdef SDK_PORT_3DS
++BOOL PXI_IsCallbackReady(int fifotag, PXIProc proc)
++#else
+ BOOL PXI_IsCallbackReady(s32 fifotag, PXIProc proc)
++#endif
+ {
+     OSSystemWork *p = OS_GetSystemWork();
+ 
+     return (p->pxiHandleChecker[proc] & (1UL << fifotag)) ? TRUE : FALSE;
+ }
+ 
++#ifdef SDK_PORT_3DS
++int PXI_SendWordByFifo(int fifotag, u32 data, BOOL err)
++#else
+ s32 PXI_SendWordByFifo(s32 fifotag, u32 data, BOOL err)
++#endif
+ {
+     PXIFifoMessage fifomsg;
+ 
+diff --git a/lib/include/nitro/card/common.h b/lib/include/nitro/card/common.h
+index 044294d..e504bd3 100644
+--- a/lib/include/nitro/card/common.h
++++ b/lib/include/nitro/card/common.h
+@@ -117,7 +117,18 @@ typedef struct CARDiCommandArg
+     CARDBackupType type;
+     u32 id;
+     u32 src;
++#ifdef SDK_PORT_3DS
++    // SDK_PORT_3DS: 3ds_port/nitro/src/port_card.c spells this dst (ntrtwl's name); the SDK and
++    // the DS game spell it dest. Both names address the same word: the union keeps the offset
++    // and sizeof(CARDiCommandArg) identical (verified by tests/sdk/gcc_fixes).
++    union
++    {
++        u32 dest;
++        u32 dst;
++    };
++#else
+     u32 dest;
++#endif
+     u32 len;
+ 
+     struct
+diff --git a/lib/include/nitro/mi/memory.h b/lib/include/nitro/mi/memory.h
+index 88ddce7..c0adc73 100644
+--- a/lib/include/nitro/mi/memory.h
++++ b/lib/include/nitro/mi/memory.h
+@@ -3,12 +3,27 @@
+ 
+ #include <nitro/types.h>
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: 3ds_port/nitro/src/mi_memory.c defines these with plain void * (and the two Send
++// routines, which the DS header does not declare at all). The DS u16 */u32 * parameters are a
++// different type from void * under GCC even with -m32 (s32/u32 are long), so the DS prototypes
++// conflict with the port definitions. MWCC accepts either.
++void MIi_CpuClear16(u16 data, void *destp, u32 size);
++void MIi_CpuCopy16(const void *srcp, void *destp, u32 size);
++void MIi_CpuSend16(const void *srcp, volatile void *destp, u32 size);
++void MIi_CpuClear32(u32 data, void *destp, u32 size);
++void MIi_CpuCopy32(const void *srcp, void *destp, u32 size);
++void MIi_CpuSend32(const void *srcp, volatile void *destp, u32 size);
++void MIi_CpuClearFast(u32 data, void *destp, u32 size);
++void MIi_CpuCopyFast(const void *srcp, void *destp, u32 size);
++#else
+ void MIi_CpuClear16(register u16 value, register u16 * dst, register u32 size);
+ void MIi_CpuCopy16(const register u16 * src, register u16 * dst, register u32 size);
+ void MIi_CpuClear32(register u32 value, register u32 * dst, register u32 size);
+ void MIi_CpuCopy32(const register u32 * src, register u32 * dst, register u32 size);
+ void MIi_CpuClearFast(register u32 value, register u32 * dst, register u32 size);
+ void MIi_CpuCopyFast(const register u32 * src, register u32 * dst, register u32 size);
++#endif
+ void MI_CpuFill8(void *dest, u8 data, u32 size);
+ void MI_CpuCopy8(const void * src, void * dst, u32 size);
+ 
+diff --git a/lib/include/nitro/os/cache.h b/lib/include/nitro/os/cache.h
+index a6a62cd..dc72253 100644
+--- a/lib/include/nitro/os/cache.h
++++ b/lib/include/nitro/os/cache.h
+@@ -3,7 +3,13 @@
+ 
+ void DC_FlushAll(void);
+ void DC_InvalidateRange(register void * startAddr, register u32 nBytes);
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: 3ds_port/nitro/src/port_os.c:315 defines DC_StoreRange(const void *, u32); the DS
++// void * parameter is a different type under GCC, so it conflicts with the port definition.
++void DC_StoreRange(const void *startAddr, u32 nBytes);
++#else
+ void DC_StoreRange(register void * startAddr, register u32 nBytes);
++#endif
+ void DC_InvalidateAll(void);
+ void DC_StoreAll(void);
+ void IC_InvalidateAll(void);
+diff --git a/lib/include/nitro/pxi/fifo.h b/lib/include/nitro/pxi/fifo.h
+index e8e35ea..fb7aec8 100644
+--- a/lib/include/nitro/pxi/fifo.h
++++ b/lib/include/nitro/pxi/fifo.h
+@@ -26,10 +26,23 @@ typedef union
+     u32 raw;
+ } PXIFifoMessage;
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: 3ds_port/nitro/src/pxi.c defines these with int tags (s32 is long, a different type
++// from int under GCC even with -m32) and adds PXI_SetFifoSendCallback, whose PXIFifoEmtpyCallback
++// keeps the SDK-side spelling the port uses. MWCC accepts either.
++typedef void (*PXIFifoEmtpyCallback)(void);
++void PXI_InitFifo(void);
++void PXI_SetFifoRecvCallback(int fifotag, PXIFifoCallback callback);
++BOOL PXI_IsCallbackReady(int fifotag, PXIProc proc);
++int PXI_SendWordByFifo(int fifotag, u32 data, BOOL err);
++void PXI_SetFifoSendCallback(PXIFifoEmtpyCallback callback);
++void PXIi_HandlerRecvFifoNotEmpty(void);
++#else
+ void PXI_InitFifo(void);
+ void PXI_SetFifoRecvCallback(s32 fifotag, PXIFifoCallback callback);
+ BOOL PXI_IsCallbackReady(s32 fifotag, PXIProc proc);
+ s32 PXI_SendWordByFifo(s32 fifotag, u32 data, BOOL err);
+ void PXIi_HandlerRecvFifoNotEmpty(void);
++#endif
+ 
+ #endif //NITRO_PXI_FIFO_H_
+diff --git a/lib/include/nitro/spi/userInfo.h b/lib/include/nitro/spi/userInfo.h
+index 3319ce2..6c5272d 100644
+--- a/lib/include/nitro/spi/userInfo.h
++++ b/lib/include/nitro/spi/userInfo.h
+@@ -23,8 +23,29 @@ typedef struct NVRAMConfigComment
+ 
+ typedef struct NVRAMConfigOwnerInfo
+ {
++#ifdef SDK_PORT_3DS
++    // SDK_PORT_3DS: 3ds_port/nitro/src/port_boot.c:46 spells this favoriteColor; the SDK and the DS
++    // game spell it favouriteColour (as does lib/NitroSDK/src/os/os_ownerInfo.c:10, which the port
++    // still compiles, and OSOwnerInfo itself has a member named favoriteColor, so a #define is out).
++    // Both names address the same bits: the union wraps the whole bitfield run, so the layout and
++    // sizeof are unchanged (verified by tests/sdk/gcc_fixes).
++    union
++    {
++        struct
++        {
++            u8 favoriteColor:4;   //0x00 (0-3)
++            u8 rsv:4;             //0x00 (4-7)
++        };
++        struct
++        {
++            u8 favouriteColour:4; //0x00 (0-3)
++            u8 :4;                //0x00 (4-7)
++        };
++    };
++#else
+     u8 favouriteColour:4;         //0x00 (0-3)
+     u8 rsv:4;                     //0x00 (4-7)
++#endif
+     NVRAMConfigDate birthday;     //0x01
+     u8 pad;                       //0x03
+     NVRAMConfigNickname nickname; //0x04
+@@ -56,6 +77,38 @@ typedef struct NVRAMConfigTpCalibData
+ 
+ typedef struct NVRAMConfigOption
+ {
++#ifdef SDK_PORT_3DS
++    // SDK_PORT_3DS: 3ds_port/nitro/src/port_boot.c:55 spells bit 11 input_favoriteColor; the SDK
++    // and the DS game spell it input_favouriteColour (nothing else in the tree reads it, but a
++    // #define is still out: OSOwnerInfo has a member named favoriteColor). Both names address bit
++    // 11 of the same bits: the union wraps the whole bitfield run, so the layout and sizeof are
++    // unchanged (verified by tests/sdk/gcc_fixes). Wrapping only the one bitfield would split the
++    // run into three storage units and change sizeof; every other member keeps its single
++    // declaration in the first struct, so no access is ambiguous.
++    union
++    {
++        struct
++        {
++            u16 language:3;               //0x00 (0-2)
++            u16 agbLcd:1;                 //0x00 (3)
++            u16 detectPullOutCardFlag:1;  //0x00 (4)
++            u16 detectPullOutCtrdgFlag:1; //0x00 (5)
++            u16 autoBootFlag:1;           //0x00 (6)
++            u16 rsv:4;                    //0x00 (7-10)
++            u16 input_favoriteColor:1;    //0x00 (11)
++            u16 input_tp:1;               //0x00 (12)
++            u16 input_language:1;         //0x00 (13)
++            u16 input_rtc:1;              //0x00 (14)
++            u16 input_nickname:1;         //0x00 (15)
++        };
++        struct
++        {
++            u16 :11;                      //0x00 (0-10)
++            u16 input_favouriteColour:1;  //0x00 (11)
++            u16 :4;                       //0x00 (12-15)
++        };
++    };
++#else
+     u16 language:3;               //0x00 (0-2)
+     u16 agbLcd:1;                 //0x00 (3)
+     u16 detectPullOutCardFlag:1;  //0x00 (4)
+@@ -67,6 +120,7 @@ typedef struct NVRAMConfigOption
+     u16 input_language:1;         //0x00 (13)
+     u16 input_rtc:1;              //0x00 (14)
+     u16 input_nickname:1;         //0x00 (15)
++#endif
+     u8 timeZone;                  //0x02
+     u8 rtcClockAdjust;            //0x03
+     s64 rtcOffset;                //0x04
+-- 
+2.43.0
+

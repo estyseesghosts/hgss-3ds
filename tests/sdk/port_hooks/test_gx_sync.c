@@ -9,8 +9,8 @@
 /* Defined in mi_memory.c (assembly in HGSS) and mi_dma.c; g3x.c references them. The tests never reach them. */
 void MI_Copy32B(const void *src, void *dst);
 void GXi_NopClearFifo128_(void *reg);
-void MIi_CpuCopy16(const register u16 *src, register u16 *dst, register u32 size);
-void MIi_CpuClear32(register u32 value, register u32 *dst, register u32 size);
+void MIi_CpuCopy16(const void *src, void *dst, u32 size);
+void MIi_CpuClear32(u32 value, void *dst, u32 size);
 void MI_DmaFill32(u32 dmaNo, void *dest, u32 data, u32 size);
 void MI_DmaFill32Async(u32 dmaNo, void *dest, u32 data, u32 size, MIDmaCallback callback, void *arg);
 u32 GXi_DmaId = (u32)-1;
@@ -25,13 +25,13 @@ void GXi_NopClearFifo128_(void *reg) {
     (void)reg;
     g_unexpected++;
 }
-void MIi_CpuCopy16(const register u16 *src, register u16 *dst, register u32 size) {
+void MIi_CpuCopy16(const void *src, void *dst, u32 size) {
     (void)src;
     (void)dst;
     (void)size;
     g_unexpected++;
 }
-void MIi_CpuClear32(register u32 value, register u32 *dst, register u32 size) {
+void MIi_CpuClear32(u32 value, void *dst, u32 size) {
     (void)value;
     (void)dst;
     (void)size;
