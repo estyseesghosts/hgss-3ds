@@ -1,0 +1,141 @@
+From 21ed1143d46c8238a37f038def500eb0bdcd9de1 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 18:02:59 +0000
+Subject: [PATCH] sound: keep the ARM9 command flush with the state it updates
+ (SDK_PORT_3DS)
+
+The ARM9 command sender and its flush come from two NitroSDK revisions in this
+decompilation: SND_command.c owns a 4-byte sFreeList pointer, sReserveList and
+the tag counters, while snd_flush_command.c reads sFreeList as a 40-byte
+private CommandState (freeHead/freeTail/head/tail/...). On the DS those are
+different objects; the port builds every SDK C file into one library, so the
+later definition reads and writes the wrong globals. It never sees
+sReserveList, and its pending/tag stores land on the neighbouring sCurrentTag
+and sFinishedTag; command lists are never handed over properly, so
+SND_RecvCommandReply blocks forever on a finishedCommandTag the virtual ARM7
+never receives a command to bump. This is the vendored test_arm7 test_sound
+spin.
+
+Under SDK_PORT_3DS SND_FlushCommand is the NitroSDK 4.2 implementation placed
+next to sReserveList/sWaitingCommandListQueue/sCurrentTag, and
+snd_flush_command.c compiles nothing. Its original body remains under #else, so
+the Metrowerks build preprocesses byte-identically: gcc-10 -E -P without
+SDK_PORT_3DS (SDK_ARM9 defined) is byte-identical for both files.
+
+Checked by the new tests/sdk/arm7_sound/test_arm9_flush.c (24 checks) and by
+the vendored test_arm7 (676 checks, 0 failures, previously a spin).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/snd/SND_command.c       | 74 ++++++++++++++++++++++++
+ lib/NitroSDK/src/snd/snd_flush_command.c |  8 +++
+ 2 files changed, 82 insertions(+)
+
+diff --git a/lib/NitroSDK/src/snd/SND_command.c b/lib/NitroSDK/src/snd/SND_command.c
+index 96e3085..396161e 100644
+--- a/lib/NitroSDK/src/snd/SND_command.c
++++ b/lib/NitroSDK/src/snd/SND_command.c
+@@ -149,6 +149,80 @@ void SND_PushCommand(struct SNDCommand *cmd) {
+     (void)OS_RestoreInterrupts(oldirq);
+ }
+ 
++#ifdef SDK_PORT_3DS
++/* NitroSDK 4.2's SND_FlushCommand, operating on the state this file owns
++ * (sReserveList, the waiting queue and the tag counters). snd_flush_command.c carries
++ * a later SDK revision's implementation whose private CommandState does not match this
++ * file's sFreeList pointer: it reads a 40-byte structure at a 4-byte pointer's address.
++ * The port links both files into one library, where the later definition never sees
++ * sReserveList and its head/tail/pending/tag stores land on the neighbouring tag
++ * counters, so a flush sends no list or a stale one and the finished tag cannot
++ * advance. Under SDK_PORT_3DS the flush lives here, next to its state;
++ * snd_flush_command.c compiles its original body only for the DS. */
++BOOL SND_FlushCommand(u32 flags) {
++    OSIntrMode oldirq = OS_DisableInterrupts();
++
++    if (sReserveList == NULL) {
++        (void)OS_RestoreInterrupts(oldirq);
++        return TRUE;
++    }
++
++    if (sWaitingCommandListCount >= SND_CMD_WAIT_QUEUE_COUNT) {
++        if ((flags & SND_CMD_FLAG_BLOCK) == 0) {
++            (void)OS_RestoreInterrupts(oldirq);
++            return FALSE;
++        }
++        do {
++            (void)SND_RecvCommandReply(SND_CMD_FLAG_BLOCK);
++        } while (sWaitingCommandListCount >= SND_CMD_WAIT_QUEUE_COUNT);
++        if (sReserveList == NULL) {
++            (void)OS_RestoreInterrupts(oldirq);
++            return TRUE;
++        }
++    }
++
++    DC_FlushRange(sCommandArray, sizeof(sCommandArray));
++    if (PXI_SendWordByFifo(PXI_FIFO_TAG_SOUND, (u32)sReserveList, FALSE) < 0) {
++        if ((flags & SND_CMD_FLAG_BLOCK) == 0) {
++            (void)OS_RestoreInterrupts(oldirq);
++            return FALSE;
++        }
++        while (sWaitingCommandListCount >= SND_CMD_WAIT_QUEUE_COUNT ||
++               PXI_SendWordByFifo(PXI_FIFO_TAG_SOUND, (u32)sReserveList, FALSE) < 0) {
++            (void)OS_RestoreInterrupts(oldirq);
++            (void)SND_RecvCommandReply(SND_CMD_FLAG_NOBLOCK);
++            oldirq = OS_DisableInterrupts();
++
++            DC_FlushRange(sCommandArray, sizeof(sCommandArray));
++            if (sReserveList == NULL) {
++                (void)OS_RestoreInterrupts(oldirq);
++                return TRUE;
++            }
++        }
++    }
++
++    sWaitingCommandListQueue[sWaitingCommandListQueueWrite] = sReserveList;
++    sWaitingCommandListQueueWrite++;
++    if (sWaitingCommandListQueueWrite > SND_CMD_WAIT_QUEUE_COUNT) {
++        sWaitingCommandListQueueWrite = 0;
++    }
++
++    sReserveList = NULL;
++    sReserveListEnd = NULL;
++
++    sWaitingCommandListCount++;
++    sCurrentTag++;
++
++    (void)OS_RestoreInterrupts(oldirq);
++
++    if (flags & SND_CMD_FLAG_IMMEDIATE) {
++        RequestCommandProc();
++    }
++
++    return TRUE;
++}
++#endif
++
+ void SND_WaitForCommandProc(u32 tag) {
+     if (SND_IsFinishedCommandTag(tag))
+         return;
+diff --git a/lib/NitroSDK/src/snd/snd_flush_command.c b/lib/NitroSDK/src/snd/snd_flush_command.c
+index 3ca6f0c..23fb6de 100644
+--- a/lib/NitroSDK/src/snd/snd_flush_command.c
++++ b/lib/NitroSDK/src/snd/snd_flush_command.c
+@@ -1,3 +1,10 @@
++#ifdef SDK_PORT_3DS
++/* This is a later NitroSDK revision's SND_FlushCommand: its private CommandState
++ * does not match the sFreeList pointer in SND_command.c (the revision the rest of
++ * this library was decompiled from). The port links both files, so the flush lives
++ * in SND_command.c under SDK_PORT_3DS, next to sReserveList and the tag counters
++ * it updates. The DS build keeps this file unchanged. */
++#else
+ #pragma force_active on
+ #include "global.h"
+ 
+@@ -71,3 +78,4 @@ BOOL SND_FlushCommand(u32 flags) {
+     }
+     return 1;
+ }
++#endif
+-- 
+2.43.0
+
