@@ -356,6 +356,83 @@ Platinum's NitroSystem series is five patches
 | --- | --- | --- |
 | 0001 GCC build | UTF-16 reads, casts-as-lvalues, `__alloca`, implicit `int`, UB fixes in `g2d_CharCanvas.c`, `g2di_BGManipulator.c`, `g2di_SplitChar.c`, `gfd_FrameTexVramMan.c`, `sndarc_stream.c`, `g2d_Data.h`, `g2di_Char.h` | **Covered where applicable.** The implicit-`int` case exists in HGSS too and is fixed by pokeheartgold 1101 (`NNS_G2dInitCellTransferStateManager` gets its `int`; the definition at `g2d_cell_transfer_manager.c:28` already has it). The MWCC-`asm` CLZ helpers in `g2d_canvas_arrange.c`, `g2d_char_canvas.c`, `g2d_char_canvas_util.c` are fixed by NNS 0301 (`__builtin_clz` with the `x == 0 → 32` guard, tested by `tests/sdk/nns_clz`). The other 0001 items have no HGSS counterpart: no `__alloca` and no `L"…"` wide literals in HGSS `NitroSystem/src`, and no `g2d_Data.h`/`UNPACK_OFFSET_PTR` macro in HGSS headers (grep-verified). |
 | 0002 sound capture | Guards `cap->blockSize = bufLen / interval` in `NNSi_SndCaptureStart` (`libraries/snd/src/capture.c:446-452`): `interval` is 0 with no callback (reverb), which SIGFPEs on PC | **Not applicable as written.** HGSS's `lib/NitroSystem/src/snd_capture.c` (121 lines) has no `bufLen / interval` division at all — its volume math is shift-based (`NNSi_SndFaderGet(&state->fader) >> 8`, line 57). No equivalent patch needed unless a divider turns up elsewhere. |
-| 0003 GXFIFO stores | Routes single-register `reg_G3X_GXFIFO` stores in `gecom.c` (`NNS_G3dGeBufferOP_N`) and `sbc.c` through `NitroPort_GxFifoWord` | **Not yet written; counterparts located.** HGSS `g3d_gecom.c:64-65` (`reg_G3X_GXFIFO = op` + `MIi_CpuSend32` in `NNS_G3dGeBufferOP_N`) is the exact gecom counterpart; HGSS `g3d_sbc.c:462-464` (projection-setup single stores) and the `:530-542,632-…` billboard sequences are the sbc counterparts. An HGSS patch routing these through the port's translator is owed (cf. phase-1.md "G3 FIFO sends through the port's translator"). |
-| 0004 queued 3D VRAM transfers | Adds `NNSi_GfdDoVramTransfer3D` (early texture/palette/clear transfers at `OS_Halt`, marked done via `pSrc = NULL`) so first-use textures are present when the scene draws | **Not yet written; counterpart located, no split exists.** HGSS `NNS_GfdDoVramTransfer` (`gfd_vram_transfer_manager.c:244-255`) pops and transfers every queued task inline (`DoTransfer_`, lines 193-197) with no `pSrc`-NULL skip and no early-3D entry point. The equivalent patch must add both. |
-| 0005 OAM reset | Parks unused OAM entries at `192 \| 0x0200` (y-192 **plus the disable bit**) instead of bare `192`, because the 3DS lower screen shows lines 192–247 | **Not yet written; counterpart located, still parks bare.** HGSS `NNS_G2dResetOamManagerBuffer` (`g2d_oam.c:203-228`) fills `0xc0` (= 192, no disable bit) via DMA/CPU (`:212-214`) and per-entry `attr0 = 0xc0` (`:224`). Same pre-patch behavior as Platinum, so the same fix (add `0x0200`) is owed. |
+| 0003 GXFIFO stores | Routes single-register `reg_G3X_GXFIFO` stores in `gecom.c` (`NNS_G3dGeBufferOP_N`) and `sbc.c` through `NitroPort_GxFifoWord` | **Done (NitroSystem 0302).** HGSS `g3d_gecom.c:64-65` (`reg_G3X_GXFIFO = op` + `MIi_CpuSend32` in `NNS_G3dGeBufferOP_N`) and the `g3d_sbc.c` projection/billboard stores now go through the port's GXFIFO word hook. |
+| 0004 queued 3D VRAM transfers | Adds `NNSi_GfdDoVramTransfer3D` (early texture/palette/clear transfers at `OS_Halt`, marked done via `pSrc = NULL`) so first-use textures are present when the scene draws | **Done (NitroSystem 0302).** HGSS's `NNS_GfdDoVramTransfer` has no `pSrc`-NULL skip and no early-3D entry point; 0302 adds the early transfer pass, and patch 1406 maps the 3D texture pages onto the port's VRAM array. Verified by `test_vram_transfer` (24 checks). |
+| 0005 OAM reset | Parks unused OAM entries at `192 \| 0x0200` (y-192 **plus the disable bit**) instead of bare `192`, because the 3DS lower screen shows lines 192–247 | **Done (NitroSystem 0302).** HGSS `NNS_G2dResetOamManagerBuffer` filled `0xc0`; the port now sets the disable bit (`0x0200`) in the hidden-OAM entries. |
+
+## 10. Runtime differences found by the vendored suites (session 5) ✅
+
+These were not visible in a header comparison; each one only appeared when the
+port actually executed the code.
+
+### 10.1 The ARM9 sound command flush is two SDK revisions in one tree
+
+`lib/NitroSDK/src/snd/SND_command.c` owns a **4-byte** `sFreeList` pointer,
+`sReserveList`, `sWaitingCommandListQueue` and the tag counters.
+`lib/NitroSDK/src/snd/snd_flush_command.c` is a later revision whose private
+`CommandState` is **40 bytes** and is read through the same `sFreeList`. On the
+DS only the later file defines `SND_FlushCommand`, so nothing notices. The port
+links both C files into one archive; the later definition read the pointer as a
+struct, never saw `sReserveList`, and its `pending/tag` stores landed on the
+neighbouring `sCurrentTag`/`sFinishedTag`. No command reached the virtual ARM7,
+and `SND_RecvCommandReply(SND_CMD_FLAG_BLOCK)` spun.
+
+Patch 1404 keeps the 4.2 flush in `SND_command.c` under `SDK_PORT_3DS`;
+`snd_flush_command.c` compiles only for the DS. Verified by `test_arm7` (676
+checks) and `tests/sdk/arm7_sound/test_arm9_flush.c` (24 checks).
+
+### 10.2 Sound registers are indexed by the DS low 16-bit address
+
+`NitroPort_SoundRegisters` is the DS address space's low bits: `SOUNDCNT` at
+`0x500`, channel `c`'s control at `0x400 + c*16` (channel 4 at `0x440`),
+captures at `0x508`/`0x510`. Patch 1401 subtracted `0x400`, so every channel,
+master-volume and capture write landed 0x400 low and the mixer read zeros.
+Patch 1405 maps the DS addresses unchanged.
+
+The BIOS volume table is NitroSDK 4.2's real **724-entry** table, not
+`round(127 * 10^(dB/20))`: the lowest entries stay non-zero, and a synthetic
+sequence with `attack = 0` relied on them. The formula rounded them to 0 and
+silenced the channel.
+
+### 10.3 3D texture loads and direct G3 register writes
+
+`lib/NitroSDK/src/gx/gx_load3d.c` copies 3D textures to the raw LCDC address
+`0x06800000`. Patch 1406 maps the loader's page numbers onto
+`NitroPort_LcdcVram` (a zero entry stays zero, because the loader uses it to
+mean "no second block"). The tested texture and texture-palette paths pass
+`test_vram_transfer`; the clear-image loaders still use raw addresses and are
+not exercised.
+
+`hgss/compat/include/nitro/gx/g3imm.h`'s `G3_StoreMtx`, `G3_RestoreMtx`,
+`G3_Scale` and `G3_TexCoord` wrote `reg_G3_MTX_*` directly; the port's geometry
+engine only sees `NitroPort_GxDirectWrite` (HGSS's own header already routes the
+other G3 helpers that way). Forwarding them fixed six `test_gx3d` checks.
+
+### 10.4 NitroSystem declaration sets and one real layout bug
+
+- Three declaration sets existed for `SND_RecvCommandReply`, `SND_ReadDriverInfo`,
+  `SND_SetMasterVolume` and `SND_PrepareSeq`: HGSS's flat headers,
+  `lib/include/nnsys/snd_internal.h`, and the port's compat header. The flat
+  headers cannot be combined with the public ones (their `SND_work_shared.h`
+  redefines `SNDChannelInfo`/`SNDTrackInfo`). The port keeps one set; see
+  `hgss/compat/README.md`.
+- `nnsys/snd/main.h` uses `NNSSndHandle`, but `nnsys/snd.h` does not include
+  `snd/player.h`; a unity file that includes every header in path order fails.
+  The compat `nitro/snd.h` pulls the heap/player headers first.
+- `gfd_linked_list_tex_vram_man_reset.c` defined the linked-list texture VRAM
+  manager as three separate globals, while the manager casts
+  `&gLnkTexVramFreeList` to `LnkTexVramManager` and reads +0/+4/+8. GCC's
+  `.bss` order put them at 0x0/0x14/0x18, so init wrote through garbage.
+  NitroSystem patch 0303 emits one ordered block under `SDK_PORT_3DS`.
+- HGSS's NNS headers are all `static inline`, so the vendored weaken step gets
+  an empty symbol list; binutils 2.42 rejects it. The harness's `NM` wrapper
+  appends one harmless name.
+
+### 10.5 Missing decomp build stage: object aliases
+
+The DS build runs `tools/object_aliases.py` over objects with an
+`.alias-map.json` to add labels *inside* a section: the five
+`gPokewalkerIr{ImageSizes,StrollSizes,MessageQueue,Transfer,SendBuffer}` aliases
+inside `gPokewalkerIrBuffers`/`Sync`/`Progress` (offsets 0x4c/0x54, 0x7c/0x80,
+0xc0), and runs of Thumb entry points. The PC harness does not run it yet; the
+five aliases are among the last 34 unresolved symbols.
