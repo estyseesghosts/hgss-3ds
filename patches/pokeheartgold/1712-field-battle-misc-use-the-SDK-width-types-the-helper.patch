@@ -1,0 +1,422 @@
+From e29bbe0615f2ebdd772c0f42dd8d9dd461cbc83b Mon Sep 17 00:00:00 2001
+From: A3 <a3@invalid>
+Date: Sat, 31 Oct 2026 22:07:47 +0000
+Subject: [PATCH 1712/1712] field,battle,misc: use the SDK width types the
+ helpers declare
+
+NitroSDK s32/u32 are long on 3DS, so GCC 14 rejects the game int/u32
+locals at helpers that take s32*/u32*/int*: TaskManager_GetStatePtr
+(u32*), Comm_FindFriendSlot (s32*), MapObjectManager_GetNextObjectWith
+FlagFromIndex and TrainerSight_FindPlayer (s32*/int*), PlayerAvatar_
+GetCoordsInFront (int*), FrontierSpeciesRecords_UpdateFromStat (u32*),
+DWC_GetLastErrorEx (int*), CheckUseHeldItem (u32*), ClockWipe_GetScanline
+Span (int*), TextOBJ_GetPosition and PokepicScriptAnim_ReadArg (int*/s32*).
+Use the callee exact types under SDK_PORT_3DS (locals and PokepicMotion
+fields), or cast at the call site for asm tables and header-owned structs
+(defaultFieldEffectRenderers, objectIDs, ArcadeContext.weather). The DS
+text is unchanged under #else, and that branch reproduces it byte for byte.
+
+Fixes the 3DS compile of src/{battle/battle_controller_player,
+communication_player_state,field_move,launch_application,
+map_object_behavior,nintendo_wfc_connect,pokepic_anim,screen_window_wipe,
+wifi_connection}.c, src/field/{event_cutscene_celebi,event_cutscene_shaymin,
+event_cutscene_sinjoh,fieldmap,map_object_models,scrcmd_pokemon_misc}.c and
+src/frontier/{battle_hall_data,frontier_cmd_arcade}.c.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/battle/battle_controller_player.c |  4 ++++
+ src/communication_player_state.c      |  4 ++++
+ src/field/event_cutscene_celebi.c     |  4 ++++
+ src/field/event_cutscene_shaymin.c    |  4 ++++
+ src/field/event_cutscene_sinjoh.c     |  8 ++++++++
+ src/field/fieldmap.c                  |  4 ++++
+ src/field/map_object_models.c         |  4 ++++
+ src/field/scrcmd_pokemon_misc.c       |  8 ++++++++
+ src/field_move.c                      |  5 +++++
+ src/frontier/battle_hall_data.c       |  4 ++++
+ src/frontier/frontier_cmd_arcade.c    |  4 ++++
+ src/launch_application.c              |  4 ++++
+ src/map_object_behavior.c             |  5 +++++
+ src/nintendo_wfc_connect.c            |  4 ++++
+ src/pokepic_anim.c                    | 29 +++++++++++++++++++++++++++
+ src/screen_window_wipe.c              |  5 +++++
+ src/wifi_connection.c                 |  4 ++++
+ 17 files changed, 104 insertions(+)
+
+diff --git a/src/battle/battle_controller_player.c b/src/battle/battle_controller_player.c
+index 54a6cc3..fc01a20 100644
+--- a/src/battle/battle_controller_player.c
++++ b/src/battle/battle_controller_player.c
+@@ -3127,7 +3127,11 @@ void BattleControllerPlayer_AfterMoveEffects(BattleSystem *battleSystem, BattleC
+     case 7: {
+         int battlerId;
+         int flag = 0;
++#ifdef SDK_PORT_3DS
++        u32 script;
++#else
+         int script;
++#endif
+ 
+         while (ctx->afterMoveEffectIndex < BattleSystem_GetMaxBattlers(battleSystem)) {
+             battlerId = ctx->turnOrder[ctx->afterMoveEffectIndex];
+diff --git a/src/communication_player_state.c b/src/communication_player_state.c
+index ca0ea20..7bc227e 100644
+--- a/src/communication_player_state.c
++++ b/src/communication_player_state.c
+@@ -350,7 +350,11 @@ static void CommPlayerInfo_AddToRecords(int mode, int delta) {
+ 
+ void CommPlayerInfo_SaveRecords(SaveData *save) {
+     FriendRoster *roster;
++#ifdef SDK_PORT_3DS
++    s32 slot;
++#else
+     int slot;
++#endif
+     int i;
+     void *token;
+ 
+diff --git a/src/field/event_cutscene_celebi.c b/src/field/event_cutscene_celebi.c
+index b340a0c..f807825 100644
+--- a/src/field/event_cutscene_celebi.c
++++ b/src/field/event_cutscene_celebi.c
+@@ -73,7 +73,11 @@ typedef enum CelebiTimeTravelState {
+ } CelebiTimeTravelState;
+ 
+ static BOOL Task_CelebiTimeTravelCutscene(TaskManager *taskMan) {
++#ifdef SDK_PORT_3DS
++    u32 *state = TaskManager_GetStatePtr(taskMan);
++#else
+     int *state = TaskManager_GetStatePtr(taskMan);
++#endif
+     FieldSystem *fieldSystem = TaskManager_GetFieldSystem(taskMan);
+     CelebiTimeTravelCutsceneTaskData *data = TaskManager_GetEnvironment(taskMan);
+     switch (*state) {
+diff --git a/src/field/event_cutscene_shaymin.c b/src/field/event_cutscene_shaymin.c
+index 7e314e6..c4dcba5 100644
+--- a/src/field/event_cutscene_shaymin.c
++++ b/src/field/event_cutscene_shaymin.c
+@@ -49,7 +49,11 @@ void StartShayminRevertToLandForm(TaskManager *taskMan) {
+ }
+ 
+ static BOOL Task_RevertShayminToLandForm(TaskManager *taskMan) {
++#ifdef SDK_PORT_3DS
++    u32 *state = TaskManager_GetStatePtr(taskMan);
++#else
+     int *state = TaskManager_GetStatePtr(taskMan);
++#endif
+     VecFx32 pos;
+     FieldSystem *fieldSystem = TaskManager_GetFieldSystem(taskMan);
+     ShayminRevertEnv *env = TaskManager_GetEnvironment(taskMan);
+diff --git a/src/field/event_cutscene_sinjoh.c b/src/field/event_cutscene_sinjoh.c
+index 63ce332..68af042 100644
+--- a/src/field/event_cutscene_sinjoh.c
++++ b/src/field/event_cutscene_sinjoh.c
+@@ -67,7 +67,11 @@ typedef enum SinjohCutsceneState {
+ } SinjohCutsceneState;
+ 
+ static BOOL Task_SinjohCutscene(TaskManager *taskMan) {
++#ifdef SDK_PORT_3DS
++    u32 *state = TaskManager_GetStatePtr(taskMan);
++#else
+     int *state = TaskManager_GetStatePtr(taskMan);
++#endif
+     FieldSystem *fieldSystem = TaskManager_GetFieldSystem(taskMan);
+     SinjohCutsceneData *data = TaskManager_GetEnvironment(taskMan);
+     switch (*state) {
+@@ -249,7 +253,11 @@ typedef enum SinjohGetEggCutsceneState {
+ } SinjohGetEggCutsceneState;
+ 
+ static BOOL Task_SinjohGetEggCutscene(TaskManager *taskMan) {
++#ifdef SDK_PORT_3DS
++    u32 *state = TaskManager_GetStatePtr(taskMan);
++#else
+     int *state = TaskManager_GetStatePtr(taskMan);
++#endif
+     FieldSystem *fieldSystem = TaskManager_GetFieldSystem(taskMan);
+     SinjohGetEggCutsceneData *data = TaskManager_GetEnvironment(taskMan);
+ 
+diff --git a/src/field/fieldmap.c b/src/field/fieldmap.c
+index 6afed1f..737a617 100644
+--- a/src/field/fieldmap.c
++++ b/src/field/fieldmap.c
+@@ -715,7 +715,11 @@ static void FieldMap_InitFieldEffectsAndObjects(FieldSystem *fieldSystem) {
+         MapObjectManager_SetEndMovement(fieldSystem->mapObjectManager, FALSE);
+     }
+ 
++#ifdef SDK_PORT_3DS
++    FieldEffectManager_InitRenderers(fieldSystem->fieldEffectManager, (const u32 *)defaultFieldEffectRenderers);
++#else
+     FieldEffectManager_InitRenderers(fieldSystem->fieldEffectManager, defaultFieldEffectRenderers);
++#endif
+ 
+     int loadsPerFrame = 10;
+     if (fieldSystem->mapLoadType == MAP_LOAD_TYPE_UNION) {
+diff --git a/src/field/map_object_models.c b/src/field/map_object_models.c
+index 1f151b5..7a5e94c 100644
+--- a/src/field/map_object_models.c
++++ b/src/field/map_object_models.c
+@@ -312,7 +312,11 @@ void MapObjectManager_InitRender(MapObjectManager *mapObjectManager, int texture
+     FldObjSys_OpenMModelNarc(mapObjectManager);
+     count = MapObjectManager_GetObjectCount(mapObjectManager);
+     priority = MapObjectManager_GetPriority(mapObjectManager) - 1;
++#ifdef SDK_PORT_3DS
++    MapObjectRender_Init(MapObjectManager_GetRender(mapObjectManager), mapObjectManager, count, priority, textureCount, objectsToPreload, (const u32 *)objectIDs, loadsPerFrame);
++#else
+     MapObjectRender_Init(MapObjectManager_GetRender(mapObjectManager), mapObjectManager, count, priority, textureCount, objectsToPreload, objectIDs, loadsPerFrame);
++#endif
+     MapObjectManager_SetFlagsBits(mapObjectManager, MAPOBJECTFLAG_ACTIVE);
+ }
+ 
+diff --git a/src/field/scrcmd_pokemon_misc.c b/src/field/scrcmd_pokemon_misc.c
+index 1f6e3df..8ea5a1b 100644
+--- a/src/field/scrcmd_pokemon_misc.c
++++ b/src/field/scrcmd_pokemon_misc.c
+@@ -620,7 +620,11 @@ BOOL ScrCmd_GetPartyMonForm(ScriptContext *ctx) {
+ }
+ 
+ BOOL ScrCmd_SetOtherObjectsFlag13(ScriptContext *ctx) {
++#ifdef SDK_PORT_3DS
++    s32 index;
++#else
+     int index;
++#endif
+     FieldSystem *fieldSystem;
+     MapObjectManager *mapObjectManager;
+     LocalMapObject *playerObj;
+@@ -660,7 +664,11 @@ BOOL ScrCmd_SetOtherObjectsFlag13(ScriptContext *ctx) {
+ }
+ 
+ BOOL ScrCmd_ClearOtherObjectsFlag13(ScriptContext *ctx) {
++#ifdef SDK_PORT_3DS
++    s32 index = 0;
++#else
+     int index = 0;
++#endif
+     FieldSystem *fieldSystem;
+     MapObjectManager *mapObjectManager;
+     LocalMapObject *playerObj;
+diff --git a/src/field_move.c b/src/field_move.c
+index f2aa4ac..5c6ca55 100644
+--- a/src/field_move.c
++++ b/src/field_move.c
+@@ -142,8 +142,13 @@ void FieldMove_InitCheckData(FieldSystem *fieldSystem, FieldMoveCheckData *check
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    int x = PlayerAvatar_GetXCoord(fieldSystem->playerAvatar);
++    int z = PlayerAvatar_GetZCoord(fieldSystem->playerAvatar);
++#else
+     u32 x = PlayerAvatar_GetXCoord(fieldSystem->playerAvatar);
+     u32 z = PlayerAvatar_GetZCoord(fieldSystem->playerAvatar);
++#endif
+     u32 standingTile = GetMetatileBehavior(fieldSystem, x, z);
+ 
+     PlayerAvatar_GetCoordsInFront(fieldSystem->playerAvatar, &x, &z);
+diff --git a/src/frontier/battle_hall_data.c b/src/frontier/battle_hall_data.c
+index 037691c..255e586 100644
+--- a/src/frontier/battle_hall_data.c
++++ b/src/frontier/battle_hall_data.c
+@@ -207,7 +207,11 @@ static u16 BattleHallAppArgs_GetResult(BattleHallAppArgs *args, u32 unused) {
+ 
+ void BattleHallData_UpdateSpeciesRecord(BattleHallData *data, u16 *result) {
+     int type = data->type;
++#ifdef SDK_PORT_3DS
++    u32 unused1;
++#else
+     int unused1;
++#endif
+     int unused2;
+     int stat1;
+     int stat2;
+diff --git a/src/frontier/frontier_cmd_arcade.c b/src/frontier/frontier_cmd_arcade.c
+index 8b6561f..dbf42d7 100644
+--- a/src/frontier/frontier_cmd_arcade.c
++++ b/src/frontier/frontier_cmd_arcade.c
+@@ -157,7 +157,11 @@ static void GameBoardArgs_Set(GAME_BOARD_ARGS *args, ArcadeContext *data) {
+     args->work = data;
+ 
+     data->weather = 0;
++#ifdef SDK_PORT_3DS
++    args->weather = (int *)&data->weather;
++#else
+     args->weather = &data->weather;
++#endif
+     args->randomFlag = data->randomFlag;
+     data->randomFlag = 0;
+     data->eventNoEffect = 0;
+diff --git a/src/launch_application.c b/src/launch_application.c
+index 3ecd0ac..d94f6d0 100644
+--- a/src/launch_application.c
++++ b/src/launch_application.c
+@@ -291,7 +291,11 @@ u16 MoveSelectionResult_GetPartySlot(MoveSelectionResult *result) {
+ static BOOL Task_OpenPartyMenuForUnionRoomBattleSelect(TaskManager *taskman) {
+     FieldSystem *fieldSystem = TaskManager_GetFieldSystem(taskman);
+     PartyMenuMoveSelectData *data = TaskManager_GetEnvironment(taskman);
++#ifdef SDK_PORT_3DS
++    u32 *state = TaskManager_GetStatePtr(taskman);
++#else
+     int *state = TaskManager_GetStatePtr(taskman);
++#endif
+     switch (*state) {
+     case PMMS_OPEN_PARTY_MENU:
+         FieldSystem_LaunchApplication(fieldSystem, &gOverlayTemplate_PartyMenu, data->partyMenu);
+diff --git a/src/map_object_behavior.c b/src/map_object_behavior.c
+index 6f733a4..d323b63 100644
+--- a/src/map_object_behavior.c
++++ b/src/map_object_behavior.c
+@@ -505,8 +505,13 @@ BOOL TryGetSeenByNpcTrainers(FieldSystem *fieldSystem, BOOL doublesEligible) {
+ 
+ static BOOL CheckSeenByNpcTrainers(FieldSystem *fieldSystem, MapObjectManager *manager, PlayerAvatar *avatar, LocalMapObject *exclude, EngageParams *out) {
+     int x;
++#ifdef SDK_PORT_3DS
++    s32 index = 0;
++    int direction;
++#else
+     int index = 0;
+     u32 direction;
++#endif
+     LocalMapObject *object = NULL;
+ 
+     while (MapObjectManager_GetNextObjectWithFlagFromIndex(manager, &object, &index, MAPOBJECTFLAG_ACTIVE)) {
+diff --git a/src/nintendo_wfc_connect.c b/src/nintendo_wfc_connect.c
+index a2d7ec7..958e6e8 100644
+--- a/src/nintendo_wfc_connect.c
++++ b/src/nintendo_wfc_connect.c
+@@ -1337,7 +1337,11 @@ enum NintendoWfcMainState NintendoWfc_StartAuth(NintendoWfcConnect *wfc) {
+ 
+ enum NintendoWfcMainState NintendoWfc_WaitAuth(NintendoWfcConnect *wfc) {
+     int errorCode;
++#ifdef SDK_PORT_3DS
++    int errorType;
++#else
+     u32 errorType;
++#endif
+     switch (DWC_NASLoginProcess()) {
+     case DWC_NASLOGIN_STATE_SUCCESS:
+         wfc->state = NINTENDO_WFC_STATE_INIT_HTTP;
+diff --git a/src/pokepic_anim.c b/src/pokepic_anim.c
+index 8002e7c..2b61813 100644
+--- a/src/pokepic_anim.c
++++ b/src/pokepic_anim.c
+@@ -83,7 +83,11 @@ typedef struct PokepicMotion {
+     BOOL active;
+ 
+     union { // read from the script; the argument count is per motion type (sPokepicMotionTypes)
++#ifdef SDK_PORT_3DS
++        s32 args[7];
++#else
+         int args[7];
++#endif
+ 
+         struct {
+             int waveform;
+@@ -112,14 +116,23 @@ typedef struct PokepicMotion {
+     };
+ 
+     u8 unk_20[4];
++#ifdef SDK_PORT_3DS
++    s32 *value; // accumulator in values
++    s32 *dest;  // the PokepicScriptAnim field the motion drives
++#else
+     int *value; // accumulator in values
+     int *dest;  // the PokepicScriptAnim field the motion drives
++#endif
+     u8 op;      // enum PokepicAnimWriteOp
+     u8 delay;   // frames before the first update
+     u8 unk_2E[2];
+     int base; // *dest when the motion started
+     u8 unk_34[8];
++#ifdef SDK_PORT_3DS
++    s32 values[5]; // one per target: dx, dy, scaleX, scaleY, rotation
++#else
+     int values[5]; // one per target: dx, dy, scaleX, scaleY, rotation
++#endif
+     void (*update)(struct PokepicMotion *motion, PokepicScriptAnim *anim);
+ } PokepicMotion;
+ 
+@@ -186,7 +199,11 @@ static void PokepicScriptAnim_ReadDestAndOperands(PokepicScriptAnim *anim, u8 *d
+ static void PokepicScriptAnim_ReadDestAngleAndAmplitude(PokepicScriptAnim *anim, u8 *dest, s32 *angle, s32 *amplitude);
+ static enum PokepicAnimCompareResult PokepicScriptAnim_Compare(const s32 *left, const s32 *right);
+ static void PokepicScriptAnim_AdjustYForScale(PokepicScriptAnim *anim);
++#ifdef SDK_PORT_3DS
++static void PokepicMotion_ApplyValue(int op, int *base, s32 *value, s32 *dest);
++#else
+ static void PokepicMotion_ApplyValue(int op, int *base, int *value, int *dest);
++#endif
+ static void PokepicMotion_SetTarget(u8 target, PokepicMotion *motion, PokepicScriptAnim *anim);
+ static void PokepicScriptAnim_StartMotion(PokepicScriptAnim *anim, int type);
+ 
+@@ -908,7 +925,11 @@ static void PokepicScriptAnimCmd_StartAccelMotionToLimit(PokepicScriptAnim *anim
+     PokepicScriptAnim_StartMotion(anim, POKEPIC_MOTION_ACCEL_TO_LIMIT);
+ }
+ 
++#ifdef SDK_PORT_3DS
++static void PokepicMotion_ApplyValue(int op, int *base, s32 *value, s32 *dest) {
++#else
+ static void PokepicMotion_ApplyValue(int op, int *base, int *value, int *dest) {
++#endif
+     if (op == POKEPIC_MOTION_OP_SET) {
+         *dest = *value;
+     } else if (op == POKEPIC_MOTION_OP_SET_BASE) {
+@@ -1046,14 +1067,22 @@ static void PokepicMotion_UpdateAccelToLimit(PokepicMotion *motion, PokepicScrip
+     if (motion->op == POKEPIC_MOTION_OP_SET || motion->op == POKEPIC_MOTION_OP_ADD) {
+         if (delta < 0) {
+             int limit = motion->accel.durationOrLimit;
++#ifdef SDK_PORT_3DS
++            s32 *value = motion->value;
++#else
+             int *value = motion->value;
++#endif
+             if (*value <= limit) {
+                 *value = limit;
+                 motion->active = 0;
+             }
+         } else {
+             int limit = motion->accel.durationOrLimit;
++#ifdef SDK_PORT_3DS
++            s32 *value = motion->value;
++#else
+             int *value = motion->value;
++#endif
+             if (*value >= limit) {
+                 *value = limit;
+                 motion->active = 0;
+diff --git a/src/screen_window_wipe.c b/src/screen_window_wipe.c
+index c38f11e..574cd2e 100644
+--- a/src/screen_window_wipe.c
++++ b/src/screen_window_wipe.c
+@@ -199,8 +199,13 @@ static void ClockWipe_GetScanlineSpan(int unused, int centerX, int centerY, int
+ static void ClockWipe_BuildScanlines(ClockWipe *wipe) {
+     WipeScanlineBuffer *buffer = ScreenWipeScanlines_GetBuffer(&wipe->scanlines, 0);
+     s32 i;
++#ifdef SDK_PORT_3DS
++    int left;
++    int right;
++#else
+     s32 left;
+     s32 right;
++#endif
+ 
+     for (i = 0; i < GX_LCD_SIZE_Y; i++) {
+         ClockWipe_GetScanlineSpan(wipe->unused14, wipe->centerX, wipe->centerY, i, wipe->startAngle, wipe->angle, &left, &right);
+diff --git a/src/wifi_connection.c b/src/wifi_connection.c
+index c5cfdc8..c17bd78 100644
+--- a/src/wifi_connection.c
++++ b/src/wifi_connection.c
+@@ -638,7 +638,11 @@ static void WifiConnection_Free(int unused, void *ptr, u32 size) {
+ 
+ int WifiConnection_CheckError(void) {
+     int error;
++#ifdef SDK_PORT_3DS
++    int type;
++#else
+     u32 type;
++#endif
+     int status;
+     int result = 0;
+ 
+-- 
+2.43.0
+
