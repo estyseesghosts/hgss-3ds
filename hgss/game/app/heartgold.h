@@ -27,6 +27,13 @@
  * packs it can read. These packs hold the ROM's NitroFS files unchanged. */
 #define HEARTGOLD_PAK_BUILD_ID "heartgold-nitrofs-1"
 
+/* The cartridge game code at header +0x0C: IPKE is HeartGold (USA),
+ * IPGE is SoulSilver (USA). The game reads this header at boot (the
+ * developer/debug checks and the save's game identity), and
+ * builder/verify_rom.py names the same codes. A SoulSilver build
+ * changes this, the build ID and the save name. */
+#define HEARTGOLD_ROM_GAME_CODE "IPKE"
+
 /* The save's file name under the port's data directory. HeartGold and
  * SoulSilver use separate folders so their saves can never be mixed. */
 #define HEARTGOLD_SAVE_NAME "heartgold.sav"

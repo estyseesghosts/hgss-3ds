@@ -12,8 +12,10 @@ Exit status: 0 a supported dump, 1 an unsupported or damaged dump, 2 usage
 (the argument is not a readable file) or a bad command line.
 
 `SUPPORTED` and `sha1_of` are also used by builder/pack.py and
-builder/extract_rom.py; the C reader's table (3ds_port/pak/src/pak.c) has to
-list the same digests for the program to open a pack made from the dump.
+builder/extract_rom.py. tools/hgss_game.py reads SUPPORTED when it generates
+the program's libpak reader (a build-private copy of the vendored
+3ds_port/pak reader, which only knows Platinum's digests), so the allowlist
+cannot drift between the builder and the program.
 """
 
 from __future__ import annotations

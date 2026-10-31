@@ -29,7 +29,8 @@ static const u8 sMacAddress[6] = { 0x00, 0x09, 0xBF, 0x48, 0x47, 0x53 };
 /* DS cartridge header fields, at the offsets the hardware uses. The game
  * reads the game and maker codes at boot; the rest of a real header
  * (offsets into the cartridge) means nothing here: files come from the
- * data pack. HeartGold US is IPGE; the maker code is the same "01". */
+ * data pack. HeartGold US is IPKE (SoulSilver is IPGE); the maker code is
+ * the same "01" in both. */
 #define ROM_HEADER_SIZE   0x200
 #define ROM_TITLE_OFFSET  0x00
 #define ROM_GAME_CODE     0x0C
@@ -193,7 +194,8 @@ void Heartgold_Run(const HeartgoldSettings *settings)
 
     memset(header, 0, sizeof(header));
     memcpy(header + ROM_TITLE_OFFSET, "POKEMON HG", 10);
-    memcpy(header + ROM_GAME_CODE, "IPGE", 4);
+    memcpy(header + ROM_GAME_CODE, HEARTGOLD_ROM_GAME_CODE,
+           sizeof HEARTGOLD_ROM_GAME_CODE - 1);
     memcpy(header + ROM_MAKER_CODE, "01", 2);
     header[ROM_DEVICE_SIZE] = 10;   /* 128 MB */
     header[ROM_VERSION] = 0;

@@ -5,6 +5,7 @@ compiler run, no bootstrapped checkout required.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -570,3 +571,26 @@ class ThreeDsxTests(unittest.TestCase):
                     os.environ["DEVKITPRO"] = old
             self.assertEqual(dsx, root / "pokeheartgold.3dsx")
             self.assertEqual(dsx.read_bytes(), b"dsx")
+
+
+class RomHeaderTests(unittest.TestCase):
+    """The cartridge header the shell hands the game."""
+
+    def test_game_code_is_heartgold(self):
+        header = (REPO / "hgss" / "game" / "app" / "heartgold.h").read_text()
+        match = re.search(r'#define HEARTGOLD_ROM_GAME_CODE "([A-Z0-9]{4})"', header)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "IPKE")   # HG US; SoulSilver is IPGE
+        source = (REPO / "hgss" / "game" / "app" / "heartgold.c").read_text()
+        self.assertIn("HEARTGOLD_ROM_GAME_CODE", source)
+        self.assertNotIn('"IPGE"', source)
+
+    def test_game_code_agrees_with_the_builder(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "hgss_verify_rom", REPO / "builder" / "verify_rom.py")
+        verify_rom = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verify_rom)
+        self.assertEqual(verify_rom.GAME_CODES["IPKE"], "Pokémon HeartGold (USA)")
+        self.assertEqual(verify_rom.GAME_CODES["IPGE"], "Pokémon SoulSilver (USA)")
