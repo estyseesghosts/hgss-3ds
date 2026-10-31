@@ -22,15 +22,15 @@ from collections.abc import Collection
 from pathlib import Path
 
 MAGIC = b"PLATPAK\0"
-# The build ID the game program expects. Phase 3 wires this to the boot-time
-# pak check (the counterpart of Platinum's PLATINUM_PAK_BUILD_ID in
-# 3ds_port/game/app/platinum.h).
+# The build ID the game program expects (hgss/game/app/heartgold.h's
+# HEARTGOLD_PAK_BUILD_ID, checked by Heartgold_OpenPak at boot). A pack built
+# without --build-id gets this one.
 HEARTGOLD_PAK_BUILD_ID = "heartgold-nitrofs-1"
 # Platinum's build ID, kept as an alias: the vendored port tests
-# (test_pak, test_fs_pak) pass their own build IDs explicitly, and the
-# default below keeps byte-identical packs for shared fixtures.
+# (test_pak, test_fs_pak) pass their own build IDs explicitly, but the
+# constant documents the counterpart this builder was adapted from.
 PLATINUM_PAK_BUILD_ID = "platinum-nitrofs-1"
-DEFAULT_BUILD_ID = PLATINUM_PAK_BUILD_ID
+DEFAULT_BUILD_ID = HEARTGOLD_PAK_BUILD_ID
 VERSION = 1
 BUILD_ID_BYTES = 32
 HEADER = struct.Struct("<8sI32s20sI")
