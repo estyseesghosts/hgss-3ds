@@ -1,0 +1,68 @@
+From c82e6919cc1a41c9e1fa5f1a4c1e354572f55865 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sat, 31 Oct 2026 23:32:38 +0000
+Subject: [PATCH] build: re-pin the MSL new selectors to the patched producer
+ sources
+
+The select-*.py selectors assert the producer source bytes and still carried
+the upstream SHA-256s of src/to91_msl_{scalar,array}_new.cpp. Patches 1505 and
+1519 changed those files under SDK_PORT_3DS, so the assertion failed with
+"source bytes drift" before any object was produced; 1602 re-pinned
+producers.*.source_sha256 in profile.json but not the selectors, which are
+pinned as modules themselves.
+
+Replace the two hashes with the current source digests and re-pin the two
+script hashes in profile.json. The code sizes and section layout the
+selectors assert are unchanged (the shape diff in 1603 was debug-only).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ tools/msl-new-partition/profile.json     | 4 ++--
+ tools/msl-new-partition/select-array.py  | 2 +-
+ tools/msl-new-partition/select-scalar.py | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/tools/msl-new-partition/profile.json b/tools/msl-new-partition/profile.json
+index a744f81..ae9ee5e 100644
+--- a/tools/msl-new-partition/profile.json
++++ b/tools/msl-new-partition/profile.json
+@@ -9,8 +9,8 @@
+   "modules": {
+     "build.py": "6a55d6bdf6cd6b023bd4d31a2e5ba7f66e0b40323eb0a6e0d6b839151b5ec3c3",
+     "shape.py": "cc26491c69384097da9a1d50c50bc393ed4ae45459d1ea86268a0e45c7a924b2",
+-    "select-scalar.py": "7eae79a99b9a47af9da22075da4d5276878923ca7a6bca0f66ed310cd8be7226",
+-    "select-array.py": "72fb8a280618686b80b313e00283816e2930c7103b1a4bcffb8b4689580ebea2",
++    "select-scalar.py": "20b7fcff94bf48ffe23558f39bd41784eea6bb650f41add507d3adf68662facc",
++    "select-array.py": "a3097ee1b94a407e3281cbf7f8c441f6a2df5bd138ce2660e30aceba15e4afbd",
+     "scalar-shape.json": "7c74e4ca4b44ce33fcfdeea4f1613a330a01efc01e86060ceeebd3141e1abf6e",
+     "array-shape.json": "b708a123d4f95b58ec3ae9108fab86c238f4993237d07249a7187560ed6270bc",
+     "new.mk": "32ea3dde18c6b1c291fda1d297cd62404e664cb941b986ae1e22490c453c5276"
+diff --git a/tools/msl-new-partition/select-array.py b/tools/msl-new-partition/select-array.py
+index f4aeed0..68a107a 100644
+--- a/tools/msl-new-partition/select-array.py
++++ b/tools/msl-new-partition/select-array.py
+@@ -54,7 +54,7 @@ from pathlib import Path
+ def select(b,source):
+  source=Path(source).resolve()
+  assert source.name=='to91_msl_array_new.cpp', 'source basename drift'
+- assert digest(source.read_bytes())=='1ec5af70c0bb3b5b0970d4b34317aae4cf441f2c1a30315401d8a56897b88458', 'source bytes drift'
++ assert digest(source.read_bytes())=='45adf0743b924adbcc55581b2804a35c8aefc44d5fb7ef81538ba1c6d39ef8ee', 'source bytes drift'
+  expected=json.loads((Path(__file__).parent/'array-shape.json').read_text())
+  assert shape.inventory(b,source)==expected, 'complete producer shape drift'
+  return _select(b)
+diff --git a/tools/msl-new-partition/select-scalar.py b/tools/msl-new-partition/select-scalar.py
+index f9ddab1..8539aeb 100644
+--- a/tools/msl-new-partition/select-scalar.py
++++ b/tools/msl-new-partition/select-scalar.py
+@@ -55,7 +55,7 @@ from pathlib import Path
+ def select(b,source):
+  source=Path(source).resolve()
+  assert source.name=='to91_msl_scalar_new.cpp', 'source basename drift'
+- assert digest(source.read_bytes())=='dfb55bc068dfee38dc43ede3898af58320b30d7313236e6c6d829b67cd2ed779', 'source bytes drift'
++ assert digest(source.read_bytes())=='710fe14e665ce4bcd7f555fa38a3eac6f338677a70a707d840b960706ba1afdb', 'source bytes drift'
+  expected=json.loads((Path(__file__).parent/'scalar-shape.json').read_text())
+  assert shape.inventory(b,source)==expected, 'complete producer shape drift'
+  return _select(b)
+-- 
+2.43.0
+
