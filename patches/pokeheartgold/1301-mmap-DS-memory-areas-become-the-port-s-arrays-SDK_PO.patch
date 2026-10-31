@@ -1,0 +1,143 @@
+From 213b4c3b5c0da5e2a30537f14e4cea5918746d27 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 04:06:21 +0000
+Subject: [PATCH] mmap: DS memory areas become the port's arrays (SDK_PORT_3DS)
+
+With SDK_PORT_3DS the I/O registers, main memory, ITCM, WRAM, palettes, OAM and the
+VRAM views are ordinary arrays provided by the port (3ds_port/nitro/src/port_memory.c,
+port_ioreg.c: NitroPort_IoReg, MainMem, Itcm, Wram, Pltt, Oam, BgVram, DbBgVram,
+ObjVram, DbObjVram, LcdcVram), at the same sizes and offsets as on the DS, so the
+SDK's address macros and the reg_* register macros resolve into them unchanged.
+
+The override block is appended to lib/include/nitro/hw/ARM9/mmap.h. nitro/hw/mmap.h
+includes mmap_shared.h (HW_IOREG, HW_REG_BASE, HW_MAIN_MEM, HW_WRAM) first and the ARM9
+file last, so the #undef/#define pairs win; object-like macros expand at the point of
+use, so HW_REG_BASE (an alias of HW_IOREG) and every HW_MAIN_MEM + 0x007fxxxx shared-area
+address follow. Main memory is 8 MB because those shared-area addresses sit at the top of
+the 8 MB range (mirrored on retail units). Same design as pokeplatinum-3ds NitroSDK 0001
+(HW_IOREG) and 0005 (mmap_global.h), re-derived from HGSS's headers.
+
+HW_WRAM_END, HW_IOREG_SIZE and HW_IOREG_END are defined for the port because the HGSS ARM9
+header lacks them (HW_WRAM_END exists only in the ARM7 header).
+
+On a 32-bit target GCC accepts `(u32)array + constant` as an address constant, so static
+initializers that use these macros (e.g. cardi_rom_header_addr = HW_ROM_HEADER_BUF in
+CARD_rom.c) still compile; on a 64-bit host the cast truncates and they do not. The port's
+64-bit `host` target is therefore NOT supported by this patch (Platinum 0005 fills such
+tables from constructors); host32 and the 3DS are.
+
+The DS build never defines SDK_PORT_3DS: gcc -E -P of mmap.h without it is identical to
+the unpatched header. Test: tests/sdk/memory_map/run.sh (32 checks).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/include/nitro/hw/ARM9/mmap.h | 95 ++++++++++++++++++++++++++++++++
+ 1 file changed, 95 insertions(+)
+
+diff --git a/lib/include/nitro/hw/ARM9/mmap.h b/lib/include/nitro/hw/ARM9/mmap.h
+index 94a8470..3a8d825 100644
+--- a/lib/include/nitro/hw/ARM9/mmap.h
++++ b/lib/include/nitro/hw/ARM9/mmap.h
+@@ -111,4 +111,99 @@ extern void SDK_SECTION_ARENA_EX_START(void);
+ #define HW_DTCM_SYSRV_OFS_INTR_VECTOR   0x3c
+ #define HW_RESET_VECTOR         0xffff0000
+ 
++#ifdef SDK_PORT_3DS
++/*
++ * SDK_PORT_3DS: there is no DS address space here. The memory areas the SDK reads and writes directly are
++ * ordinary arrays provided by the port (3ds_port/nitro/src/port_memory.c, port_ioreg.c), with the same sizes
++ * and offsets as on the DS, so code that indexes into them works unchanged. Every HW_* address below is an
++ * expression, not a compile-time constant: static initializers that use one must be filled in at startup.
++ *
++ * Main memory is 8 MB: the SDK's shared/system area sits at the top of the 8 MB development-unit range
++ * (HW_MAIN_MEM + 0x007ffxxx; it is mirrored on retail units). Each CPU view of VRAM (BG, OBJ, LCDC, per
++ * engine) is its own block for now; on the DS they are windows onto the same banks chosen by the VRAM bank
++ * registers, which the 2D renderer maps.
++ *
++ * This file is included after mmap_shared.h (nitro/hw/mmap.h), so the #undef/#define pairs win. Object-like
++ * macros expand where they are used, so HW_REG_BASE (an alias of HW_IOREG) and the offsets built on
++ * HW_MAIN_MEM follow automatically.
++ */
++#ifndef SDK_ASM
++extern unsigned char NitroPort_IoReg[];
++extern unsigned char NitroPort_Itcm[];
++extern unsigned char NitroPort_MainMem[];
++extern unsigned char NitroPort_Wram[];
++extern unsigned char NitroPort_Pltt[];
++extern unsigned char NitroPort_Oam[];
++extern unsigned char NitroPort_BgVram[];
++extern unsigned char NitroPort_DbBgVram[];
++extern unsigned char NitroPort_ObjVram[];
++extern unsigned char NitroPort_DbObjVram[];
++extern unsigned char NitroPort_LcdcVram[];
++#endif
++
++#undef HW_IOREG
++#define HW_IOREG                ((u32)NitroPort_IoReg)
++#define HW_IOREG_SIZE           0x00110000
++#define HW_IOREG_END            (HW_IOREG + HW_IOREG_SIZE)
++
++#undef HW_ITCM_IMAGE
++#undef HW_ITCM
++#define HW_ITCM_IMAGE           ((u32)NitroPort_Itcm)
++#define HW_ITCM                 ((u32)NitroPort_Itcm)
++
++#undef HW_MAIN_MEM
++#define HW_MAIN_MEM             ((u32)NitroPort_MainMem)
++
++#undef HW_WRAM
++#define HW_WRAM                 ((u32)NitroPort_Wram)
++#define HW_WRAM_END             (HW_WRAM + 0x8000)
++
++#undef HW_BG_PLTT
++#undef HW_BG_PLTT_END
++#undef HW_OBJ_PLTT
++#undef HW_OBJ_PLTT_END
++#undef HW_DB_BG_PLTT
++#undef HW_DB_BG_PLTT_END
++#undef HW_DB_OBJ_PLTT
++#undef HW_DB_OBJ_PLTT_END
++#define HW_BG_PLTT              ((u32)NitroPort_Pltt)
++#define HW_BG_PLTT_END          (HW_BG_PLTT + 0x200)
++#define HW_OBJ_PLTT             (HW_BG_PLTT + 0x200)
++#define HW_OBJ_PLTT_END         (HW_BG_PLTT + 0x400)
++#define HW_DB_BG_PLTT           (HW_BG_PLTT + 0x400)
++#define HW_DB_BG_PLTT_END       (HW_BG_PLTT + 0x600)
++#define HW_DB_OBJ_PLTT          (HW_BG_PLTT + 0x600)
++#define HW_DB_OBJ_PLTT_END      (HW_BG_PLTT + 0x800)
++
++#undef HW_BG_VRAM
++#undef HW_BG_VRAM_END
++#undef HW_DB_BG_VRAM
++#undef HW_DB_BG_VRAM_END
++#undef HW_OBJ_VRAM
++#undef HW_OBJ_VRAM_END
++#undef HW_DB_OBJ_VRAM
++#undef HW_DB_OBJ_VRAM_END
++#undef HW_LCDC_VRAM
++#undef HW_LCDC_VRAM_END
++#define HW_BG_VRAM              ((u32)NitroPort_BgVram)
++#define HW_BG_VRAM_END          (HW_BG_VRAM + 0x80000)
++#define HW_DB_BG_VRAM           ((u32)NitroPort_DbBgVram)
++#define HW_DB_BG_VRAM_END       (HW_DB_BG_VRAM + 0x20000)
++#define HW_OBJ_VRAM             ((u32)NitroPort_ObjVram)
++#define HW_OBJ_VRAM_END         (HW_OBJ_VRAM + 0x40000)
++#define HW_DB_OBJ_VRAM          ((u32)NitroPort_DbObjVram)
++#define HW_DB_OBJ_VRAM_END      (HW_DB_OBJ_VRAM + 0x20000)
++#define HW_LCDC_VRAM            ((u32)NitroPort_LcdcVram)
++#define HW_LCDC_VRAM_END        (HW_LCDC_VRAM + 0xA4000)
++
++#undef HW_OAM
++#undef HW_OAM_END
++#undef HW_DB_OAM
++#undef HW_DB_OAM_END
++#define HW_OAM                  ((u32)NitroPort_Oam)
++#define HW_OAM_END              (HW_OAM + 0x400)
++#define HW_DB_OAM               (HW_OAM + 0x400)
++#define HW_DB_OAM_END           (HW_OAM + 0x800)
++#endif // SDK_PORT_3DS
++
+ #endif //NITRO_HW_ARM9_MMAP_H
+-- 
+2.43.0
+
