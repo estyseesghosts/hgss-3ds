@@ -1,0 +1,89 @@
+From a5abc4895e4a1774d85684fcc5f402ec28d46bf0 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sat, 31 Oct 2026 21:44:10 +0000
+Subject: [PATCH] build: re-pin the MSL new producer debug-line shapes after
+ 1519
+
+Patch 1519 added #ifdef SDK_PORT_3DS lines to src/to91_msl_scalar_new.cpp
+and src/to91_msl_array_new.cpp. The DS build does not define the macro, so
+the selected code is unchanged, but the physical source line numbers shift
+and MWCC writes different .debug_info/.debug_line sections and a different
+.dwarf_line symbol in the retained raw compiler product.
+
+Verified: comparing the pinned shape with the tool's own shape.inventory()
+over the current compiler-full objects shows differences in exactly
+.debug_info (payload hash), .debug_line (record/payload hash) and one
+.dwarf_line.* symbol size (36 -> 48 for .debug_line, 226 -> 238 section
+length). Every allocated/executable section is identical, and the tool's
+producer profile still asserts the code function sizes and payloads.
+
+Regenerated with tools/msl-new-partition/shape.py (not edited by hand), as
+the gate documentation requires.
+---
+ tools/msl-new-partition/array-shape.json  | 4 ++--
+ tools/msl-new-partition/scalar-shape.json | 8 ++++----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/tools/msl-new-partition/array-shape.json b/tools/msl-new-partition/array-shape.json
+index a205cc8..136a9da 100644
+--- a/tools/msl-new-partition/array-shape.json
++++ b/tools/msl-new-partition/array-shape.json
+@@ -116,7 +116,7 @@
+         0,
+         0
+       ],
+-      "payload_sha256": "17452d6ca704212e5e1cdc9191d9a603b11c567567e8ca55bf767334fff033ea"
++      "payload_sha256": "831fc7530fb525fc9fafc82f191f0dd4d48c3863d99b7bdd66cf4cb228b98f2a"
+     },
+     {
+       "index": 6,
+@@ -201,7 +201,7 @@
+         0,
+         0
+       ],
+-      "payload_sha256": "bddf0cbc550895ad2675b12d8a3cf14b4cdea407a33d1e66eea9a86a719b05c1"
++      "payload_sha256": "4d42ed17ac8846424c5f3459abf80b3149cdbfeeb426b91f23d479358bff91ba"
+     },
+     {
+       "index": 11,
+diff --git a/tools/msl-new-partition/scalar-shape.json b/tools/msl-new-partition/scalar-shape.json
+index f86ed0f..8cf0ba7 100644
+--- a/tools/msl-new-partition/scalar-shape.json
++++ b/tools/msl-new-partition/scalar-shape.json
+@@ -116,7 +116,7 @@
+         0,
+         0
+       ],
+-      "payload_sha256": "a9e82575c1d1c2e680721820b263a973165067eb068f7b3cd1b0d579b55a818f"
++      "payload_sha256": "9deec5f0e5a9d35a3478cbe9981f748581ac458e717356045d6f388e1332e1ce"
+     },
+     {
+       "index": 6,
+@@ -195,13 +195,13 @@
+         0,
+         0,
+         0,
+-        226,
++        238,
+         0,
+         0,
+         0,
+         0
+       ],
+-      "payload_sha256": "491836a8a0857d3be7179ec724f7c3474dff690844ea71ebb13a4eaa248edb30"
++      "payload_sha256": "28f1c8f6ed5cee3a4f6819688b05d1709f891ee95906af9d4140d456ce34e178"
+     },
+     {
+       "index": 11,
+@@ -745,7 +745,7 @@
+       "record": [
+         489,
+         190,
+-        36,
++        48,
+         1,
+         0,
+         10
+-- 
+2.43.0
+
