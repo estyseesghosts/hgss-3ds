@@ -1,0 +1,140 @@
+From f28e12192f3ccf4e073015f7b4074ce913c7a333 Mon Sep 17 00:00:00 2001
+From: A1 <a1@localhost>
+Date: Sat, 31 Oct 2026 21:48:17 +0000
+Subject: [PATCH 1760/1761] MSL soft-float: keep the bit-pattern ABI in three
+ game TUs
+
+MWCC's MSL float helpers exchange IEEE-754 singles as 32-bit bit patterns
+(_fadd/_fdiv/_fflt/_ffix/_f_lltof/_f_ulltof). Three decomp TUs declared the
+typed forms instead, which on x86-32 or ARM hard-float puts a float return in
+a different register/stack slot than the port's bit-pattern implementation:
+
+- src/pokeathlon/pokeathlon_relay_run.c:61 declares f32 _fflt(int);
+- src/application/pokewalker/pokewalker_ir.c:22-23 declares
+  float _f_ulltof(u64) and float _fdiv(float, float), and line 479 passes
+  _f_ulltof(...) to _fdiv;
+- src/application/plaza_game_mime_jr_top.c:53 declares f32 _f_lltof(s64), used
+  in float expressions at lines 2585-2586 and 2628-2629.
+
+Under SDK_PORT_3DS these use the bit-pattern prototypes and convert through
+HGSS_PortBitsToF32 / HGSS_PortF32ToBits (hgss/compat/include/hgss_port_msl.h)
+where a float expression is needed. The DS text stays under #else, so without
+SDK_PORT_3DS the preprocessed output is unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/application/plaza_game_mime_jr_top.c   | 16 ++++++++++++++++
+ src/application/pokewalker/pokewalker_ir.c | 15 +++++++++++++++
+ src/pokeathlon/pokeathlon_relay_run.c      |  5 +++++
+ 3 files changed, 36 insertions(+)
+
+diff --git a/src/application/plaza_game_mime_jr_top.c b/src/application/plaza_game_mime_jr_top.c
+index 9cf9733..02ff6f0 100644
+--- a/src/application/plaza_game_mime_jr_top.c
++++ b/src/application/plaza_game_mime_jr_top.c
+@@ -50,7 +50,13 @@
+ void MTX_MultVec43(const VecFx32 *vec, const MtxFx43 *mtx, VecFx32 *dst);
+ fx64c FX_SinFx64c(fx32 x);
+ fx64c FX_CosFx64c(fx32 x);
++#ifdef SDK_PORT_3DS
++#include "hgss_port_msl.h"
++/* MSL exchanges floats as bit patterns; keep that ABI (patch 1760). */
++u32 _f_lltof(s64 value);
++#else
+ f32 _f_lltof(s64 value);
++#endif
+ 
+ #define MIME_JR_TOP_GAME_FRAMES 1200
+ #define MIME_JR_TOP_MAX_LEVEL   8
+@@ -2582,8 +2588,13 @@ static BOOL MimeJrTopModel_Turn(MimeJrTopModel *model, s32 x, s32 y, s32 targetX
+     if (magnitude != 0.0) {
+         s64 sinValue = FX_SinFx64c(angle);
+         s64 cosValue = FX_CosFx64c(angle);
++#ifdef SDK_PORT_3DS
++        f32 ratio = HGSS_PortBitsToF32(_f_lltof(sinValue)) / 4294967296.0f;
++        f32 cosine = HGSS_PortBitsToF32(_f_lltof(cosValue)) / 4294967296.0f;
++#else
+         f32 ratio = _f_lltof(sinValue) / 4294967296.0f;
+         f32 cosine = _f_lltof(cosValue) / 4294967296.0f;
++#endif
+         ratio /= magnitude;
+         turn.v[0] = cosine;
+         turn.v[1] = dy * ratio;
+@@ -2625,8 +2636,13 @@ static BOOL MimeJrTopModel_ContinueSpin(MimeJrTopModel *model, f32 unused) {
+     if (magnitude != 0.0) {
+         s64 sinValue = FX_SinFx64c(angle);
+         s64 cosValue = FX_CosFx64c(angle);
++#ifdef SDK_PORT_3DS
++        f32 ratio = HGSS_PortBitsToF32(_f_lltof(sinValue)) / 4294967296.0f;
++        f32 cosine = HGSS_PortBitsToF32(_f_lltof(cosValue)) / 4294967296.0f;
++#else
+         f32 ratio = _f_lltof(sinValue) / 4294967296.0f;
+         f32 cosine = _f_lltof(cosValue) / 4294967296.0f;
++#endif
+         ratio /= magnitude;
+         turn.v[0] = cosine;
+         turn.v[1] = y * ratio;
+diff --git a/src/application/pokewalker/pokewalker_ir.c b/src/application/pokewalker/pokewalker_ir.c
+index 9ab68e8..02933fc 100644
+--- a/src/application/pokewalker/pokewalker_ir.c
++++ b/src/application/pokewalker/pokewalker_ir.c
+@@ -19,8 +19,15 @@ extern void CARD_SpiWaitWriteRange(void *src, u32 len);
+ #else
+ extern int MI_CompressLZImpl(const void *src, u32 size, void *dst, int unk);
+ #endif
++#ifdef SDK_PORT_3DS
++#include "hgss_port_msl.h"
++/* MSL exchanges floats as bit patterns; keep that ABI (patch 1760). */
++extern u32 _f_ulltof(u64 value);
++extern u32 _fdiv(u32 a, u32 b);
++#else
+ extern float _f_ulltof(u64 value);
+ extern float _fdiv(float a, float b);
++#endif
+ extern u64 _ll_udiv(u64 a, u64 b);
+ #ifdef SDK_PORT_3DS
+ // nitro/rtc/ARM9/api.h declares RTCResult RTC_GetTime(RTCTime *).
+@@ -476,7 +483,11 @@ static void PokewalkerIr_SendChunk(void) {
+ 
+ static void PokewalkerIr_OnSendComplete(void) {
+     u64 elapsed = OS_GetTick() - gPokewalkerIrWork.transferStartTick;
++#ifdef SDK_PORT_3DS
++    _fdiv(_f_ulltof(_ll_udiv(elapsed << 6, 0x82EA)), HGSS_PortF32ToBits(1000.0f));
++#else
+     _fdiv(_f_ulltof(_ll_udiv(elapsed << 6, 0x82EA)), 1000.0f);
++#endif
+     switch (gPokewalkerIrTransfer.step) {
+     case 0x3A:
+         gPokewalkerIrTransfer.step = 0x3C;
+@@ -604,7 +615,11 @@ static void PokewalkerIr_RequestChunk(void) {
+ static void PokewalkerIr_OnReceiveComplete(void) {
+     int i;
+     PokewalkerIrRecord *record;
++#ifdef SDK_PORT_3DS
++    float elapsed = HGSS_PortBitsToF32(_f_ulltof(((OS_GetTick() - gPokewalkerIrWork.transferStartTick) << 6) / 33514)) / 1000.0f;
++#else
+     float elapsed = _f_ulltof(((OS_GetTick() - gPokewalkerIrWork.transferStartTick) << 6) / 33514) / 1000.0f;
++#endif
+     (void)elapsed;
+     switch (gPokewalkerIrTransfer.step) {
+     case 70:
+diff --git a/src/pokeathlon/pokeathlon_relay_run.c b/src/pokeathlon/pokeathlon_relay_run.c
+index 08f103a..cb04438 100644
+--- a/src/pokeathlon/pokeathlon_relay_run.c
++++ b/src/pokeathlon/pokeathlon_relay_run.c
+@@ -58,7 +58,12 @@ enum PokeathlonRelayRunInitState {
+     RELAY_RUN_INIT_DONE,
+ };
+ 
++#ifdef SDK_PORT_3DS
++/* MSL's _fflt takes an int and returns an IEEE-754 bit pattern (patch 1760). */
++u32 _fflt(s32 value);
++#else
+ f32 _fflt(int value);
++#endif
+ 
+ static void PokeathlonRelayRun_SetGfxBanks(void);
+ static void PokeathlonRelayRun_InitBgs(BgConfig *bgConfig);
+-- 
+2.43.0
+

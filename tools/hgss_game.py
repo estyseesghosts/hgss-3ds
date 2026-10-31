@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -114,11 +116,13 @@ def target_tools(target: str) -> dict[str, str]:
     """The compile/archive/inspection tools for one target."""
     if target == "host32":
         return {"cc": os.environ.get("HGSS_HOST_CC", "gcc-10"),
-                "ar": "ar", "nm": "nm", "objcopy": "objcopy"}
+                "ar": "ar", "nm": "nm", "objcopy": "objcopy",
+                "readelf": "readelf"}
     if target == "3ds":
         prefix = devkitarm_bin() / "arm-none-eabi-"
         return {"cc": str(prefix) + "gcc", "ar": str(prefix) + "gcc-ar",
-                "nm": str(prefix) + "nm", "objcopy": str(prefix) + "objcopy"}
+                "nm": str(prefix) + "nm", "objcopy": str(prefix) + "objcopy",
+                "readelf": str(prefix) + "readelf"}
     raise ValueError(f"unknown target {target!r}")
 
 
@@ -197,14 +201,24 @@ def select_sources(data: dict) -> dict[str, list[str]]:
 
 def app_sources(target: str) -> list[Path]:
     """The program's own objects: the shared start and stubs, plus the
-    target's main (main_pc.c on host32, main_3ds.c on 3ds)."""
+    target's main (main_pc.c on host32, main_3ds.c on 3ds).
+
+    These are compiled and linked into the program only, never into
+    libnitro.a: the MSL helper set the host libc does not provide, the small
+    C++ runtime the lobby references, and the multiboot stand-ins. The MSL
+    runtime lives under hgss/compat/src because it is a library replacement,
+    but it is still an app object (the archives do not need it and must not
+    carry it)."""
     if target not in ("host32", "3ds"):
         raise ValueError(f"unknown target {target!r}")
     main = "main_pc.c" if target == "host32" else "main_3ds.c"
     return [REPO / "hgss" / "game" / "app" / main,
             REPO / "hgss" / "game" / "app" / "heartgold.c",
+            REPO / "hgss" / "game" / "app" / "cpp_runtime.c",
+            REPO / "hgss" / "compat" / "src" / "msl_runtime.c",
             REPO / "hgss" / "game" / "stubs" / "wm_stubs.c",
-            REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c"]
+            REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c",
+            REPO / "hgss" / "game" / "stubs" / "mb_stubs.c"]
 
 
 def object_path(out: Path, rel: str) -> Path:
@@ -284,6 +298,218 @@ def overlay_command(root: Path, out: Path, objcopy: str) -> list[str]:
             "--header", str(gen / "overlay_ids.h")]
 
 
+# ------------------------------------------------------------- object aliases
+
+ALIAS_MAP_SUFFIX = ".alias-map.json"
+
+# cpp_runtime.c defines these two destructors itself. The decomp's maps alias
+# them to the C destroy routines at offset 0, which is the same operation, but
+# the map also pins MWCC's function size (80/160 bytes) and GCC's code for the
+# destroy routines is larger, so object_aliases.py's owner check rejects the
+# entry. Skip exactly these aliases; every other map entry still runs.
+PORT_PROVIDED_ALIASES = frozenset({"_ZN5BytesD1Ev", "_ZN5DequeD1Ev"})
+
+
+def alias_map_path(src: Path) -> Path:
+    """The `.alias-map.json` beside a source (`foo.c` -> `foo.alias-map.json`).
+
+    The decomp's common.mk runs tools/object_aliases.py after compiling any
+    source whose sibling map exists. The maps add labels inside one BSS object
+    (the five gPokewalkerIr* aliases) and interior FUNC entry points (the lobby
+    destructors, which MWCC emits but GCC does not). This is a build stage, not
+    missing code: do not hand-write those symbols.
+    """
+    return src.with_suffix(ALIAS_MAP_SUFFIX)
+
+
+def object_alias_command(root: Path, obj: Path, alias_map: Path) -> list[str]:
+    """The decomp's object_aliases.py invocation for one compiled object.
+
+    The script lives in the --root checkout (it is part of the decompilation,
+    not this repo) and rewrites `obj` in place, verifying each owner size and
+    every alias offset against the ELF symbol table.
+    """
+    return [sys.executable, str(root / "tools" / "object_aliases.py"),
+            str(obj), str(alias_map)]
+
+
+def alias_tool_dir(out: Path) -> Path:
+    """Private directory holding the aliasing tools' expected names."""
+    return out / "gen" / "alias-tools"
+
+
+def alias_tool_environment(out: Path, tools: dict[str, str]) -> dict[str, str]:
+    """An environment whose PATH resolves arm-none-eabi-{objcopy,readelf}.
+
+    object_aliases.py looks those two names up on PATH, and it needs the
+    object's own tools: arm-none-eabi-objcopy cannot read an x86 ELF (it
+    rejects the format), while the host objcopy/readelf read both. Create
+    symlinks under the names the script asks for, pointing at this target's
+    objcopy and readelf, and prepend them to PATH. Called once before the
+    compile pools start, so the symlinks are never rewritten concurrently.
+    """
+    directory = alias_tool_dir(out)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, tool in (("arm-none-eabi-objcopy", tools["objcopy"]),
+                       ("arm-none-eabi-readelf", tools["readelf"])):
+        link = directory / name
+        target = shutil.which(tool) or tool
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(target)
+    env = dict(os.environ)
+    env["PATH"] = str(directory) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def load_alias_configs(alias_map: Path) -> list[dict]:
+    """The map's owner/alias configs (a map is one object or a JSON list)."""
+    loaded = json.loads(alias_map.read_text(encoding="utf-8"))
+    return list(loaded) if isinstance(loaded, list) else [loaded]
+
+
+def defined_symbol_size(nm: str, obj: Path, name: str) -> int | None:
+    """The ELF size of one global defined symbol, or None if absent."""
+    proc = run([nm, "-S", "-g", "--defined-only", str(obj)])
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and parts[3] == name:
+            try:
+                return int(parts[1], 16)
+            except ValueError:
+                return None
+    return None
+
+
+READELF_SYMBOL_RE = re.compile(
+    r"\s*\d+:\s+([0-9a-fA-F]+)\s+(\d+)\s+(\S+)\s+(\S+)\s+\S+\s+(\S+)\s+(\S+)$")
+READELF_SECTION_RE = re.compile(r"\s*\[\s*(\d+)\]\s+(\S+)")
+
+
+def symbol_section(readelf: str, obj: Path, name: str
+                   ) -> tuple[str, int, int] | None:
+    """(section name, section-relative offset, size) of one defined symbol.
+
+    The harness compiles with -ffunction-sections/-fdata-sections, so a symbol
+    the decomp's map expect in plain `.text`/`.bss` actually lives in
+    `.text.<name>`/`.bss.<name>` at offset 0. The alias map has to be
+    translated to that layout before object_aliases.py can add labels inside
+    the owner (see prepared_alias_map).
+    """
+    sections = {}
+    for line in run([readelf, "-SW", str(obj)]).stdout.splitlines():
+        match = READELF_SECTION_RE.match(line)
+        if match:
+            sections[match.group(1)] = match.group(2)
+    for line in run([readelf, "-sW", str(obj)]).stdout.splitlines():
+        match = READELF_SYMBOL_RE.match(line)
+        if not match:
+            continue
+        value, size, symbol_type, binding, ndx, symbol = match.groups()
+        if symbol != name:
+            continue
+        if not ndx.isdigit():
+            return None
+        section = sections.get(ndx)
+        if section is None:
+            return None
+        return section, int(value, 16), int(size)
+    return None
+
+
+def prepared_alias_map(obj: Path, alias_map: Path, out: Path,
+                       nm: str, readelf: str) -> Path | None:
+    """The map to hand to object_aliases.py, or None when it has nothing to add.
+
+    Three compiler-independent adjustments, all documented and all visible in
+    the object afterwards:
+
+    - Entries whose alias cpp_runtime.c already defines are dropped (see
+      PORT_PROVIDED_ALIASES).
+    - The owner's real section and offset come from the compiled object. With
+      -fdata-sections/-ffunction-sections the owner sits in `.bss.<name>` /
+      `.text.<name>` at offset 0, while the map names the DS's single `.bss` /
+      `.text` and section-relative offsets. The map is rewritten with the real
+      section, the real owner offset, and alias offsets shifted by the same
+      delta: the labels stay at the same distance inside the same object.
+    - A FUNC owner's `size` is MWCC's code size; GCC's code is a different
+      length, so it is replaced with the compiled size. OBJECT (BSS) sizes are
+      never adjusted: their layout must match the DS, so a mismatch stays
+      visible as the tool's owner error.
+
+    Returns the original map when nothing changed and no entry was dropped;
+    otherwise a private copy under --out.
+    """
+    configs = load_alias_configs(alias_map)
+    kept: list[dict] = []
+    changed = False
+    for config in configs:
+        aliases = config.get("aliases", [])
+        names = {alias["name"] for alias in aliases}
+        if names and names <= PORT_PROVIDED_ALIASES:
+            changed = True
+            continue
+        if names & PORT_PROVIDED_ALIASES:
+            raise ValueError(f"{alias_map}: an owner mixes cpp_runtime-provided "
+                             f"and aliased names: {sorted(names)}")
+        owner = config.get("owner", {})
+        compiled = symbol_section(readelf, obj, owner["name"])
+        if compiled is not None:
+            section, actual_offset, actual_size = compiled
+            pinned_offset = owner.get("offset", 0)
+            pinned_offset = (int(pinned_offset, 0) if isinstance(pinned_offset, str)
+                             else pinned_offset)
+            delta = actual_offset - pinned_offset
+            pinned_section = config.get("section")
+            config = dict(config)
+            config["section"] = section
+            config["owner"] = dict(owner, offset=actual_offset)
+            if section != pinned_section or delta != 0:
+                changed = True
+            if owner.get("type") == "FUNC":
+                pinned = (int(owner["size"], 0) if isinstance(owner["size"], str)
+                          else owner["size"])
+                if actual_size != pinned:
+                    config["owner"]["size"] = actual_size
+                    changed = True
+            config["aliases"] = [
+                dict(alias, offset=(int(alias["offset"], 0)
+                                    if isinstance(alias["offset"], str)
+                                    else alias["offset"]) + delta)
+                for alias in aliases]
+            if delta != 0:
+                changed = True
+        kept.append(config)
+    if not kept:
+        return None
+    if not changed:
+        return alias_map
+    target = out / "gen" / "alias-maps" / (obj.relative_to(out / "obj").as_posix() + ".json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(kept, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
+def apply_object_aliases(root: Path, src: Path, obj: Path,
+                         env: dict[str, str] | None, nm: str | None = None,
+                         readelf: str | None = None,
+                         out: Path | None = None) -> tuple[bool, str]:
+    """Run the alias stage for one object if its source has a sibling map.
+
+    Returns (ok, output). A missing map is not a failure; a tool error is.
+    """
+    alias_map = alias_map_path(src)
+    if not alias_map.is_file():
+        return True, ""
+    prepared = alias_map
+    if nm is not None and readelf is not None and out is not None:
+        prepared = prepared_alias_map(obj, alias_map, out, nm, readelf)
+        if prepared is None:
+            return True, ""
+    proc = run(object_alias_command(root, obj, prepared), env=env)
+    return proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def prepare_command(root: Path, out: Path) -> list[str]:
     """tools/prepare_game_headers.py into the checkout, with the overlay ids
     in the build's gen/ (the checkout itself must stay build-generated)."""
@@ -360,20 +586,33 @@ def unresolved_symbols(text: str) -> list[str]:
     return list(seen)
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
+def run(cmd: list[str], cwd: Path | None = None,
+        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run a child with captured output (tasks print their own summaries)."""
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
 
 
 def compile_one(cc: str, flags: list[str], src: Path, obj: Path,
-                language: str, log_dir: Path) -> tuple[bool, int, str]:
+                language: str, log_dir: Path, root: Path | None = None,
+                alias_env: dict[str, str] | None = None,
+                nm: str | None = None, readelf: str | None = None,
+                out: Path | None = None
+                ) -> tuple[bool, int, str]:
     obj.parent.mkdir(parents=True, exist_ok=True)
     proc = run(compile_command(cc, flags, src, obj, language))
     text = proc.stdout + proc.stderr
     failures = error_count(text)
     if proc.returncode != 0 and failures == 0:
         failures = 1  # e.g. the compiler itself failed
-    if proc.returncode != 0:
+    failed = proc.returncode != 0
+    if not failed and root is not None:
+        aliased, alias_text = apply_object_aliases(root, src, obj, alias_env,
+                                                   nm, readelf, out)
+        if not aliased:
+            text += alias_text
+            failures = max(1, error_count(alias_text))
+            failed = True
+    if failed:
         log = log_dir / (str(obj.relative_to(log_dir.parent)) + ".log")
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(text, encoding="utf-8")
@@ -382,13 +621,18 @@ def compile_one(cc: str, flags: list[str], src: Path, obj: Path,
 
 
 def compile_objects(cc: str, flags: list[str], sources: list[tuple[Path, Path, str]],
-                    jobs: int, log_dir: Path, keep_going: bool
+                    jobs: int, log_dir: Path, keep_going: bool,
+                    root: Path | None = None,
+                    alias_env: dict[str, str] | None = None,
+                    nm: str | None = None, readelf: str | None = None,
+                    out: Path | None = None
                     ) -> tuple[list[Path], list[tuple[str, int, str]]]:
     """Compile (src, obj, language) triples; return objects and failures."""
     built: list[Path] = []
     failed: list[tuple[str, int, str]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = {pool.submit(compile_one, cc, flags, src, obj, language, log_dir):
+        futures = {pool.submit(compile_one, cc, flags, src, obj, language, log_dir,
+                               root, alias_env, nm, readelf, out):
                    (src, obj) for src, obj, language in sources}
         for future in concurrent.futures.as_completed(futures):
             src, obj = futures[future]
@@ -408,8 +652,12 @@ def compile_objects(cc: str, flags: list[str], sources: list[tuple[Path, Path, s
 
 def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
                      sources: list[str], jobs: int, log_dir: Path,
-                     keep_going: bool) -> tuple[list[Path], list[tuple[str, int, str]]]:
-    """Assemble every .s through tools/s_to_gas.py."""
+                     keep_going: bool,
+                     alias_env: dict[str, str] | None = None,
+                     nm: str | None = None, readelf: str | None = None
+                     ) -> tuple[list[Path], list[tuple[str, int, str]]]:
+    """Assemble every .s through tools/s_to_gas.py, then apply any sibling
+    .alias-map.json (an .s can own a FUNC alias map too)."""
     built: list[Path] = []
     failed: list[tuple[str, int, str]] = []
 
@@ -421,7 +669,14 @@ def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
         errors = error_count(text)
         if proc.returncode != 0 and errors == 0:
             errors = 1
-        return rel, obj, proc.returncode == 0, errors, text
+        ok = proc.returncode == 0
+        if ok:
+            ok, alias_text = apply_object_aliases(root, root / rel, obj,
+                                                  alias_env, nm, readelf, out)
+            if not ok:
+                text += alias_text
+                errors = max(1, error_count(alias_text))
+        return rel, obj, ok, errors, text
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         futures = {pool.submit(one, rel): rel for rel in sources}
@@ -542,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     log_dir.mkdir(exist_ok=True)
     gen = out / "gen"
     gen.mkdir(exist_ok=True)
+    alias_env = alias_tool_environment(out, tools)
 
     if not args.skip_prepare:
         cmd = prepare_command(root, out)
@@ -569,9 +825,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"== compiling C/C++ ({len(c_jobs) + len(cxx_jobs)} files, -j{args.jobs})",
           flush=True)
     c_objects, c_failed = compile_objects(tools["cc"], cflags, c_jobs, args.jobs,
-                                          log_dir, args.keep_going)
+                                          log_dir, args.keep_going,
+                                          root, alias_env, tools["nm"],
+                                          tools["readelf"], out)
     cxx_objects, cxx_failed = compile_objects(tools["cc"], cxxflags, cxx_jobs,
-                                              args.jobs, log_dir, args.keep_going)
+                                              args.jobs, log_dir, args.keep_going,
+                                              root, alias_env, tools["nm"],
+                                              tools["readelf"], out)
     c_objects += cxx_objects
     c_failed += cxx_failed
     print(f"   {len(c_objects)} compiled, {len(c_failed)} failed")
@@ -585,7 +845,7 @@ def main(argv: list[str] | None = None) -> int:
     aflags = asm_flags(args.target, root, out)
     asm_objects, asm_failed = assemble_objects(
         root, tools["cc"], aflags, out, sources["asm"], args.jobs, log_dir,
-        args.keep_going)
+        args.keep_going, alias_env, tools["nm"], tools["readelf"])
     print(f"   {len(asm_objects)} assembled, {len(asm_failed)} failed")
     if asm_failed:
         print(f"   {sum(e for _, e, _ in asm_failed)} errors in "

@@ -3,7 +3,10 @@
 Synthetic source lists, flags and directories only: no game data, no
 compiler run, no bootstrapped checkout required.
 """
+import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -175,9 +178,148 @@ class AppSourceTests(unittest.TestCase):
         self.assertNotIn("main_pc.c", names)
         self.assertIn("heartgold.c", names)
 
+    def test_program_carries_the_runtime_replacements(self):
+        # These are program objects, not archive members: the MSL helpers the
+        # host libc lacks, the lobby's small C++ runtime, and MB stand-ins.
+        for target in ("host32", "3ds"):
+            names = [p.name for p in hg.app_sources(target)]
+            self.assertIn("msl_runtime.c", names)
+            self.assertIn("cpp_runtime.c", names)
+            self.assertIn("mb_stubs.c", names)
+
+    def test_msl_runtime_lives_in_compat_but_is_an_app_object(self):
+        paths = hg.app_sources("host32")
+        msl = [p for p in paths if p.name == "msl_runtime.c"][0]
+        self.assertEqual(msl, REPO / "hgss" / "compat" / "src" / "msl_runtime.c")
+
     def test_unknown_target(self):
         with self.assertRaises(ValueError):
             hg.app_sources("arm7")
+
+
+class ObjectAliasTests(unittest.TestCase):
+    """The missing decomp build stage: object_aliases.py after compiling."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+
+    def test_alias_map_path_is_the_source_sibling(self):
+        # common.mk looks for <source without extension>.alias-map.json.
+        self.assertEqual(hg.alias_map_path(Path("src/lobby/ppw_lobby.cpp")),
+                         Path("src/lobby/ppw_lobby.alias-map.json"))
+        self.assertEqual(
+            hg.alias_map_path(Path("src/application/pokewalker/pokewalker_ir_requests.c")),
+            Path("src/application/pokewalker/pokewalker_ir_requests.alias-map.json"))
+        self.assertEqual(hg.alias_map_path(Path("asm/foo.s")),
+                         Path("asm/foo.alias-map.json"))
+
+    def test_object_alias_command_uses_the_checkout_tool(self):
+        cmd = hg.object_alias_command(
+            Path("/checkout"), Path("/out/obj/src/foo.o"),
+            Path("/checkout/src/foo.alias-map.json"))
+        self.assertEqual(cmd[0], sys.executable)
+        self.assertEqual(cmd[1], "/checkout/tools/object_aliases.py")
+        self.assertEqual(cmd[2], "/out/obj/src/foo.o")
+        self.assertEqual(cmd[3], "/checkout/src/foo.alias-map.json")
+
+    def test_alias_environment_puts_the_target_tools_on_path(self):
+        env = hg.alias_tool_environment(self.base, {"objcopy": "objcopy",
+                                                   "readelf": "readelf"})
+        directory = hg.alias_tool_dir(self.base)
+        self.assertEqual(directory, self.base / "gen" / "alias-tools")
+        self.assertTrue(env["PATH"].startswith(str(directory) + os.pathsep))
+        # object_aliases.py looks these exact names up; they are this
+        # target's tools, since arm-none-eabi-objcopy rejects an x86 ELF.
+        for name, tool in (("arm-none-eabi-objcopy", "objcopy"),
+                           ("arm-none-eabi-readelf", "readelf")):
+            link = directory / name
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.resolve(), Path(shutil.which(tool)).resolve())
+
+    def test_missing_map_is_not_a_failure_and_runs_nothing(self):
+        src = self.base / "src" / "plain.c"
+        src.parent.mkdir(parents=True)
+        src.write_text("int x;\n")
+        ok, text = hg.apply_object_aliases(Path("/checkout"), src,
+                                           self.base / "plain.o", env={})
+        self.assertTrue(ok)
+        self.assertEqual(text, "")
+
+    def test_prepared_map_drops_runtime_aliases_and_fixes_func_sizes(self):
+        # GCC's function sizes differ from MWCC's pinned sizes; the alias
+        # offsets are what matter, so the FUNC owner's size is replaced with
+        # the compiled size. Entries cpp_runtime.c already defines are
+        # dropped. OBJECT (BSS) sizes are never adjusted.
+        src = self.base / "owner.c"
+        out = self.base / "out"
+        obj = out / "obj" / "owner.o"
+        obj.parent.mkdir(parents=True)
+        src.write_text("void owner_fn(void) { }\n")
+        cc = os.environ.get("HGSS_HOST_CC", "gcc-10")
+        subprocess.run([cc, "-m32", "-c", str(src), "-o", str(obj)],
+                       check=True, capture_output=True)
+        alias_map = self.base / "owner.alias-map.json"
+        alias_map.write_text(json.dumps([
+            {"section": ".text",
+             "owner": {"name": "owner_fn", "size": "999", "type": "FUNC"},
+             "aliases": [{"name": "alias_fn", "offset": 0}]},
+            {"section": ".text",
+             "owner": {"name": "owner_fn", "size": "999", "type": "FUNC"},
+             "aliases": [{"name": "_ZN5BytesD1Ev", "offset": 0}]},
+        ]))
+        prepared = hg.prepared_alias_map(obj, alias_map, out, "nm", "readelf")
+        self.assertIsNotNone(prepared)
+        self.assertNotEqual(prepared, alias_map)
+        configs = json.loads(Path(prepared).read_text())
+        self.assertEqual([c["owner"]["name"] for c in configs], ["owner_fn"])
+        self.assertEqual([a["name"] for a in configs[0]["aliases"]], ["alias_fn"])
+        actual = hg.defined_symbol_size("nm", obj, "owner_fn")
+        self.assertEqual(configs[0]["owner"]["size"], actual)
+
+    def test_prepared_map_translates_to_data_section_layout(self):
+        # The harness compiles with -fdata-sections, so the owner sits in
+        # .bss.<name> at offset 0. The map's .bss-relative offsets must be
+        # shifted by the same delta, keeping the aliases at the same distance
+        # inside the owner (the five gPokewalkerIr* labels).
+        src = self.base / "data.c"
+        out = self.base / "out"
+        obj = out / "obj" / "data.o"
+        obj.parent.mkdir(parents=True)
+        src.write_text("unsigned char owner[0x20];\n")
+        cc = os.environ.get("HGSS_HOST_CC", "gcc-10")
+        subprocess.run([cc, "-m32", "-fdata-sections", "-c", str(src), "-o", str(obj)],
+                       check=True, capture_output=True)
+        alias_map = self.base / "data.alias-map.json"
+        alias_map.write_text(json.dumps(
+            {"section": ".bss",
+             "owner": {"name": "owner", "offset": "0x10", "size": "0x10",
+                       "type": "OBJECT"},
+             "aliases": [{"name": "inside_a", "offset": "0x14"},
+                         {"name": "inside_b", "offset": "0x18"}]}))
+        prepared = hg.prepared_alias_map(obj, alias_map, out, "nm", "readelf")
+        config = json.loads(Path(prepared).read_text())[0]
+        self.assertEqual(config["section"], ".bss.owner")
+        self.assertEqual(config["owner"]["offset"], 0)
+        self.assertEqual([a["offset"] for a in config["aliases"]], [0x04, 0x08])
+
+    def test_prepared_map_with_only_runtime_aliases_is_skipped(self):
+        src = self.base / "only.c"
+        obj = self.base / "obj" / "only.o"
+        obj.parent.mkdir(parents=True)
+        src.write_text("void owner_fn(void) { }\n")
+        cc = os.environ.get("HGSS_HOST_CC", "gcc-10")
+        subprocess.run([cc, "-m32", "-c", str(src), "-o", str(obj)],
+                       check=True, capture_output=True)
+        alias_map = self.base / "only.alias-map.json"
+        alias_map.write_text(json.dumps(
+            {"section": ".text",
+             "owner": {"name": "owner_fn", "size": "1", "type": "FUNC"},
+             "aliases": [{"name": "_ZN5DequeD1Ev", "offset": 0}]}))
+        out = self.base / "out"
+        (out / "obj").mkdir(parents=True)
+        self.assertIsNone(hg.prepared_alias_map(obj, alias_map, out, "nm", "readelf"))
 
 
 class CommandTests(unittest.TestCase):
