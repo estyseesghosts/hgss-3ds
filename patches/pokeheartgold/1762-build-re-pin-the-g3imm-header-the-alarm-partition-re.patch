@@ -1,0 +1,33 @@
+From e8109af16a0dad1d968c6116b134d27c9f3b4042 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sat, 31 Oct 2026 22:52:22 +0000
+Subject: [PATCH] build: re-pin the g3imm header the alarm partition reads
+ (1703)
+
+Patch 1703 gives lib/include/nitro/gx/g3imm.h a uint32_t branch under
+SDK_PORT_3DS. The header text without the macro is byte-identical (the
+patch identity proof), but the file bytes changed, and
+tools/alarm-partition/profile.json pins the raw SHA-256 in closure.
+Re-record it so the DS gate can run.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ tools/alarm-partition/profile.json | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/alarm-partition/profile.json b/tools/alarm-partition/profile.json
+index 277bc3c..c481a4e 100644
+--- a/tools/alarm-partition/profile.json
++++ b/tools/alarm-partition/profile.json
+@@ -35,7 +35,7 @@
+     "lib/include/nitro/gx/g3.h": "fa699d778e9fdb54f119ef049ca011ce0cd39e8cde42c4dbcd55727531a66585",
+     "lib/include/nitro/gx/g3_util.h": "c99f8f0a89ac4766129ca0640e38902961314ee2e0c3f8a5e3d839dcdb5cc199",
+     "lib/include/nitro/gx/g3b.h": "3c648fd02d660123de2aa8aba7f04b898161380fa240cd21618bdf74209d50ae",
+-    "lib/include/nitro/gx/g3imm.h": "6c473c6ce9a8dedfae2513fe31f0a7a162f0f01cf60e777f354faa04e9c13111",
++    "lib/include/nitro/gx/g3imm.h": "4eed4d10aab6be2a2d51466e10d4c8581708c16fcc21ffd83ecf99baabf530e2",
+     "lib/include/nitro/gx/g3x.h": "bbb295d163cb8016232074ff328724267dff13e4554e68457d71d9f5bf069107",
+     "lib/include/nitro/gx/gx.h": "b0c377370a7b70addc28892af91d33122b6c3670ea83314baed6250a438a534c",
+     "lib/include/nitro/gx/gx_bgcnt.h": "563c73af7f63169a7449dcaa5b672ddf4c7696ecc2a3af31db9b1a7d9657f03a",
+-- 
+2.43.0
+
