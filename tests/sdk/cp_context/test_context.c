@@ -177,13 +177,13 @@ static void TestContextLayout(void)
     EQ32("pc_plus4 offset", FIELD_OFF(OSContext, pc_plus4), OS_CONTEXT_PC_PLUS4);
     EQ32("sp_svc offset", FIELD_OFF(OSContext, sp_svc), OS_CONTEXT_SP_SVC);
     EQ32("cp_context offset", FIELD_OFF(OSContext, cp_context), OS_CONTEXT_CP_CONTEXT);
-    EQ32("OSContext size", sizeof(OSContext), 104);
+    EQ32("OSContext size", sizeof(OSContext), 100); /* DS layout: u64 4-aligned (patch 1001) */
     /* CPContext offsets used by the asm (sqrt at +16, div_mode +24, sqrt_mode +26). */
     EQ32("CPContext div_denom", FIELD_OFF(CPContext, div_denom), 8);
     EQ32("CPContext sqrt", FIELD_OFF(CPContext, sqrt), 16);
     EQ32("CPContext div_mode", FIELD_OFF(CPContext, div_mode), 24);
     EQ32("CPContext sqrt_mode", FIELD_OFF(CPContext, sqrt_mode), 26);
-    EQ32("CPContext size", sizeof(CPContext), 32);
+    EQ32("CPContext size", sizeof(CPContext), 28); /* the asm writes 28 bytes: div_numer..sqrt = 24, div_mode +24, sqrt_mode +26 */
 }
 
 /* ---- OS_SaveContext / OS_LoadContext: thread switch is the port's; no coprocessor work here ---- */
@@ -250,30 +250,31 @@ static void TestCpSave(void)
 
     for (k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
         const SaveCase *t = &cases[k];
-        CPContext ctx;
-        unsigned char *b = (unsigned char *)&ctx;
+        struct { CPContext c; unsigned char guard[8]; } w; /* guard bytes catch a write past the struct */
+        CPContext *const ctxp = &w.c;
+        unsigned char *b = (unsigned char *)&w;
         int pad;
         unsigned i;
 
-        for (i = 0; i < sizeof(ctx); i++) {
+        for (i = 0; i < sizeof(w); i++) {
             b[i] = 0xEE;
         }
         SetCp(t->divCnt, t->numer, t->denom, t->sqrtCnt, t->sqrtParam);
         SetHooks();
-        CP_SaveContext(&ctx);
+        CP_SaveContext(ctxp);
 
-        EQ64("save div_numer", ctx.div_numer, t->numer);
-        EQ64("save div_denom", ctx.div_denom, t->denom);
-        EQ64("save sqrt", ctx.sqrt, t->sqrtParam);
-        EQ32("save div_mode", ctx.div_mode, t->wantDivMode);
-        EQ32("save sqrt_mode", ctx.sqrt_mode, t->wantSqrtMode);
+        EQ64("save div_numer", ctxp->div_numer, t->numer);
+        EQ64("save div_denom", ctxp->div_denom, t->denom);
+        EQ64("save sqrt", ctxp->sqrt, t->sqrtParam);
+        EQ32("save div_mode", ctxp->div_mode, t->wantDivMode);
+        EQ32("save sqrt_mode", ctxp->sqrt_mode, t->wantSqrtMode);
         pad = 1;
-        for (i = 28; i < 32; i++) {
+        for (i = sizeof(CPContext); i < sizeof(w); i++) {
             if (b[i] != 0xEE) {
                 pad = 0;
             }
         }
-        CHECK(pad, "case %u: padding after sqrt_mode untouched", k);
+        CHECK(pad, "case %u: nothing written past the end of CPContext", k);
         EQ32("save runs no hook", divHooks + sqrtHooks, 0);
     }
 }

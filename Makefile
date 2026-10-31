@@ -1,32 +1,40 @@
 # ---------------------------------------------------------------------------
 # Phase 1: SDK scaffold only. No game code is compiled yet (that is Phase 2).
 #
-#   make test      Python tool tests, plus the vendored port unit tests once
-#                  they build against the patched HGSS SDK (see PORT_TESTS)
+#   make test        Python tool tests + the SDK_PORT_3DS host suites in tests/sdk (synthetic data only;
+#                    needs `python3 tools/bootstrap.py` first). This is what CI runs.
+#   make sdk-survey  syntax-check lib/NitroSDK and lib/NitroSystem with GCC under SDK_PORT_3DS (progress count)
+#   make port-tests  the vendored 3ds_port unit tests against the HGSS SDK. NOT IMPLEMENTED: always fails until
+#                    the wiring in docs/port-wiring.md exists. Deliberately not part of `make test`.
+#   make layout      MWCC-vs-GCC save-layout probe (needs MWCC + the decomp's generated headers; local only)
 #   make clean
-#
-# Run `python3 tools/bootstrap.py` first (fetches and patches the decomp).
 # ---------------------------------------------------------------------------
 
 PORT := 3ds_port
-TARGET ?= host
+SDK_TESTS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard tests/sdk/*/run.sh)))))
 
-.PHONY: test tool-tests port-tests clean check-bootstrap
+.PHONY: test tool-tests sdk-tests sdk-survey port-tests layout clean check-bootstrap
 
 check-bootstrap:
 	@test -f build/upstream/lib/NitroSDK/include/nitro.h || \
 	    { echo "Run first: python3 tools/bootstrap.py"; exit 1; }
 
-test: tool-tests port-tests
+test: tool-tests sdk-tests
 
 tool-tests:
 	python3 -I -m unittest discover -s tests
 
-# Not wired up yet: the vendored 3ds_port/nitro Makefile lists Platinum-layout
-# sources, so it cannot build the HGSS lib/ until the SDK patch rebase and an
-# HGSS source list exist (docs/progress/phase-1.md).
+sdk-tests: check-bootstrap
+	@set -e; for t in $(SDK_TESTS); do echo "== tests/sdk/$$t"; bash tests/sdk/$$t/run.sh build/upstream; done
+
+sdk-survey: check-bootstrap
+	python3 tools/sdk_compile_survey.py -j $$(nproc) --m32
+
 port-tests: check-bootstrap
-	@echo "port-tests: NOT IMPLEMENTED YET (Phase 1 in progress)"; exit 1
+	@echo "port-tests: NOT IMPLEMENTED (see docs/port-wiring.md)"; exit 1
+
+layout: check-bootstrap
+	bash tests/layout_probe/run.sh
 
 clean:
 	rm -rf build
