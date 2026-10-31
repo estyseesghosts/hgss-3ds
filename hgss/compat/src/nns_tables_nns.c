@@ -17,6 +17,19 @@
  * hgss_nns_compat/nns_tables_nns.c), with the port's flags.
  */
 
+/* GAS spells the section and symbol types with @ on x86 and with % on ARM,
+ * where @ starts a comment. The ARM7 target assembles this file with
+ * arm-none-eabi-as: `@progbits` is "junk at end of line" and `@object` is
+ * "unrecognized symbol type". The x86 strings are byte-identical to before,
+ * so the host32 object is unchanged. */
+#if defined(__arm__)
+#define HGSS_ASM_RODATA "  .section .rodata,\"a\",%progbits\n"
+#define HGSS_ASM_TYPE_OBJECT(name) "  .type " name ",%object\n"
+#else
+#define HGSS_ASM_RODATA "  .section .rodata,\"a\",@progbits\n"
+#define HGSS_ASM_TYPE_OBJECT(name) "  .type " name ",@object\n"
+#endif
+
 __asm__(
 /* The labels below are the library's public data. Without these .global
  * directives they assembled as local symbols (STB_LOCAL): nm saw the bytes
@@ -88,7 +101,7 @@ __asm__(
 "  .global gTexMtxCalcFuncsMaya\n"
 "  .global gTexMtxCalcFuncs3dsMax\n"
 "  .global gTexMtxCalcFuncsXsi\n"
-"  .section .rodata,\"a\",@progbits\n"
+HGSS_ASM_RODATA
 "  .balign 4\n"
 "gFndExpHeapAllocatorFunc:\n"
 "	  .long AllocatorAllocForExpHeap\n"

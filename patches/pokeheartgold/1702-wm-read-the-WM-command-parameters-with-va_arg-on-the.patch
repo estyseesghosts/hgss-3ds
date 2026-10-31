@@ -1,0 +1,58 @@
+From cd2f7ecfc441b6fa70adbc875bff1752c5075813 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 21:56:27 +0000
+Subject: [PATCH 1702/1703] wm: read the WM command parameters with va_arg on
+ the 3DS build (SDK_PORT_3DS)
+
+WMi_SendCommand packs a variadic u32 list by advancing MWCC's byte-pointer
+va_list: `*(u32 *)((vlist += 4) - 4)` (lib/NitroSDK/src/wm_core.c:140), and
+WMi_CheckStateEx compares each variadic state the same way at line 199.
+devkitARM's newlib va_list is an opaque struct, so `vlist += 4` does not
+compile and the 3DS libnitro.a stops.
+
+Under SDK_PORT_3DS the two fetches are va_arg(vlist, u32) and va_arg(ap, int):
+the callers pass u32 words and integer-promoted states, one four-byte slot
+each, so the values are identical. The MWCC text stays under #else and the
+Metrowerks preprocessing is byte-identical:
+
+  gcc-10 -E -P -DSDK_ARM9 -DSDK_CODE_ARM -DSDK_FINALROM -DNNS_FINALROM \
+      <includes> lib/NitroSDK/src/wm_core.c
+
+is 145683 bytes before and after, empty diff.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/wm_core.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/lib/NitroSDK/src/wm_core.c b/lib/NitroSDK/src/wm_core.c
+index b8ba282..8db7ad0 100644
+--- a/lib/NitroSDK/src/wm_core.c
++++ b/lib/NitroSDK/src/wm_core.c
+@@ -137,7 +137,11 @@ WMErrCode WMi_SendCommand(u16 apiid, u16 paramNum, ...) {
+     *(u16 *)buf = apiid;
+     va_start(vlist, paramNum);
+     for (i = 0; i < paramNum; i++) {
++#ifdef SDK_PORT_3DS
++        buf[i + 1] = va_arg(vlist, u32);
++#else
+         buf[i + 1] = *(u32 *)((vlist += 4) - 4);
++#endif
+     }
+     va_end(vlist);
+     DC_StoreRange(buf, 0x100);
+@@ -196,7 +200,11 @@ WMErrCode WMi_CheckStateEx(int count, ...) {
+     va_start(ap, count);
+     result = WM_ERRCODE_ILLEGAL_STATE;
+     while (count) {
++#ifdef SDK_PORT_3DS
++        if (va_arg(ap, int) == state) {
++#else
+         if (*(int *)((ap += 4) - 4) == state) {
++#endif
+             result = WM_ERRCODE_SUCCESS;
+         }
+         count--;
+-- 
+2.43.0
+
