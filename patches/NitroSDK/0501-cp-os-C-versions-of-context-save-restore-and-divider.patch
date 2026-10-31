@@ -1,0 +1,283 @@
+From f3d6ac02be148321b8a502463fa0deb2fa298a7c Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 03:29:04 +0000
+Subject: [PATCH] cp,os: C versions of context save/restore and divider/sqrt
+ hooks (SDK_PORT_3DS)
+
+Four MWCC asm functions and the software divider and square-root hooks, under
+SDK_PORT_3DS. The DS text is unchanged: gcc -E -P of each file without
+SDK_PORT_3DS equals the file before this patch, for -DSDK_ARM9 and for
+-DSDK_ARM7 (lib/NitroSDK is built for ARM9 only, config.mk; the ARM7 run is extra).
+Every #else branch is the original text.
+
+CP_SaveContext (cp/CP_context.c; asm at the original lines 4-24)
+  DS/MWCC: reads DIV_NUMER and DIV_DENOM (one 16-byte block at 0x290),
+  DIVCNT (0x280) masked with #3, SQRT_PARAM (0x2B8), SQRTCNT (0x2B0) masked
+  with #1. Stores div_numer@0, div_denom@8, sqrt@16, div_mode@24 (u16),
+  sqrt_mode@26 (u16); the padding at 28-31 is not written.
+  Platinum 0006 (cp_context.c hunk): the same reads and the same masks, through
+  REG_CP_DIVCNT_MODE_MASK and REG_CP_SQRTCNT_MODE_MASK (0x3 and 0x1 in
+  io_reg.h, the same values as the asm). Differences: Platinum guards with
+  SDK_CW/__MWERKS__ and this patch uses SDK_PORT_3DS, and the read order here
+  is the asm's (numer, denom, DIVCNT, SQRT_PARAM, SQRTCNT).
+  Port: port_thread.c HandOver (line 203) calls it when a thread is switched away.
+
+CPi_RestoreContext (cp/CP_context.c; asm at the original lines 26-47)
+  DS/MWCC: writes DIV_NUMER and DIV_DENOM, then DIVCNT = div_mode (strh, not
+  masked), SQRTCNT = sqrt_mode, SQRT_PARAM = sqrt. The writes are in that order.
+  Here: the same five writes in the same order, then CPi_PortUpdateDiv() and
+  CPi_PortUpdateSqrt() once each. Platinum 0006 calls CPi_PORT_DIV_WRITTEN() and
+  CPi_PORT_SQRT_WRITTEN() (macros that patch 0002 adds to divider.h and sqrt.h).
+  HGSS has neither header, so the two port functions are declared here with a
+  local extern under SDK_PORT_3DS. Both hooks run after all five writes, as on
+  Platinum.
+  Port: port_thread.c HandOver (line 228) calls it when a thread is resumed.
+
+OS_InitContext (os/os_context.c; asm at the original lines 4-39)
+  DS/MWCC: stores PC+4; with SDK_CONTEXT_HAS_SP_SVC (defined by os/context.h)
+  stores SP_SVC = newsp, then SP = newsp - HW_SVC_STACK_SIZE; SP -= 4 when bit
+  2 of SP is set (tst #4); CPSR = SYS mode | THUMB if bit 0 of the entry is
+  set, else SYS mode | ARM; r0-r12 and lr zeroed. SP (r13) and the coprocessor
+  context are not written.
+  Here: the same fields with the same values. Platinum 0006 does the same.
+  Port: os_thread.c:295 and :319 pass the entry and the stack. port_thread.c
+  RunFresh reads pc_plus4, r[0] and lr.
+
+OS_SaveContext (os/os_context.c; asm at the original lines 41-68)
+  DS/MWCC: on ARM9 calls CP_SaveContext on context+72; stores CPSR, the SVC SP
+  and r0-r14, and PC+4 (the resume point); returns 0. A context resumed by
+  OS_LoadContext returns 1 from there.
+  Here: returns NitroPort_SaveContext(context), which is FALSE
+  (port_thread.c:265). Platinum 0006 does the same.
+  Difference from the asm: no CP_SaveContext call. The port saves the CP state
+  and CPSR per thread in HandOver at switch time (port_thread.c:203, 205), so a
+  save here would be a second copy. The coprocessor state is captured at switch
+  time, not at this call. The scheduler does no coprocessor work in between.
+  Difference: the OSContext register fields (r0-r14, CPSR, SP_SVC) are not
+  written. The port keeps the switched-away thread's CPSR in PortThread.cpsr.
+
+OS_LoadContext (os/os_context.c; asm at the original lines 70-96)
+  DS/MWCC: on ARM9 calls CPi_RestoreContext, then sets SVC mode, sets SPSR from
+  the saved CPSR, loads the saved registers and jumps to PC+4-4. It does not
+  return to its caller.
+  Here: NitroPort_LoadContext(context) (port_thread.c:273). It returns when the
+  caller is switched back to, which is the port's design (port_thread.c header).
+  Difference from the asm: no CPi_RestoreContext before the switch. HandOver
+  restores the coprocessor state of the thread it resumes (port_thread.c:228).
+  A restore here would overwrite the running thread's state before HandOver
+  saves it. The Tests paragraph lists the mutation that checks this.
+
+Software divider and square-root hooks (fx/fx_cp.c)
+  CPi_PortUpdateDiv() runs once after the last register write that starts a
+  division: FX_InvAsync (DIV_DENOM, original line 52), FX_DivAsync (line 63),
+  FX_DivS32 and FX_ModS32 (line 69 and 77, before the busy-wait loop).
+  CPi_PortUpdateSqrt() runs once after SQRT_PARAM in FX_Sqrt (line 32), before
+  FX_GetSqrtResult. Platinum 0002 calls its hooks after every register write.
+  Here the port recomputes from the registers, so one call after the sequence
+  is enough, and no result is computed from half-written operands.
+  Not hooked by this patch (callers found, left for the lead): fx_vec.c,
+  fx_vec_mult_add.c, fx_vec_normalize.c, fx_mtx44_ortho.c, fx_mtx44_perspective.c,
+  tp.c, src/battle/battle_command.c (CP_SetSqrt*).
+
+Tests: tests/sdk/cp_context/run.sh (the port repo). It builds these three files
+with the survey tool's flags and runs them against stub port functions, with
+the I/O page mapped at 0x04000000. OS_InitContext is checked field by field
+for ARM and Thumb entries and SP with and without bit 2 set; save and restore
+are checked against the register values and the padding; the hooks are counted
+and checked for the register values they see. Mutation checks: dropping the SP
+alignment, the DIVCNT mask, the sqrt hook, a CP restore in OS_LoadContext, and
+the FX_DivAsync hook each make the run fail.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/cp/CP_context.c | 31 ++++++++++++++++++++++++++
+ src/fx/fx_cp.c      | 24 ++++++++++++++++++++
+ src/os/os_context.c | 53 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 108 insertions(+)
+
+diff --git a/src/cp/CP_context.c b/src/cp/CP_context.c
+index e8aecb8..cd77f15 100644
+--- a/src/cp/CP_context.c
++++ b/src/cp/CP_context.c
+@@ -1,6 +1,36 @@
+ #include <nitro.h>
+ #include <nitro/code32.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: the software divider and square root (3ds_port/nitro/src/port_cp.c) work out
++ * their result registers from the operands in the registers. Platinum declares these in its
++ * divider.h and sqrt.h (patch 0002); HGSS has neither header, so they are declared here. */
++extern void CPi_PortUpdateDiv(void);
++extern void CPi_PortUpdateSqrt(void);
++
++/* Same register reads and writes, in the same order, as the asm in the #else branch. */
++void CP_SaveContext(CPContext *context)
++{
++    context->div_numer = reg_CP_DIV_NUMER;
++    context->div_denom = reg_CP_DIV_DENOM;
++    context->div_mode = (u16)(reg_CP_DIVCNT & REG_CP_DIVCNT_MODE_MASK);     /* and r12, r12, #3 */
++    context->sqrt = reg_CP_SQRT_PARAM;
++    context->sqrt_mode = (u16)(reg_CP_SQRTCNT & REG_CP_SQRTCNT_MODE_MASK);  /* and r2, r2, #1 */
++}
++
++void CPi_RestoreContext(CPContext *context)
++{
++    reg_CP_DIV_NUMER = context->div_numer;
++    reg_CP_DIV_DENOM = context->div_denom;
++    reg_CP_DIVCNT = context->div_mode;      /* strh, the mode as stored (not masked) */
++    reg_CP_SQRTCNT = context->sqrt_mode;
++    reg_CP_SQRT_PARAM = context->sqrt;
++
++    /* Both units restart from the registers just written. */
++    CPi_PortUpdateDiv();
++    CPi_PortUpdateSqrt();
++}
++#else
+ asm void CP_SaveContext(register CPContext *context)
+ {
+     ldr r1, =REG_DIV_NUMER_ADDR
+@@ -45,3 +75,4 @@ asm void CPi_RestoreContext(register CPContext *context)
+ 
+     bx lr
+ }
++#endif
+diff --git a/src/fx/fx_cp.c b/src/fx/fx_cp.c
+index 21ea10c..4dd0154 100644
+--- a/src/fx/fx_cp.c
++++ b/src/fx/fx_cp.c
+@@ -10,6 +10,15 @@ fx32 FX_GetSqrtResult(void);
+ void FX_InvAsync(fx32 x);
+ void FX_DivAsync(fx32 numerator, fx32 denominator);
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no divider or square-root unit. These work out the result registers from the operands
++ * just written (3ds_port/nitro/src/port_cp.c). Each is called once after a sequence of writes that
++ * starts an operation, before anything reads the result. Platinum declares them in its divider.h
++ * and sqrt.h (patch 0002); HGSS has neither header. */
++extern void CPi_PortUpdateDiv(void);
++extern void CPi_PortUpdateSqrt(void);
++#endif
++
+ fx32 FX_Div(fx32 numerator, fx32 denominator) {
+     FX_DivAsync(numerator, denominator);
+     return FX_GetDivResult();
+@@ -30,6 +39,9 @@ fx32 FX_Sqrt(fx32 x) {
+     if (x > 0) {
+         reg_CP_SQRTCNT = 0x1;
+         reg_CP_SQRT_PARAM = (u64)((fx64)x << 32);
++#ifdef SDK_PORT_3DS
++        CPi_PortUpdateSqrt();
++#endif
+         return FX_GetSqrtResult();
+     } else {
+         return 0;
+@@ -50,6 +62,9 @@ void FX_InvAsync(fx32 x) {
+     reg_CP_DIVCNT = 0x1;
+     reg_CP_DIV_NUMER = (fx64)0x00001000 << 32;
+     reg_CP_DIV_DENOM = (u32)x;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+ }
+ 
+ fx32 FX_GetSqrtResult() {
+@@ -61,12 +76,18 @@ void FX_DivAsync(fx32 numerator, fx32 denominator) {
+     reg_CP_DIVCNT = 0x1;
+     reg_CP_DIV_NUMER = (u64)((fx64)numerator << 32);
+     reg_CP_DIV_DENOM = (u32)denominator;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+ }
+ 
+ fx32 FX_DivS32(fx32 numerator, fx32 denominator) {
+     reg_CP_DIVCNT = 0x0;
+     *(REGType32v *)&reg_CP_DIV_NUMER = (u32)numerator; // 32bit write for some reason
+     reg_CP_DIV_DENOM = (u32)denominator;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+     while (reg_CP_DIVCNT & REG_CP_DIVCNT_BUSY_MASK) {}
+     return (fx32)(*(REGType32v *)&reg_CP_DIV_RESULT);
+ }
+@@ -75,6 +96,9 @@ fx32 FX_ModS32(fx32 num, fx32 mod) {
+     reg_CP_DIVCNT = 0x0;
+     *(REGType32v *)&reg_CP_DIV_NUMER = (u32)num; // 32bit write for some reason
+     reg_CP_DIV_DENOM = (u32)mod;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+     while (reg_CP_DIVCNT & REG_CP_DIVCNT_BUSY_MASK) {}
+     return (fx32)(*(REGType32v *)&reg_CP_DIVREM_RESULT);
+ }
+diff --git a/src/os/os_context.c b/src/os/os_context.c
+index 0c71371..30abaed 100644
+--- a/src/os/os_context.c
++++ b/src/os/os_context.c
+@@ -1,6 +1,58 @@
+ #include <nitro/os/context.h>
+ #include <nitro/code32.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: the port switches threads (3ds_port/nitro/src/port_thread.c). */
++BOOL NitroPort_SaveContext(void *context);
++void NitroPort_LoadContext(void *context);
++
++/* The same fields as the asm in the #else branch: PC+4; SP_SVC (the SP the context
++ * came in with) and SP below the SVC stack reserve, 8-byte aligned; CPSR for system mode,
++ * Thumb if the entry address is odd; r0-r12 and lr zeroed. SP (r13) and the coprocessor
++ * context are not written here, as in the asm. */
++void OS_InitContext(OSContext *context, u32 newpc, u32 newsp)
++{
++    context->pc_plus4 = newpc + 4;
++
++#ifdef SDK_CONTEXT_HAS_SP_SVC
++    context->sp_svc = newsp;
++    newsp -= HW_SVC_STACK_SIZE;
++#endif
++
++    if (newsp & 4) {
++        newsp -= 4;
++    }
++    context->sp = newsp;
++
++    context->cpsr = (newpc & 1) ? (HW_PSR_SYS_MODE | HW_PSR_THUMB_STATE)
++                                : (HW_PSR_SYS_MODE | HW_PSR_ARM_STATE);
++
++    {
++        int i;
++        for (i = 0; i < 13; i++) {
++            context->r[i] = 0;
++        }
++    }
++    context->lr = 0;
++}
++
++/* FALSE: "saved, now switch". The port records which machine thread plays this context.
++ * When the thread is resumed, OS_LoadContext returns in it, which is where the asm's
++ * "resumed" return value 1 would have come back. The CPU and coprocessor state of the
++ * switched-away thread is saved by the port at switch time (port_thread.c, HandOver). */
++BOOL OS_SaveContext(OSContext *context)
++{
++    return NitroPort_SaveContext(context);
++}
++
++/* Returns when the caller is switched back to (see OS_SaveContext). The coprocessor state of the
++ * thread that is resumed is restored by the port at switch time (HandOver), not here: restoring
++ * it before the switch would overwrite the running thread's coprocessor state before it is saved. */
++void OS_LoadContext(OSContext *context)
++{
++    NitroPort_LoadContext(context);
++}
++#else
+ asm void OS_InitContext(register OSContext *context, register u32 newpc, register u32 newsp) {
+     add newpc, newpc, #4
+     str newpc, [context, #OS_CONTEXT_PC_PLUS4]
+@@ -94,3 +146,4 @@ asm void OS_LoadContext(register OSContext *context) {
+ 
+     subs pc, lr, #4
+ }
++#endif
+-- 
+2.43.0
+
