@@ -1,0 +1,182 @@
+From 36a0a84d30c26ae6c95b9087125118bd34f4daf8 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 04:12:08 +0000
+Subject: [PATCH] gcc: fixes for unnamed parameter, duplicate CRC headers,
+ OS_IrqHandler prototype and PXI tag (SDK_PORT_3DS)
+
+Four GCC-only fixes that stop the port's host32 build from failing. The port
+compiles with gcc-10 (the make log shows `gcc-10 -std=gnu99 ... -m32
+-malign-double`); the survey tool uses gcc 13, which accepts some of these
+and so did not show them. Every hunk is guarded by SDK_PORT_3DS, and the DS
+text is unchanged (identity proof below).
+
+1. lib/NitroSDK/src/snd/SND_command.c:230
+   GCC 10: "error: parameter name omitted" on
+   `void PxiFifoCallback(PXIFifoTag tag, u32 data, BOOL) {`.
+   MWCC accepts an unnamed parameter in a definition. Under the macro the
+   third parameter is named `unused`; the `#pragma unused (tag)` line stays.
+   The DS branch is the original line.
+
+2. lib/NitroSDK/include/MATH_crc.h:12-40 (and lib/include/nitro/math/crc.h)
+   GCC 10: "redefinition of 'struct MATHCRC8Table'" (also 16 and 32), then
+   "conflicting types" for MATH_CalcCRC16CCITT, MATHi_CRC8Update,
+   MATHi_CRC16InitTable and others, and "redefinition" of the static inline
+   MATH_CRC16InitTable. MWCC accepts the repeated identical definitions.
+   MATH_crc.c, the SDK's own source, includes the public nitro/math/crc.h, so
+   under the macro the flat header includes that one and does not repeat the
+   typedefs, structs, MATH_CRC16_CCITT_POLY or the static inline. The
+   prototypes stay in both builds: they are compatible once the struct is
+   defined once, and MATH_CalcCRC8/16/32 and MATHi_CRC32* exist only here.
+   The DS branch is the original text.
+
+3. lib/include/nitro/os/irqHandler.h:6 and lib/NitroSDK/src/os/os_irqHandler.c:36
+   GCC 10: "error: too few arguments to function 'OS_IrqHandler'" at
+   3ds_port/nitro/src/port_os.c:60, which calls OS_IrqHandler(). The DS
+   prototype is `register OSIrqMask irq`, but that parameter is only an alias
+   for r0 inside the DS asm (os_irqHandler.c:61); the C version never reads
+   it. Under the macro the prototype and the C definition are `(void)`, which
+   matches OS_irqHandler.h:17. The DS prototype and asm are unchanged.
+   tests/sdk/irq_handler now calls OS_IrqHandler() (call syntax only; the
+   10 checks are unchanged).
+
+4. lib/include/nitro/pxi/fifo_shared.h:40
+   GCC 10: "'PXI_FIFO_TAG_CTRDG_PHI' undeclared" and "array index in
+   initializer not of integer type" at 3ds_port/nitro/src/pxi.c:58. Under the
+   macro, PXI_FIFO_TAG_CTRDG_PHI follows PXI_FIFO_TAG_CTRDG_Ex (16), so it is
+   17; PXI_MAX_FIFO_TAG stays 32. The DS enum has no new member.
+
+Identity proof (gcc-10 -E -P -m32 -malign-double, the survey defines, CFLAGS
+and include order minus -DSDK_PORT_3DS, against the unpatched 434eeac): the
+output is byte-identical for SND_command.c, os_irqHandler.c, MATH_crc.c and
+one-header translation units for MATH_crc.h, irqHandler.h and fifo_shared.h.
+With -DSDK_PORT_3DS the outputs differ only in the guarded hunks.
+
+Checks: tools/sdk_compile_survey.py --m32: 270/284 before and after (gcc 13,
+same failing set). With --gcc gcc-10: 268 -> 269/284 (SND_command.c now
+parses). make -k lib (host32, private output dir): the MATH_crc.h,
+SND_command.c, port_os.c:60 and pxi.c:58 errors are gone and no error line is
+new. tests/sdk/gcc_fixes/run.sh: (a) SND_command.c compiles, (b) both CRC
+headers in one TU with the table CRC through both, checked against a bit-by-bit
+reference, (c) PHI == 17 and PXI_MAX_FIFO_TAG == 32, (d) PHI absent without
+the macro. Mutation: PHI = 18 makes (c) fail. tests/sdk/irq_handler: 10 checks,
+0 failed.
+
+Not in this patch (port-side or other SDK mismatches the build still reports):
+mi_memory.c MIi_Cpu* prototypes, port_os.c:315 DC_StoreRange, pxi.c PXI_*
+prototypes, and missing headers (mmap_global.h, dgt/dgt.h, ...).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/include/MATH_crc.h     | 9 +++++++++
+ lib/NitroSDK/src/os/os_irqHandler.c | 3 +--
+ lib/NitroSDK/src/snd/SND_command.c  | 5 +++++
+ lib/include/nitro/os/irqHandler.h   | 6 ++++++
+ lib/include/nitro/pxi/fifo_shared.h | 3 +++
+ 5 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/lib/NitroSDK/include/MATH_crc.h b/lib/NitroSDK/include/MATH_crc.h
+index 4f06fa7..4f89618 100644
+--- a/lib/NitroSDK/include/MATH_crc.h
++++ b/lib/NitroSDK/include/MATH_crc.h
+@@ -3,6 +3,12 @@
+ 
+ #include "nitro/types.h"
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: nitro/math/crc.h, the public header (MATH_crc.c includes it), defines these typedefs, structs,
++// MATH_CRC16_CCITT_POLY and MATH_CRC16InitTable too. GCC 10 rejects the second, identical copy; MWCC accepts
++// repeats. Under the macro this header takes them from the public one and keeps only the prototypes below.
++#include <nitro/math/crc.h>
++#else
+ typedef u8 MATHCRC8Context;
+ typedef u16 MATHCRC16Context;
+ typedef u32 MATHCRC32Context;
+@@ -20,6 +26,7 @@ struct MATHCRC16Table {
+ struct MATHCRC32Table {
+     u32 table[256];
+ };
++#endif
+ 
+ u32 MATH_CalcCRC32(const struct MATHCRC32Table *table, const void *data, u32 dataLength);
+ void MATHi_CRC32UpdateRev(const struct MATHCRC32Table *table, MATHCRC32Context *context, const void *input, u32 length);
+@@ -37,9 +44,11 @@ void MATHi_CRC16InitTable(struct MATHCRC16Table *table, u16 poly);
+ void MATHi_CRC8Update(const struct MATHCRC8Table *table, MATHCRC8Context *context, const void *input, u32 length);
+ void MATHi_CRC8InitTable(struct MATHCRC8Table *table, u8 poly);
+ 
++#ifndef SDK_PORT_3DS
+ static inline void MATH_CRC16InitTable(struct MATHCRC16Table * table)
+ {
+     MATHi_CRC16InitTable(table, MATH_CRC16_CCITT_POLY);
+ }
++#endif
+ 
+ #endif
+diff --git a/lib/NitroSDK/src/os/os_irqHandler.c b/lib/NitroSDK/src/os/os_irqHandler.c
+index 3824973..384b83b 100644
+--- a/lib/NitroSDK/src/os/os_irqHandler.c
++++ b/lib/NitroSDK/src/os/os_irqHandler.c
+@@ -33,11 +33,10 @@ extern void NitroPort_IrqThreadSwitch(void);
+ // nothing happens unless IME is on and an enabled interrupt is pending; the least significant
+ // pending flag has the highest priority, is acknowledged, and its OS_IRQTable handler runs; then
+ // the thread switch runs. The early exits skip the thread switch, as the asm's `ldmeqia sp!, {pc}` do.
+-void OS_IrqHandler(OSIrqMask irq) {
++void OS_IrqHandler(void) {
+     u32 pending;
+     u32 bit;
+ 
+-    (void)irq;
+     if (reg_OS_IME == 0) {
+         return;
+     }
+diff --git a/lib/NitroSDK/src/snd/SND_command.c b/lib/NitroSDK/src/snd/SND_command.c
+index ba5de76..96e3085 100644
+--- a/lib/NitroSDK/src/snd/SND_command.c
++++ b/lib/NitroSDK/src/snd/SND_command.c
+@@ -227,7 +227,12 @@ s32 SND_CountWaitingCommand(void) {
+     return SND_CMD_COUNT - SND_CountFreeCommand() - SND_CountReservedCommand();
+ }
+ 
++#ifdef SDK_PORT_3DS
++// GCC 10 (the port's compiler) rejects an unnamed parameter in a definition; MWCC does not.
++void PxiFifoCallback(PXIFifoTag tag, u32 data, BOOL unused) {
++#else
+ void PxiFifoCallback(PXIFifoTag tag, u32 data, BOOL) {
++#endif
+ #pragma unused (tag)
+     OSIntrMode oldirq = OS_DisableInterrupts();
+     SNDi_CallAlarmHandler((s32)data);
+diff --git a/lib/include/nitro/os/irqHandler.h b/lib/include/nitro/os/irqHandler.h
+index 9dc0823..3f05f24 100644
+--- a/lib/include/nitro/os/irqHandler.h
++++ b/lib/include/nitro/os/irqHandler.h
+@@ -3,7 +3,13 @@
+ 
+ #include <nitro/os/common/interrupt_shared.h>
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: the port calls OS_IrqHandler() with no argument (3ds_port/nitro/src/port_os.c). The OSIrqMask
++// in the DS build is only an alias for r0 inside the asm (os_irqHandler.c), not an input. Same as OS_irqHandler.h.
++void OS_IrqHandler(void);
++#else
+ void OS_IrqHandler(register OSIrqMask irq);
++#endif
+ void OS_IrqHandler_ThreadSwitch(void);
+ 
+ #endif //NITRO_OS_IRQHANDLER_H
+diff --git a/lib/include/nitro/pxi/fifo_shared.h b/lib/include/nitro/pxi/fifo_shared.h
+index b8e457b..2ae0c6c 100644
+--- a/lib/include/nitro/pxi/fifo_shared.h
++++ b/lib/include/nitro/pxi/fifo_shared.h
+@@ -37,6 +37,9 @@ typedef enum {
+     PXI_FIFO_TAG_CARD,                 // Card
+     PXI_FIFO_TAG_WVR,                  // Control driving wireless library
+     PXI_FIFO_TAG_CTRDG_Ex,             // Cartridge Ex
++#ifdef SDK_PORT_3DS
++    PXI_FIFO_TAG_CTRDG_PHI,            // Cartridge PHI (the port's virtual ARM7 names it, 3ds_port/nitro/src/pxi.c)
++#endif
+     PXI_MAX_FIFO_TAG = 32              // MAX FIFO TAG
+ } PXIFifoTag;
+ 
+-- 
+2.43.0
+

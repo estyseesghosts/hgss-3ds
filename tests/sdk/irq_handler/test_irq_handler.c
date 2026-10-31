@@ -27,27 +27,27 @@ int main(void) {
     if (io != (void *)0x04000000) { printf("cannot map the I/O page\n"); return 2; }
     OS_IRQTable[0] = h0; OS_IRQTable[1] = h1; OS_IRQTable[2] = h2; OS_IRQTable[3] = h3; OS_IRQTable[31] = h31;
 
-    setup(0, 0xFF, 0xFF); OS_IrqHandler(0);
+    setup(0, 0xFF, 0xFF); OS_IrqHandler();
     CHECK(nlog == 0 && reg_OS_IF == 0xFF, "IME off: nothing happens, IF untouched");
 
-    setup(1, 0x00, 0xFF); OS_IrqHandler(0);
+    setup(1, 0x00, 0xFF); OS_IrqHandler();
     CHECK(nlog == 0 && reg_OS_IF == 0xFF, "nothing enabled: nothing happens");
 
-    setup(1, 0x0F, 0xF0); OS_IrqHandler(0);
+    setup(1, 0x0F, 0xF0); OS_IrqHandler();
     CHECK(nlog == 0 && reg_OS_IF == 0xF0, "pending but not enabled: nothing happens");
 
-    setup(1, 0x06, 0x07); OS_IrqHandler(0);
+    setup(1, 0x06, 0x07); OS_IrqHandler();
     CHECK(nlog == 2 && log_[0] == 1 && log_[1] == 1000, "lowest enabled+pending (bit 1) runs, then the thread switch");
     CHECK(reg_OS_IF == 0x05, "only the serviced flag is cleared (IF %x)", (unsigned)reg_OS_IF);
 
-    OS_IrqHandler(0);
+    OS_IrqHandler();
     CHECK(nlog == 4 && log_[2] == 2 && log_[3] == 1000, "next call services bit 2");
     CHECK(reg_OS_IF == 0x01, "IF after second service %x", (unsigned)reg_OS_IF);
 
-    setup(1, 0x80000001u, 0x80000000u); OS_IrqHandler(0);
+    setup(1, 0x80000001u, 0x80000000u); OS_IrqHandler();
     CHECK(nlog == 2 && log_[0] == 31 && log_[1] == 1000 && reg_OS_IF == 0, "bit 31 works");
 
-    setup(1, 0x0F, 0x0F); OS_IrqHandler(0);
+    setup(1, 0x0F, 0x0F); OS_IrqHandler();
     CHECK(log_[0] == 0, "bit 0 has the highest priority");
 
     setup(1, 0x03, 0x01); nlog = 0; OS_IrqHandler_ThreadSwitch();
