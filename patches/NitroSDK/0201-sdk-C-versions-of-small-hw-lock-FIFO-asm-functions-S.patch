@@ -1,0 +1,453 @@
+From 385de0891fc1e943db077be1321b702dc0941f4d Mon Sep 17 00:00:00 2001
+From: impl <impl@invalid>
+Date: Sat, 31 Oct 2026 02:34:19 +0000
+Subject: [PATCH] sdk: C versions of small hw/lock/FIFO asm functions
+ (SDK_PORT_3DS)
+
+Eight HGSS NitroSDK files hold MWCC asm that GCC cannot compile. Each
+function gets a C version under #ifdef SDK_PORT_3DS. The asm stays
+unchanged under #else, so the DS build compiles the same text. The patch
+only adds lines. Cross-checked against Platinum patch series 0006, 0015
+and 0024 (see below).
+
+Per function (line numbers in the pinned tree):
+
+- OsCountZeroBits, os/os_vram_exclusive_clz.c:9-12. clz r0, r0 gives the
+  count of leading zero bits, 32 for 0. C returns 32 for 0, because
+  __builtin_clz(0) is undefined.
+- OSi_WaitVCount0, os/os_init.c:3-14. Saves IME (32-bit ldr), stores
+  HW_REG_BASE to IME (str r12), spins while VCOUNT (16-bit ldrh) is not 0,
+  then restores the saved IME word. C uses the same accesses and widths.
+- OS_Halt, os/os_terminate_proc.c:4-9 (ARM9 only). mcr p15, 0, r0, c7,
+  c0, 4 is wait-for-interrupt. C calls NitroPort_Halt, which runs a frame
+  and takes V-blank, so OS_Halt returns as the DS does after an interrupt.
+- VENEER_SVC_WaitByLoop, os/os_spin_lock_id.c:34-37 (ARM7 only). A tail
+  call to SVC_WaitByLoop.
+- OS_UnLockCartridge and OS_UnLockCard, os/os_spin_lock_id.c:50-53 and
+  60-63. Tail calls to OS_UnlockCartridge and OS_UnlockCard with the same
+  argument.
+- OS_GetLockID, os/os_spin_lock_id.c:71-121. Two words of free-ID bits:
+  the first starts at OSi_ANYP_LOCK_ID_START, the second 32 IDs later. It
+  takes the highest set bit (clz) of the first non-empty word, clears it,
+  and returns base + clz. It returns OS_LOCK_ID_ERROR (-3) when both words
+  are empty. C matches; clz is only called on a non-zero word.
+- OS_ReleaseLockID, os/os_spin_lock_id.c:125-137. IDs from START + 32 up
+  use the second word. It sets bit (0x80000000 >> offset). The ARM takes
+  the shift count from the bottom byte of the offset, and a count of 32 or
+  more gives 0, so nothing is freed. C takes the same byte, so the shift is
+  always below 32 (no undefined shift on 64-bit hosts).
+- GX_SendFifo48B and GX_SendFifo64B, gx/gxasm.c:10-20 and 24-32. They read
+  12 or 16 words from pSrc in order (ldmia r0!). They store them with stmia
+  r1 (no writeback) in groups of 3 or 8, so word i goes to pDest + 4 *
+  (i % 3) or pDest + 4 * (i % 8). C stores each word to that address, in
+  the same order.
+- GXi_NopClearFifo128_, gx/g3x_nop_clear_fifo.c:9-47. 128 zero words in
+  groups of four (stmia r0, no writeback). Word i goes to reg + 4 * (i % 4).
+- RtcWaitBusy, rtc/rtc_api.c:379-387, and MicWaitBusy, mic.c:244-252. They
+  poll the lock word while it equals 1. The asm reads the labels gRtcLock
+  and gMicLock, which are gRtcWork.lock (offset 0x0C) and gMicWork.lock
+  (offset 0x04). C reads the struct field, the same word, with a volatile
+  access.
+
+Cross-checked against pokeplatinum-3ds patches/NitroSDK:
+
+- 0006 (C versions): same function names. It disagrees with the HGSS asm
+  in three places. This patch follows the asm.
+  * GX_SendFifo48B and GX_SendFifo64B: 0006 stores every word to one
+    address (*d = s[i]). The asm stores to pDest + 4 * (i % 3) and
+    pDest + 4 * (i % 8). All of these are in the GXFIFO window
+    (0x04000400-0x0400043F), so only the word left at each address after
+    the send differs.
+  * GXi_NopClearFifo128_: 0006 writes all 128 zeros to one address. The
+    asm writes to reg + 4 * (i % 4).
+  * OSi_WaitVCount0: 0006 stores 0 to IME. The asm stores HW_REG_BASE.
+    Bit 0, the IME flag, is clear in both, so the interrupt state is the
+    same. They differ only in the unused upper half of the 32-bit store
+    at 0x0400020A. The asm's 32-bit accesses are kept.
+- 0015 (lock-ID shift on 64-bit hosts): 0015 frees nothing when the
+  offset is 32 or more. The ARM uses the bottom byte of the offset, so an
+  ID whose offset has a low byte below 32 frees a bit. For example 0x160
+  (offset 0x100) frees bit 31 of the second word on the DS. This patch
+  follows the ARM. Valid IDs and OS_LOCK_ID_ERROR (0xFFFD, low byte 0x9D)
+  behave the same as under 0015.
+- 0024 (3D command ports): 0024 changes the callers in g3imm.c to
+  NitroPort_GxDirectWrite, and leaves GX_SendFifo* alone. This patch does
+  not touch g3imm.c. The FIFO sends here are plain stores, as in 0006. So
+  matrix sends from HGSS's g3imm.c still do not reach the port's 3D
+  translator until g3imm.c gets the 0024 treatment, in a separate patch.
+
+Decisions:
+
+- The FIFO sends and the NOP clear use plain stores, not
+  NitroPort_GxFifoWords. g3imm.c stores the opcode as a plain store before
+  the send. A packed-command decoder fed the matrix words without that
+  opcode would run them as commands.
+- NitroPort_Halt is declared locally, as in 0006. The survey include path
+  does not reach 3ds_port/nitro/include.
+- The guard is SDK_PORT_3DS, the pattern in the brief, not 0006's
+  SDK_CW || __MWERKS__. The DS build never defines SDK_PORT_3DS.
+
+Known limit: SDK_ARM7 with SDK_PORT_3DS does not compile. The C bodies
+of OS_UnLockCartridge and OS_UnLockCard sit under the original
+static inline (ARM7 only), which clashes with the header prototype.
+The port builds no NitroSDK ARM7 code.
+
+Checked: the survey (gcc, 64-bit and -m32) parses all eight files, up
+from 147/190 and 152/190 files parsing before the patch to 155/190 and
+160/190. The preprocessed text without SDK_PORT_3DS is identical to the
+pinned tree for all eight files. tests/sdk/small/run.sh passes 54 of 54
+cases.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/gx/g3x_nop_clear_fifo.c    | 13 +++++++
+ src/gx/gxasm.c                 | 32 ++++++++++++++++
+ src/mic.c                      |  9 +++++
+ src/os/os_init.c               | 15 ++++++++
+ src/os/os_spin_lock_id.c       | 68 ++++++++++++++++++++++++++++++++++
+ src/os/os_terminate_proc.c     | 11 ++++++
+ src/os/os_vram_exclusive_clz.c |  8 ++++
+ src/rtc/rtc_api.c              |  9 +++++
+ 8 files changed, 165 insertions(+)
+
+diff --git a/src/gx/g3x_nop_clear_fifo.c b/src/gx/g3x_nop_clear_fifo.c
+index 1cd67d2..2b7969b 100644
+--- a/src/gx/g3x_nop_clear_fifo.c
++++ b/src/gx/g3x_nop_clear_fifo.c
+@@ -6,6 +6,18 @@ void GXi_NopClearFifo128_(register void *reg);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. It stores 128 zero words in groups of four with stmia
++// to the same base (no writeback), so word i goes to reg + 4 * (i % 4). Plain stores.
++void GXi_NopClearFifo128_(void *reg) {
++    vu32 *dst = (vu32 *)reg;
++    int i;
++
++    for (i = 0; i < 128; i++) {
++        dst[i % 4] = 0;
++    }
++}
++#else
+ asm void GXi_NopClearFifo128_(register void *reg) {
+     mov r1, #0
+     mov r2, #0
+@@ -45,4 +57,5 @@ asm void GXi_NopClearFifo128_(register void *reg) {
+     stmia r0, {r1, r2, r3, r12}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/gx/gxasm.c b/src/gx/gxasm.c
+index 84146cb..b9b0ea2 100644
+--- a/src/gx/gxasm.c
++++ b/src/gx/gxasm.c
+@@ -7,6 +7,22 @@ void GX_SendFifo64B(register const void *pSrc, register void *pDest);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. The asm reads 12 words and stores them in groups of
++// three with stmia to the same base (no writeback), so word i goes to pDest + 4 * (i % 3).
++// Those addresses are all in the GXFIFO window. Plain stores, as in Platinum's version: a
++// packed-command decoder must not see these words without their opcode, which the caller
++// stores as a plain store too.
++void GX_SendFifo48B(const void *pSrc, void *pDest) {
++    const u32 *src = (const u32 *)pSrc;
++    vu32 *dst = (vu32 *)pDest;
++    int i;
++
++    for (i = 0; i < 12; i++) {
++        dst[i % 3] = src[i];
++    }
++}
++#else
+ asm void GX_SendFifo48B(register const void *pSrc, register void *pDest) {
+     ldmia r0!, {r2, r3, r12}
+     stmia r1, {r2, r3, r12}
+@@ -18,9 +34,24 @@ asm void GX_SendFifo48B(register const void *pSrc, register void *pDest) {
+     stmia r1, {r2, r3, r12}
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. The asm reads 16 words and stores them in groups of
++// eight with stmia to the same base (no writeback), so word i goes to pDest + 4 * (i % 8).
++// Plain stores, as in GX_SendFifo48B.
++void GX_SendFifo64B(const void *pSrc, void *pDest) {
++    const u32 *src = (const u32 *)pSrc;
++    vu32 *dst = (vu32 *)pDest;
++    int i;
++
++    for (i = 0; i < 16; i++) {
++        dst[i % 8] = src[i];
++    }
++}
++#else
+ asm void GX_SendFifo64B(register const void *pSrc, register void *pDest) {
+     stmdb sp!, {r4, r5, r6, r7, r8}
+     ldmia r0!, {r2, r3, r4, r5, r6, r7, r8, r12}
+@@ -30,4 +61,5 @@ asm void GX_SendFifo64B(register const void *pSrc, register void *pDest) {
+     ldmia sp!, {r4, r5, r6, r7, r8}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/mic.c b/src/mic.c
+index 3f8b8c6..2c4e321 100644
+--- a/src/mic.c
++++ b/src/mic.c
+@@ -241,6 +241,14 @@ void MicGetResultCallback(MICResult result, void *arg) {
+ }
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. Polls the same word: gMicLock is the label of
++// gMicWork.lock (offset 0x04 in MicWork), so the field is read directly.
++void MicWaitBusy(void) {
++    while (gMicWork.lock == 1) {
++    }
++}
++#else
+ asm void MicWaitBusy(void) {
+     ldr r12, =gMicLock
+ @wait:
+@@ -249,4 +257,5 @@ asm void MicWaitBusy(void) {
+     beq @wait
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/os/os_init.c b/src/os/os_init.c
+index f177e3b..83d0b9b 100644
+--- a/src/os/os_init.c
++++ b/src/os/os_init.c
+@@ -1,5 +1,19 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. As the asm does, it saves IME as a 32-bit word,
++// stores HW_REG_BASE to IME (not 0; only bit 0 is defined, and it is clear), waits for
++// VCOUNT to reach 0 with a 16-bit read, and restores the saved IME word.
++void OSi_WaitVCount0(void) {
++    vu32 *ime = (vu32 *)REG_IME_ADDR;
++    u32 saved = *ime;
++
++    *ime = HW_REG_BASE;
++    while (reg_GX_VCOUNT != 0) {
++    }
++    *ime = saved;
++}
++#else
+ asm void OSi_WaitVCount0(void) {
+     mov r12, #HW_REG_BASE
+     ldr r1, [r12, #REG_IME_OFFSET]
+@@ -11,3 +25,4 @@ asm void OSi_WaitVCount0(void) {
+     str r1, [r12, #REG_IME_OFFSET]
+     bx lr
+ }
++#endif
+diff --git a/src/os/os_spin_lock_id.c b/src/os/os_spin_lock_id.c
+index 2261135..3be546e 100644
+--- a/src/os/os_spin_lock_id.c
++++ b/src/os/os_spin_lock_id.c
+@@ -31,10 +31,17 @@ static inline void OSi_WaitByLoop(void) {
+ 
+ #ifdef SDK_ARM7
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC: a tail call, so SVC_WaitByLoop gets the same count.
++void VENEER_SVC_WaitByLoop(s32 count) {
++    SVC_WaitByLoop(count);
++}
++#else
+ asm void VENEER_SVC_WaitByLoop(register s32 count) {
+     ldr ip, =SVC_WaitByLoop
+     bx ip
+ }
++#endif
+ // clang-format on
+ 
+ #endif
+@@ -47,20 +54,34 @@ static inline
+     // Nintendo decided they didn't want to use a define here,
+     // so they made an asm func instead
+     // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC: a tail call to OS_UnlockCartridge.
++s32 OS_UnLockCartridge(u16 lockID) {
++    return OS_UnlockCartridge(lockID);
++}
++#else
+ asm s32 OS_UnLockCartridge(u16 lockID) {
+     ldr r1, =OS_UnlockCartridge
+     bx r1
+ }
++#endif
+ // clang-format on
+ 
+ // For backwards compatibility.
+ // Nintendo decided they didn't want to use a define here,
+ // so they made an asm func instead
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC: a tail call to OS_UnlockCard.
++s32 OS_UnLockCard(u16 lockID) {
++    return OS_UnlockCard(lockID);
++}
++#else
+ asm s32 OS_UnLockCard(u16 lockID) {
+     ldr r1, =OS_UnlockCard
+     bx r1
+ }
++#endif
+ // clang-format on
+ 
+ BOOL OS_TryLockCard(u16 lockID) {
+@@ -68,6 +89,31 @@ BOOL OS_TryLockCard(u16 lockID) {
+ }
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. Two words of free-ID bits: the first holds the IDs
++// from START, the second the IDs from START + 32. The highest set bit is the lowest free ID,
++// and taking it clears the bit. clz gives 32 for an empty word, so __builtin_clz is only
++// called on a non-zero word.
++s32 OS_GetLockID(void) {
++    vu32 *flag = (vu32 *)OSi_ANYP_LOCK_ID_FLAG;
++    u32 base = OSi_ANYP_LOCK_ID_START;
++    int word;
++
++    for (word = 0; word < 2; word++) {
++        u32 bits = *flag;
++
++        if (bits != 0) {
++            u32 n = (u32)__builtin_clz(bits);
++
++            *flag = bits & ~(0x80000000u >> n);
++            return (s32)(base + n);
++        }
++        flag++;
++        base += 32;
++    }
++    return OS_LOCK_ID_ERROR;
++}
++#else
+ asm s32 OS_GetLockID(void) {
+     ldr r3, =OSi_ANYP_LOCK_ID_FLAG;
+     ldr r1, [r3]
+@@ -119,9 +165,30 @@ _ex2:
+     str r2, [r3]
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. IDs from START + 32 up are in the second word. The
++// ARM shifts by the bottom byte of the offset, and a shift of 32 or more gives 0 (nothing is
++// freed). Same here, with the byte taken first, so C never shifts by 32 or more.
++void OS_ReleaseLockID(u16 lockID) {
++    vu32 *flag = (vu32 *)OSi_ANYP_LOCK_ID_FLAG;
++    u32 shift;
++
++    if (lockID >= OSi_ANYP_LOCK_ID_START + 32) {
++        flag++;
++        shift = (u32)lockID - (OSi_ANYP_LOCK_ID_START + 32);
++    } else {
++        shift = (u32)lockID - OSi_ANYP_LOCK_ID_START;
++    }
++    shift &= 0xFF;
++    if (shift < 32) {
++        *flag |= 0x80000000u >> shift;
++    }
++}
++#else
+ asm void OS_ReleaseLockID(register u16 lockID) {
+     ldr r3, =OSi_ANYP_LOCK_ID_FLAG
+     cmp r0, #OSi_ANYP_LOCK_ID_START + 32
+@@ -135,4 +202,5 @@ asm void OS_ReleaseLockID(register u16 lockID) {
+     str r2, [r3]
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/os/os_terminate_proc.c b/src/os/os_terminate_proc.c
+index 547697f..e173ebe 100644
+--- a/src/os/os_terminate_proc.c
++++ b/src/os/os_terminate_proc.c
+@@ -1,9 +1,20 @@
+ #include <nitro.h>
+ 
+ #ifdef SDK_ARM9
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. The DS CPU sleeps until an interrupt (CP15 wait for
++// interrupt); the port decides what that means in NitroPort_Halt (3ds_port/nitro/src/
++// port_os.c). OS_Halt returns after it, as the DS does when the interrupt arrives.
++void NitroPort_Halt(void);
++
++void OS_Halt(void) {
++    NitroPort_Halt();
++}
++#else
+ asm void OS_Halt(void) {
+     mov r0, #0
+     mcr p15, 0, r0, c7, c0, 4
+     bx lr
+ }
+ #endif
++#endif
+diff --git a/src/os/os_vram_exclusive_clz.c b/src/os/os_vram_exclusive_clz.c
+index 9245a2d..f7f6d47 100644
+--- a/src/os/os_vram_exclusive_clz.c
++++ b/src/os/os_vram_exclusive_clz.c
+@@ -6,8 +6,16 @@ u32 OsCountZeroBits(register u32 bitmap);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. clz of 0 is 32 on the ARM; __builtin_clz(0) is
++// undefined in C, so 0 is handled here.
++u32 OsCountZeroBits(u32 bitmap) {
++    return bitmap ? (u32)__builtin_clz(bitmap) : 32;
++}
++#else
+ asm u32 OsCountZeroBits(register u32 bitmap) {
+     clz r0, r0
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/rtc/rtc_api.c b/src/rtc/rtc_api.c
+index e249f19..ab0c2b9 100644
+--- a/src/rtc/rtc_api.c
++++ b/src/rtc/rtc_api.c
+@@ -376,6 +376,14 @@ void RtcGetResultCallback(RTCResult result, void *arg) {
+ }
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// C version of the asm below, for GCC. Polls the same word: gRtcLock is the label of
++// gRtcWork.lock (offset 0x0C in RtcWork), so the field is read directly.
++void RtcWaitBusy(void) {
++    while (gRtcWork.lock == 1) {
++    }
++}
++#else
+ asm void RtcWaitBusy(void) {
+     ldr r12, =gRtcLock
+ @wait:
+@@ -384,4 +392,5 @@ asm void RtcWaitBusy(void) {
+     beq @wait
+     bx lr
+ }
++#endif
+ // clang-format on
+-- 
+2.43.0
+
