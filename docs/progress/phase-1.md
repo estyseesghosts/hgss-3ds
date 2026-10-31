@@ -1,8 +1,8 @@
 # Phase 1 progress
 
 Status: **in progress, one hang left.** The SDK patch stack is now **39 patches**; `make test` is green,
-`libnitro.a` builds with zero errors, and the vendored suites run: `pak` 120 checks, `test_nitro` 702,
-`test_fs_pak` 120, `test_threads` 68 — all with 0 failures. The single open exit criterion is
+`libnitro.a` builds with zero errors, and the vendored suites run in order: `pak-backed NitroFS` 120
+checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 — all with 0 failures. The single open exit criterion is
 `test_arm7`, which passes backup/RTC/power/touch and then **hangs in `test_sound`**. The DS-side gate has
 not been rerun since the stack grew past the last passing run.
 

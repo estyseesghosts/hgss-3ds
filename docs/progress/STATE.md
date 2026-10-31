@@ -36,16 +36,28 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Vendored suites | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` | **pak 120, test_nitro 702, test_fs_pak 120, test_threads 68 — all 0 failed; `test_arm7` hangs in `test_sound`** |
 | `make port-tests` | `make port-tests` | real target now (runs the three subprojects); **fails on the same `test_arm7` hang** |
 | Save layout | `make layout` | 0 differences in 804 values (last run before the 39-patch stack; layout patches did not change) |
-| DS-side gate | [wiki/Daily-Workflow.md](../wiki/Daily-Workflow.md#the-ds-side-gate) | **not passed at 39 patches**. Last full pass: 10 patches. The run now gets past `sub/` and fails at `tools/alarm-partition` pins, fixed in 1601 — rerun owed. |
+| DS-side gate | [wiki/Daily-Workflow.md](../wiki/Daily-Workflow.md#the-ds-side-gate) | **not passed at 39 patches**. Last full pass: 10 patches. At 34 patches it got past `sub/` and stopped at the `tools/alarm-partition` header pins; 1601 re-pins them, so a rerun at 39 is owed and is the only strong proof. |
 
-### Vendored suites: exact numbers
+### Vendored suites: what has actually run at 39 patches
 
-`pak: 53 checks` (its own binary) and `pak-backed NitroFS: 120 checks` · `test_nitro: 702` ·
-`test_fs_pak: 120` · `test_threads: 68` · `test_arm7`: backup/RTC/power/touch pass, **hangs in
-`test_sound`** · `test_sound_chip: 51` · `test_sound_sequence: 12` · `test_render: 126` ·
-`test_gx3d: 583` · `test_gx3d_plumbing: 53` · `test_vram_transfer: 16` · `test_upscale: 160` ·
-`test_xbrz: 266` · `test_shadow: 375` · `test_lowermenu: 93` · `test_options: 49` ·
-`nitrosystem: 96`.
+Verified in `/work/v18-test.log` and `/work/v19-test.log` (in this order; the run stops at the first
+failure):
+
+| Suite | Result |
+| --- | --- |
+| `pak-backed NitroFS` | 120 checks, 0 failed |
+| `test_nitro` | 702 checks, 0 failed |
+| `test_fs_pak` | 120 checks, 0 failed |
+| `test_threads` | 68 checks, 0 failed |
+| `test_arm7` | backup, RTC, power and touch pass; **hangs in `test_sound`** |
+
+**Not yet run at 39 patches** (the suite order stops at `test_arm7`): `test_sound_chip`,
+`test_sound_sequence`, `test_render`, `test_gx3d`, `test_gx3d_plumbing`, `test_vram_transfer`,
+`test_upscale`, `test_xbrz`, `test_shadow`, `test_lowermenu`, `test_options` and `nitrosystem`. Earlier
+sessions reported individual passes for several of them before the last patch wave (numbers in the
+agent notes), but that is not a 39-patch run — treat them as "expected to pass, unverified". The
+`nitrosystem` subproject also needs the `nns_all_headers.c` unity-file conflict fixed first
+(see the next actions).
 
 ### What still fails, and why
 
