@@ -56,6 +56,14 @@ int main(void) {
     reg_OS_IME = 1;
     EQ("write lands in the array", *(volatile u16 *)(NitroPort_IoReg + 0x208), 1);
 
+    /* lib/include/nitro/mi/dma.h spells two registers as absolute addresses (0x04000b8, 0x04000e0)
+     * instead of HW_REG_BASE + offset, so the mmap override does not reach them without its own fix
+     * (patch 1302). MIi_CheckAnotherAutoDMA and MIi_DmaClearSource use them. */
+    EQ("DMA0CNT literal follows", (u32)REG_ADDR_DMA0CNT, U(NitroPort_IoReg) + 0x0b8);
+    EQ("DMA0 clear source follows", (u32)REG_ADDR_DMA0_CLR_DATA, U(NitroPort_IoReg) + 0x0e0);
+    *(volatile u32 *)(u32)REG_ADDR_DMA0_CLR_DATA = 0x12345678;
+    EQ("DMA0 clear write lands in the array", *(volatile u32 *)(NitroPort_IoReg + 0x0e0), 0x12345678);
+
     printf("memory_map: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

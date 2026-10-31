@@ -1,20 +1,17 @@
-/*
- * Host test for the SDK_PORT_3DS C versions of OS_InitContext, OS_SaveContext and OS_LoadContext
+/* Host test for the SDK_PORT_3DS C versions of OS_InitContext, OS_SaveContext and OS_LoadContext
  * (lib/NitroSDK/src/os/os_context.c), and of CP_SaveContext and CPi_RestoreContext
  * (lib/NitroSDK/src/cp/CP_context.c). Built and run by run.sh. Synthetic values only.
  *
- * The code addresses the DS registers absolutely (HW_IOREG 0x04000000 plus offset), so the
- * first 4 KB of that page is mapped at the same address with mmap(MAP_FIXED). The port's thread
- * switch (NitroPort_SaveContext, NitroPort_LoadContext) and the divider/sqrt hooks
- * (CPi_PortUpdateDiv, CPi_PortUpdateSqrt) are stubs that count calls and record what they see.
+ * Under SDK_PORT_3DS the registers live in the port's arrays (patch 1301); run.sh links
+ * tests/sdk/port_memory.c for them. The port's thread switch (NitroPort_SaveContext,
+ * NitroPort_LoadContext) and the divider/sqrt hooks (CPi_PortUpdateDiv, CPi_PortUpdateSqrt)
+ * are stubs that count calls and record what they see.
  */
 #include <nitro.h>
-#include <sys/mman.h>
 
 int printf(const char *, ...); /* lib/include shadows the system stdio.h; see tests/sdk/os_system */
 void exit(int);
 
-#define IO_BASE 0x04000000u
 #define FIELD_OFF(T, f) ((u32)(unsigned long)&((T *)0)->f)
 
 static int fails, checks;
@@ -73,16 +70,6 @@ void CPi_PortUpdateSqrt(void)
 }
 
 /* ---- helpers ---- */
-static void MapIoPage(void)
-{
-    void *p = mmap((void *)(unsigned long)IO_BASE, 0x1000, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    if (p != (void *)(unsigned long)IO_BASE) {
-        printf("cannot map the I/O page at 0x%08x (got %lx)\n", IO_BASE, (unsigned long)p);
-        exit(2);
-    }
-}
-
 static void SetCp(u16 divCnt, u64 numer, u64 denom, u16 sqrtCnt, u64 sqrtParam)
 {
     reg_CP_DIVCNT = divCnt;
@@ -325,8 +312,6 @@ static void TestCpRestore(void)
 
 int main(void)
 {
-    MapIoPage();
-
     TestContextLayout();
     TestInitContext();
     TestSaveLoad();

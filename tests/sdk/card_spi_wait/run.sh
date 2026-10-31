@@ -19,7 +19,8 @@ trap 'rm -rf "$OUT"' EXIT
 for f in card_spi_wait card_spi_wait_init card_spi_wait_cycles; do
     "$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$ROOT/lib/NitroSDK/src/card/$f.c" -o "$OUT/$f.o"
 done
+"$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$HERE/../port_memory.c" -o "$OUT/port_memory.o"
 "$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$HERE/test_card_spi_wait.c" -o "$OUT/test.o"
-"$GCC" -m32 "$OUT/test.o" "$OUT/card_spi_wait.o" "$OUT/card_spi_wait_init.o" "$OUT/card_spi_wait_cycles.o" \
-    -o "$OUT/test"
+"$GCC" -m32 "$OUT/test.o" "$OUT/port_memory.o" "$OUT/card_spi_wait.o" "$OUT/card_spi_wait_init.o" \
+    "$OUT/card_spi_wait_cycles.o" -o "$OUT/test"
 "$OUT/test"

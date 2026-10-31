@@ -28,9 +28,10 @@ SRC="$ROOT/lib/NitroSDK/src"
 compile "$SRC/os/os_system.c" "$OUT/os_system.o"
 compile "$SRC/os/os_interrupt.c" "$OUT/os_interrupt.o"
 compile "$SRC/os/os_tick.c" "$OUT/os_tick.o"
+compile "$HERE/../port_memory.c" "$OUT/port_memory.o"
 compile "$HERE/test_irq_clear.c" "$OUT/test_irq_clear.o"
-"$GCC" -m32 "$OUT/test_irq_clear.o" "$OUT/os_system.o" "$OUT/os_interrupt.o" "$OUT/os_tick.o" \
-    -o "$OUT/test_irq_clear"
+"$GCC" -m32 "$OUT/test_irq_clear.o" "$OUT/port_memory.o" "$OUT/os_system.o" "$OUT/os_interrupt.o" \
+    "$OUT/os_tick.o" -o "$OUT/test_irq_clear"
 # A missing hook leaves the SDK's busy-wait on the channel spinning, so every run is time-limited.
 timeout 60 "$OUT/test_irq_clear"
 
@@ -38,11 +39,11 @@ for f in mi_dma mi_dma_hblank mi_dma_card mi_dma_gxcommand; do
     compile "$SRC/mi/$f.c" "$OUT/$f.o"
 done
 compile "$HERE/test_dma_hooks.c" "$OUT/test_dma_hooks.o"
-"$GCC" -m32 "$OUT/test_dma_hooks.o" "$OUT/os_system.o" "$OUT/mi_dma.o" "$OUT/mi_dma_hblank.o" \
-    "$OUT/mi_dma_card.o" "$OUT/mi_dma_gxcommand.o" -o "$OUT/test_dma_hooks"
+"$GCC" -m32 "$OUT/test_dma_hooks.o" "$OUT/port_memory.o" "$OUT/os_system.o" "$OUT/mi_dma.o" \
+    "$OUT/mi_dma_hblank.o" "$OUT/mi_dma_card.o" "$OUT/mi_dma_gxcommand.o" -o "$OUT/test_dma_hooks"
 timeout 60 "$OUT/test_dma_hooks"
 
 compile "$SRC/gx/g3x.c" "$OUT/g3x.o"
 compile "$HERE/test_gx_sync.c" "$OUT/test_gx_sync.o"
-"$GCC" -m32 "$OUT/test_gx_sync.o" "$OUT/g3x.o" -o "$OUT/test_gx_sync"
+"$GCC" -m32 "$OUT/test_gx_sync.o" "$OUT/port_memory.o" "$OUT/g3x.o" -o "$OUT/test_gx_sync"
 timeout 60 "$OUT/test_gx_sync"

@@ -1,7 +1,8 @@
 /*
  * Host checks for the SDK_PORT_3DS C versions of small NitroSDK functions that were MWCC asm.
  * Built against the patched tree by run.sh (32-bit, the survey's flags). Synthetic data only:
- * the lock words, IME and VCOUNT are mapped at their DS addresses and filled by the test.
+ * the lock words, IME and VCOUNT live in the port's arrays (patch 1301), linked from
+ * tests/sdk/port_memory.c, and are filled by the test.
  *
  * Covered: OsCountZeroBits, OS_GetLockID, OS_ReleaseLockID, OS_UnLockCartridge, OS_UnLockCard,
  * OS_Halt, OSi_WaitVCount0 (IME restored), GX_SendFifo48B/64B and GXi_NopClearFifo128_ (final
@@ -12,11 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 
-#ifndef MAP_FIXED_NOREPLACE
-#define MAP_FIXED_NOREPLACE 0x100000 /* Linux value */
-#endif
+/* The port's arrays (patch 1301); defined in tests/sdk/port_memory.c. */
+extern unsigned char NitroPort_IoReg[];
+extern unsigned char NitroPort_MainMem[];
 
 /* Prototypes with the NitroSDK types (u32 unsigned int, s32 int, u16 unsigned short). */
 unsigned int OsCountZeroBits(unsigned int bitmap);
@@ -66,15 +66,12 @@ void NitroPort_Halt(void)
     gHaltCalls++;
 }
 
-/* DS addresses the functions use (lib/include/nitro/hw/mmap_shared.h, io_reg.h, spinLock.h). */
-#define HW_MAIN_MEM_ADDR   0x02000000u
-#define HW_MAIN_MEM_LEN    0x00800000u
-#define HW_IOREG_ADDR      0x04000000u
-#define HW_IOREG_LEN       0x00001000u
-#define LOCK_FLAG0 ((volatile uint32_t *)0x027FFFB0u) /* HW_LOCK_ID_FLAG_MAIN */
-#define LOCK_FLAG1 ((volatile uint32_t *)0x027FFFB4u)
-#define REG_IME    ((volatile uint32_t *)0x04000208u)
-#define REG_VCOUNT ((volatile uint16_t *)0x04000006u)
+/* The SDK addresses the lock words in main memory and IME/VCOUNT in the I/O array
+ * (lib/include/nitro/hw/mmap_shared.h, io_reg.h, spinLock.h). */
+#define LOCK_FLAG0 ((volatile uint32_t *)(NitroPort_MainMem + 0x007FFFB0u)) /* HW_LOCK_ID_FLAG_MAIN */
+#define LOCK_FLAG1 ((volatile uint32_t *)(NitroPort_MainMem + 0x007FFFB4u))
+#define REG_IME    ((volatile uint32_t *)(NitroPort_IoReg + 0x208u))
+#define REG_VCOUNT ((volatile uint16_t *)(NitroPort_IoReg + 0x006u))
 #define LOCK_START 0x40 /* OS_MAINP_LOCK_ID_START */
 #define LOCK_ERROR (-3) /* OS_LOCK_ID_ERROR */
 
@@ -85,16 +82,6 @@ static void report(const char *name, int ok)
     printf("%s %s\n", ok ? "PASS" : "FAIL", name);
     if (!ok) {
         gFailures++;
-    }
-}
-
-static void map_at(uintptr_t addr, size_t len)
-{
-    void *p = mmap((void *)addr, len, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (p == MAP_FAILED || (uintptr_t)p != addr) {
-        fprintf(stderr, "cannot map 0x%lx: the test needs the DS addresses free\n", (unsigned long)addr);
-        exit(1);
     }
 }
 
@@ -346,9 +333,6 @@ static void test_fifo_sends(void)
 
 int main(void)
 {
-    map_at(HW_MAIN_MEM_ADDR, HW_MAIN_MEM_LEN);
-    map_at(HW_IOREG_ADDR, HW_IOREG_LEN);
-
     test_count_zero_bits();
     test_lock_id_cases();
     test_lock_id_random();

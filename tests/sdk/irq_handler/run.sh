@@ -17,6 +17,7 @@ print(" ".join(s.DEFINES + [f for f in s.CFLAGS if f != "-fgnu89-inline"] + s.in
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/irq_handler_test.XXXXXX")
 trap 'rm -rf "$OUT"' EXIT
 "$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$ROOT/lib/NitroSDK/src/os/os_irqHandler.c" -o "$OUT/os_irqHandler.o"
+"$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$HERE/../port_memory.c" -o "$OUT/port_memory.o"
 "$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$HERE/test_irq_handler.c" -o "$OUT/test.o"
-"$GCC" -m32 "$OUT/test.o" "$OUT/os_irqHandler.o" -o "$OUT/test"
+"$GCC" -m32 "$OUT/test.o" "$OUT/port_memory.o" "$OUT/os_irqHandler.o" -o "$OUT/test"
 "$OUT/test"

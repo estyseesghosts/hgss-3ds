@@ -1,7 +1,9 @@
 /* Host test for the SDK_PORT_3DS CARD_SpiWait stub (lib/NitroSDK/src/card/card_spi_wait*.c).
- * The MI registers (reg_MI_MCCNT0 at 0x04000000 + 0x1A0, reg_MI_MCD0 at + 0x1A2) live in a PROT_NONE page here.
- * Any access to that page faults; the handler exits 3, so a register access fails run.sh. A forked child proves
- * the page really faults, so a pass means no access happened, not that the guard was missing.
+ * The MI registers (reg_MI_MCCNT0 at 0x04000000 + 0x1A0, reg_MI_MCD0 at + 0x1A2) live in the
+ * port's NitroPort_IoReg array under SDK_PORT_3DS (patch 1301; the array is linked from
+ * tests/sdk/port_memory.c). The whole array is mprotect(PROT_NONE) here, so any access to a
+ * register faults; the handler exits 3, so a register access fails run.sh. A forked child proves
+ * the guard is live, so a pass means no access happened, not that the guard was missing.
  * The stub must not link anything but OS_GetLockID and the tick, so those are the only stubs needed here. */
 #include <signal.h>
 #include <stdint.h>
@@ -13,7 +15,8 @@
 
 int printf(const char *, ...); /* lib/include shadows the system headers; see tests/sdk/os_system */
 
-#define MI_PAGE_BASE 0x04000000u
+#define IO_REGS      ((uintptr_t)NitroPort_IoReg)
+#define IO_REGS_SIZE 0x00110000u
 
 CardSpiWait gCardSpiWait;
 u16 gCardSpiLockId = 0xFFFD;
@@ -45,9 +48,8 @@ int main(void) {
     int i, ret, nonzero, s1, s2, status;
     pid_t pid;
 
-    if (mmap((void *)MI_PAGE_BASE, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0)
-            != (void *)MI_PAGE_BASE) {
-        printf("card_spi_wait: could not map the guard page\n");
+    if (mprotect((void *)IO_REGS, IO_REGS_SIZE, PROT_NONE) != 0) {
+        printf("card_spi_wait: could not guard the I/O array\n");
         return 2;
     }
     signal(SIGSEGV, on_fault);
@@ -64,8 +66,8 @@ int main(void) {
     }
     waitpid(pid, &status, 0);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 3, "guard page faults on a register read");
-    CHECK((uintptr_t)&reg_MI_MCCNT0 >= MI_PAGE_BASE && (uintptr_t)&reg_MI_MCCNT0 < MI_PAGE_BASE + 4096,
-          "reg_MI_MCCNT0 lies in the guard page");
+    CHECK((uintptr_t)&reg_MI_MCCNT0 >= IO_REGS && (uintptr_t)&reg_MI_MCCNT0 < IO_REGS + IO_REGS_SIZE,
+          "reg_MI_MCCNT0 lies in the guarded I/O array");
 
     /* CARD_SpiWaitInit: wait defaults and the lock id, nothing else. */
     gCardSpiWait.dummyWait = gCardSpiWait.writeWait = gCardSpiWait.readWait = 0xEE;

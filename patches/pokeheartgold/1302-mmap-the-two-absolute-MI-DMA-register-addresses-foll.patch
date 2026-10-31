@@ -1,0 +1,73 @@
+From 82b57e74a6c1ef1719972b30da6d040bb51a58a2 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 04:25:42 +0000
+Subject: [PATCH] mmap: the two absolute MI DMA register addresses follow
+ HW_REG_BASE (SDK_PORT_3DS)
+
+lib/include/nitro/mi/dma.h and the flat lib/NitroSDK/include/MI_dma.h spell
+REG_ADDR_DMA0CNT (0x04000b8) and REG_ADDR_DMA0_CLR_DATA (0x04000e0) as absolute
+DS addresses instead of HW_REG_BASE + offset. Patch 1301 remaps HW_IOREG, and every
+macro that derives from it follows, but these two do not: under SDK_PORT_3DS they
+still point at 0x04000000, where the port has no mapping, so MIi_CheckAnotherAutoDMA
+(mi_dma.c:247) and MIi_DmaClearSource (the inline in dma.h) read or write unmapped
+memory. The port_hooks DMA test segfaulted on exactly that.
+
+Under the macro both headers derive the two addresses from HW_REG_BASE. The flat
+header did not include the memory map, so it includes <nitro/hw/mmap.h> on the port
+branch only. The DS branch is the original pair of literals.
+
+Verified: tests/sdk/memory_map now checks both addresses and that a write through
+REG_ADDR_DMA0_CLR_DATA lands at NitroPort_IoReg + 0x0e0 (35 checks, 0 failed;
+32 before). tests/sdk/port_hooks passes again (it crashed with signal 11 before).
+gcc -E -P without SDK_PORT_3DS is byte-identical for both headers against 1301.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/include/MI_dma.h | 7 +++++++
+ lib/include/nitro/mi/dma.h    | 8 ++++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/lib/NitroSDK/include/MI_dma.h b/lib/NitroSDK/include/MI_dma.h
+index 817d5b0..49e039b 100644
+--- a/lib/NitroSDK/include/MI_dma.h
++++ b/lib/NitroSDK/include/MI_dma.h
+@@ -15,8 +15,15 @@ typedef void (*MIDmaCallback)(void *);
+ 
+ #define MI_CNT_CARDRECV32(size) (MI_DMA_ENABLE | MI_DMA_TIMING_CARD | MI_DMA_SRC_FIX | MI_DMA_DEST_INC | MI_DMA_32BIT_BUS | ((size) / 4))
+ 
++#ifdef SDK_PORT_3DS
++#include <nitro/hw/mmap.h>
++// SDK_PORT_3DS: see lib/include/nitro/mi/dma.h; the flat header did not include the memory map.
++#define REG_ADDR_DMA0CNT       (HW_REG_BASE + 0x0b8)
++#define REG_ADDR_DMA0_CLR_DATA (HW_REG_BASE + 0x0e0)
++#else
+ #define REG_ADDR_DMA0CNT       0x40000b8
+ #define REG_ADDR_DMA0_CLR_DATA 0x40000e0
++#endif
+ 
+ #define MI_CNT_CLEAR32(size)    (0x85000000 | ((size) / 4))
+ #define MI_CNT_CLEAR32_IF(size) (0xc5000000 | ((size) / 4))
+diff --git a/lib/include/nitro/mi/dma.h b/lib/include/nitro/mi/dma.h
+index 0721267..553a5ec 100644
+--- a/lib/include/nitro/mi/dma.h
++++ b/lib/include/nitro/mi/dma.h
+@@ -19,8 +19,16 @@ typedef void (*MIDmaCallback)(void *);
+ 
+ #define MI_CNT_CARDRECV32(size) (MI_DMA_ENABLE | MI_DMA_TIMING_CARD | MI_DMA_SRC_FIX | MI_DMA_DEST_INC | MI_DMA_32BIT_BUS | ((size) / 4))
+ 
++#ifdef SDK_PORT_3DS
++// SDK_PORT_3DS: these two are spelled as absolute DS addresses here, not as HW_REG_BASE + offset,
++// so the memory-map override in nitro/hw/ARM9/mmap.h does not reach them. Derive them from
++// HW_REG_BASE under the port so they land in NitroPort_IoReg (patch 1301).
++#define REG_ADDR_DMA0CNT       (HW_REG_BASE + 0x0b8)
++#define REG_ADDR_DMA0_CLR_DATA (HW_REG_BASE + 0x0e0)
++#else
+ #define REG_ADDR_DMA0CNT       0x40000b8
+ #define REG_ADDR_DMA0_CLR_DATA 0x40000e0
++#endif
+ 
+ #define MI_CNT_CLEAR32(size)    (0x85000000 | ((size) / 4))
+ #define MI_CNT_CLEAR32_IF(size) (0xc5000000 | ((size) / 4))
+-- 
+2.43.0
+

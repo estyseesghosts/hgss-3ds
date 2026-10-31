@@ -1,8 +1,8 @@
 /* Host test for the SDK_PORT_3DS C OS_IrqHandler / OS_IrqHandler_ThreadSwitch
- * (lib/NitroSDK/src/os/os_irqHandler.c). The DS I/O registers are mapped as plain RAM at their
- * real addresses, as the port does. NitroPort_IrqThreadSwitch is stubbed to record call order. */
+ * (lib/NitroSDK/src/os/os_irqHandler.c). The registers live in the port's arrays under
+ * SDK_PORT_3DS (patch 1301); run.sh links tests/sdk/port_memory.c for them.
+ * NitroPort_IrqThreadSwitch is stubbed to record call order. */
 #include <nitro.h>
-#include <sys/mman.h>
 
 int printf(const char *, ...); /* lib/include shadows the system headers; see tests/sdk/fx */
 
@@ -22,9 +22,6 @@ static void setup(u32 ime, u32 ie, u32 iflag) {
 }
 
 int main(void) {
-    void *io = mmap((void *)0x04000000, 4096, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (io != (void *)0x04000000) { printf("cannot map the I/O page\n"); return 2; }
     OS_IRQTable[0] = h0; OS_IRQTable[1] = h1; OS_IRQTable[2] = h2; OS_IRQTable[3] = h3; OS_IRQTable[31] = h31;
 
     setup(0, 0xFF, 0xFF); OS_IrqHandler();

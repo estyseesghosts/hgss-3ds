@@ -23,11 +23,13 @@ cc() { "$GCC" -m32 -malign-double "${FLAGS[@]}" -c "$1" -o "$2"; }
 
 cc "$ROOT/lib/NitroSDK/src/cp/CP_context.c" "$OUT/CP_context.o"
 cc "$ROOT/lib/NitroSDK/src/os/os_context.c" "$OUT/os_context.o"
+cc "$HERE/../port_memory.c" "$OUT/port_memory.o"
 cc "$HERE/test_context.c" "$OUT/test_context.o"
-"$GCC" -m32 "$OUT/test_context.o" "$OUT/CP_context.o" "$OUT/os_context.o" -o "$OUT/test_context"
+"$GCC" -m32 "$OUT/test_context.o" "$OUT/port_memory.o" "$OUT/CP_context.o" "$OUT/os_context.o" \
+    -o "$OUT/test_context"
 "$OUT/test_context"
 
 cc "$ROOT/lib/NitroSDK/src/fx/fx_cp.c" "$OUT/fx_cp.o"
 cc "$HERE/test_fx_cp.c" "$OUT/test_fx_cp.o"
-"$GCC" -m32 "$OUT/test_fx_cp.o" "$OUT/fx_cp.o" -o "$OUT/test_fx_cp"
+"$GCC" -m32 "$OUT/test_fx_cp.o" "$OUT/port_memory.o" "$OUT/fx_cp.o" -o "$OUT/test_fx_cp"
 "$OUT/test_fx_cp"

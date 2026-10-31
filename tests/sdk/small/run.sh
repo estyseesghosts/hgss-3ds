@@ -65,11 +65,16 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 # Link-time stubs are in the driver; the rtc and mic objects are not linked.
+# The port's memory arrays back HW_* under SDK_PORT_3DS (patch 1301); the SDK objects link against them.
+if ! "$CC" -c $M32 -std=gnu99 "$HERE/../port_memory.c" -o "$WORK/port_memory.o"; then
+    echo "sdk small: port_memory.c does not compile" >&2
+    exit 1
+fi
 if ! "$CC" -c $M32 -std=gnu99 -Wall -Werror $DEFS "$HERE/test_small.c" -o "$WORK/test_small.o"; then
     echo "sdk small: test driver does not compile" >&2
     exit 1
 fi
-if ! "$CC" $M32 "$WORK/test_small.o" \
+if ! "$CC" $M32 "$WORK/test_small.o" "$WORK/port_memory.o" \
         "$WORK/os_vram_exclusive_clz.o" "$WORK/os_spin_lock_id.o" "$WORK/os_terminate_proc.o" \
         "$WORK/os_init.o" "$WORK/gxasm.o" "$WORK/g3x_nop_clear_fifo.o" -o "$WORK/test_small"; then
     echo "sdk small: link failed" >&2
