@@ -1,0 +1,40 @@
+From 3d6b0132e794257ab8c60930a539e394c3a52006 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 03:58:03 +0000
+Subject: [PATCH] nnsys: give NNS_G2dInitCellTransferStateManager its return
+ type (SDK_PORT_3DS)
+
+lib/include/nnsys/g2d/g2d_CellTransferManager.h:24 declares the function with no
+return type, so it is implicitly `int`. MWCC accepts that. GCC 14 and later (devkitARM
+16, the toolchain this port builds with) reject implicit int in a declaration as an
+error, which stops every NitroSystem and game file that includes the header.
+
+The definition is `int NNS_G2dInitCellTransferStateManager(...)`
+(lib/NitroSystem/src/g2d_cell_transfer_manager.c:28), so adding `int` states what
+MWCC already assumed. It sits behind #ifdef SDK_PORT_3DS so MWCC compiles the
+unchanged header (gcc -E -P without the macro is identical to the unpatched file).
+
+This is a GCC-only fix; it is also a fix the upstream decomp could take as is.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/include/nnsys/g2d/g2d_CellTransferManager.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/lib/include/nnsys/g2d/g2d_CellTransferManager.h b/lib/include/nnsys/g2d/g2d_CellTransferManager.h
+index 5e2e743..bf96c97 100644
+--- a/lib/include/nnsys/g2d/g2d_CellTransferManager.h
++++ b/lib/include/nnsys/g2d/g2d_CellTransferManager.h
+@@ -21,6 +21,9 @@ typedef struct NNSG2dCellTransferState {
+ 
+ void NNS_G2dFreeCellTransferStateHandle(u32 handle);
+ u32 NNS_G2dGetNewCellTransferStateHandle();
++#ifdef SDK_PORT_3DS
++int
++#endif
+ NNS_G2dInitCellTransferStateManager(NNSG2dCellTransferState *pCellStateArray, u32 numCellState, VramTransferTaskRegisterFuncPtr pTaskRegisterFunc);
+ void NNS_G2dUpdateCellTransferStateManager(void);
+ 
+-- 
+2.43.0
+
