@@ -1,0 +1,483 @@
+From 88f1e7d287a3cac1ec1aac00fa17e5874a13a8ae Mon Sep 17 00:00:00 2001
+From: A3 <a3@invalid>
+Date: Sat, 31 Oct 2026 22:06:12 +0000
+Subject: [PATCH 1710/1712] pokeathlon: use the SDK width types at the
+ course-object call sites
+
+NitroSDK declares s32/fx32 as long, so under devkitARM 16.1 (GCC 14) the
+course-object helpers no longer accept the game int locals and frame
+fields without an incompatible-pointer-types error. Under SDK_PORT_3DS,
+give those locals, struct fields and the two local prototypes in
+pennant_capture_field.c the callee exact types (s32/fx32); the original
+MWCC/DS declarations stay under #else.
+
+Fixes the 3DS compile of src/pokeathlon/{circle_push,circle_push_field,
+disc_catch,disc_catch_field,goal_roll,goal_roll_field,hurdle_dash_race,
+lamp_jump,pennant_capture,pennant_capture_cpu,pennant_capture_field,
+pennant_capture_play,relay_run,relay_run_cpu,ring_drop_field,
+ring_drop_mon}.c and include/pokeathlon/{circle_push,relay_run_cpu}.h.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ include/pokeathlon/pokeathlon_circle_push.h     |  5 +++++
+ include/pokeathlon/pokeathlon_relay_run_cpu.h   |  8 ++++++++
+ src/pokeathlon/pokeathlon_circle_push.c         |  5 +++++
+ src/pokeathlon/pokeathlon_circle_push_field.c   | 10 ++++++++++
+ src/pokeathlon/pokeathlon_disc_catch.c          | 14 ++++++++++++++
+ src/pokeathlon/pokeathlon_disc_catch_field.c    |  4 ++++
+ src/pokeathlon/pokeathlon_goal_roll.c           |  9 +++++++++
+ src/pokeathlon/pokeathlon_goal_roll_field.c     |  4 ++++
+ src/pokeathlon/pokeathlon_hurdle_dash_race.c    |  5 +++++
+ src/pokeathlon/pokeathlon_lamp_jump.c           | 12 ++++++++++++
+ src/pokeathlon/pokeathlon_pennant_capture.c     |  4 ++++
+ src/pokeathlon/pokeathlon_pennant_capture_cpu.c |  5 +++++
+ .../pokeathlon_pennant_capture_field.c          | 17 +++++++++++++++++
+ .../pokeathlon_pennant_capture_play.c           |  5 +++++
+ src/pokeathlon/pokeathlon_relay_run.c           | 13 ++++++++++++-
+ src/pokeathlon/pokeathlon_relay_run_cpu.c       |  8 ++++++++
+ src/pokeathlon/pokeathlon_ring_drop_field.c     |  4 ++++
+ src/pokeathlon/pokeathlon_ring_drop_mon.c       |  4 ++++
+ 18 files changed, 135 insertions(+), 1 deletion(-)
+
+diff --git a/include/pokeathlon/pokeathlon_circle_push.h b/include/pokeathlon/pokeathlon_circle_push.h
+index e5abd52..21da3ac 100644
+--- a/include/pokeathlon/pokeathlon_circle_push.h
++++ b/include/pokeathlon/pokeathlon_circle_push.h
+@@ -146,8 +146,13 @@ typedef struct PokeathlonCirclePushAiMon {
+ typedef struct PokeathlonCirclePushAiCell {
+     int x; // column, then pixel
+     int y;
++#ifdef SDK_PORT_3DS
++    s32 pixelX;
++    s32 pixelY;
++#else
+     int pixelX;
+     int pixelY;
++#endif
+     BOOL inRing;
+     int cellIndex;
+     int score;
+diff --git a/include/pokeathlon/pokeathlon_relay_run_cpu.h b/include/pokeathlon/pokeathlon_relay_run_cpu.h
+index fa32b9c..14e28d4 100644
+--- a/include/pokeathlon/pokeathlon_relay_run_cpu.h
++++ b/include/pokeathlon/pokeathlon_relay_run_cpu.h
+@@ -20,14 +20,22 @@
+ typedef struct PokeathlonRelayRunCpuTeam {
+     PokeathlonRelayRunTeam *team;
+     u32 unk04;
++#ifdef SDK_PORT_3DS
++    s32 x;
++#else
+     int x;
++#endif
+     int y;
+ } PokeathlonRelayRunCpuTeam;
+ 
+ // An obstacle of the track layout, as a square of `size` pixels.
+ typedef struct PokeathlonRelayRunCpuObstacle {
+     BOOL active;
++#ifdef SDK_PORT_3DS
++    s32 x;    // left
++#else
+     int x;    // left
++#endif
+     int y;    // top
+     int kind; // RELAY_RUN_OBSTACLE_*
+     int size;
+diff --git a/src/pokeathlon/pokeathlon_circle_push.c b/src/pokeathlon/pokeathlon_circle_push.c
+index 3e129b7..a944817 100644
+--- a/src/pokeathlon/pokeathlon_circle_push.c
++++ b/src/pokeathlon/pokeathlon_circle_push.c
+@@ -497,8 +497,13 @@ BOOL PokeathlonCirclePush_Init(PokeathlonCourseData *course) {
+         VecFx32 scale;
+         VecFx32 *scalePtr = &scale;
+         u8 ringData[60];
++#ifdef SDK_PORT_3DS
++        s32 x;
++        s32 y;
++#else
+         int x;
+         int y;
++#endif
+         if (!PokeathlonCourseMonObjects_IsLoaded(circlePush->objects)) {
+             break;
+         }
+diff --git a/src/pokeathlon/pokeathlon_circle_push_field.c b/src/pokeathlon/pokeathlon_circle_push_field.c
+index a69868a..5f21d66 100644
+--- a/src/pokeathlon/pokeathlon_circle_push_field.c
++++ b/src/pokeathlon/pokeathlon_circle_push_field.c
+@@ -461,6 +461,15 @@ static void PokeathlonCirclePushAi_ChooseTarget(PokeathlonCirclePushAi *ai, u8 i
+     PokeathlonCirclePushAiCell *far[CIRCLE_PUSH_AI_FAR_CELLS];
+     int ownX;
+     int ownY;
++#ifdef SDK_PORT_3DS
++    fx32 x;
++    fx32 y;
++    s32 radius;
++    s32 nearX;
++    s32 nearY;
++    s32 farX;
++    s32 farY;
++#else
+     int x;
+     int y;
+     s32 radius;
+@@ -468,6 +477,7 @@ static void PokeathlonCirclePushAi_ChooseTarget(PokeathlonCirclePushAi *ai, u8 i
+     int nearY;
+     int farX;
+     int farY;
++#endif
+     s16 column;
+     s16 row;
+     PokeathlonCirclePushAi *work = ai;
+diff --git a/src/pokeathlon/pokeathlon_disc_catch.c b/src/pokeathlon/pokeathlon_disc_catch.c
+index e846cd3..582df1f 100644
+--- a/src/pokeathlon/pokeathlon_disc_catch.c
++++ b/src/pokeathlon/pokeathlon_disc_catch.c
+@@ -182,7 +182,11 @@ void PokeathlonDiscCatch_SetMonScaleCenter(PokeathlonCourseMonObject *monPic, in
+ 
+ BOOL PokeathlonDiscCatchMon_IsTouching(PokeathlonDiscCatchMon *mon, PokeathlonDiscCatchMon *other) {
+     VecFx32 distance, center, otherCenter;
++#ifdef SDK_PORT_3DS
++    s32 radius, otherRadius;
++#else
+     int radius, otherRadius;
++#endif
+     fx32 sum;
+     PokeathlonCourseObject_GetCollisionCircle(mon->monPic, mon->position.x, mon->position.y, &center.x, &center.y, &radius);
+     PokeathlonCourseObject_GetCollisionCircle(other->monPic, other->position.x, other->position.y, &otherCenter.x, &otherCenter.y, &otherRadius);
+@@ -310,8 +314,13 @@ static void PokeathlonDiscCatchMon_Move(PokeathlonDiscCatchMon *mon, PokeathlonC
+ #pragma opt_propagation reset
+ 
+ BOOL PokeathlonDiscCatchMon_IsOffField(PokeathlonDiscCatchMon *mon, fx32 x, fx32 y) {
++#ifdef SDK_PORT_3DS
++    int fieldX;
++    int fieldY;
++#else
+     s32 fieldX;
+     s32 fieldY;
++#endif
+     PokeathlonCourseObject_CenterToGround(mon->monPic, x >> FX32_SHIFT, y >> FX32_SHIFT, &fieldX, &fieldY);
+     if (fieldX <= 0 || fieldY <= 0 || fieldX >= 255 || fieldY >= 255) {
+         return TRUE;
+@@ -569,8 +578,13 @@ void PokeathlonDiscCatch_UpdateMonSprites(PokeathlonDiscCatchSprites *sprites, P
+     PokeathlonDiscCatchDrawOrder order[POKEATHLON_MONS] = { 0 };
+     s32 x;
+     s32 y;
++#ifdef SDK_PORT_3DS
++    int fieldX;
++    int fieldY;
++#else
+     s32 fieldX;
+     s32 fieldY;
++#endif
+     f32 scale;
+     PokeathlonDiscCatch *work;
+     PokeathlonDiscCatchMonSprites *mon;
+diff --git a/src/pokeathlon/pokeathlon_disc_catch_field.c b/src/pokeathlon/pokeathlon_disc_catch_field.c
+index 5c514a5..d21843f 100644
+--- a/src/pokeathlon/pokeathlon_disc_catch_field.c
++++ b/src/pokeathlon/pokeathlon_disc_catch_field.c
+@@ -145,7 +145,11 @@ static inline int GetSizeClass(PokeathlonCourseData *course, int index) {
+ void PokeathlonDiscCatch_InitMons(PokeathlonDiscCatch *work) {
+     PokeathlonCourseCollision collisions[POKEATHLON_SIZE_CLASSES] = { 0 };
+     PokeathlonCoursePoint ownPositions[POKEATHLON_TEAM_SIZE];
++#ifdef SDK_PORT_3DS
++    s32 x, y;
++#else
+     int x, y;
++#endif
+     PokeathlonCourseData *course;
+     s32 i;
+     int participant, member;
+diff --git a/src/pokeathlon/pokeathlon_goal_roll.c b/src/pokeathlon/pokeathlon_goal_roll.c
+index 0901701..8a90d28 100644
+--- a/src/pokeathlon/pokeathlon_goal_roll.c
++++ b/src/pokeathlon/pokeathlon_goal_roll.c
+@@ -93,8 +93,13 @@ BOOL PokeathlonGoalRoll_Init(PokeathlonCourseData *course) {
+     u16 goalPalettes[POKEATHLON_PARTICIPANTS];
+ 
+     struct {
++#ifdef SDK_PORT_3DS
++        s32 y;
++        s32 x;
++#else
+         int y;
+         int x;
++#endif
+     } screen;
+ 
+     struct {
+@@ -805,7 +810,11 @@ static void PokeathlonGoalRoll_ApplyFrame(PokeathlonCourseData *course) {
+         if (mode == GOAL_ROLL_MODE_DASH) {
+             if (mon->trailCooldown == 0) {
+                 VecFx32 trailPosition = { 0, 0, 0 };
++#ifdef SDK_PORT_3DS
++                int screenX, screenY;
++#else
+                 s32 screenX, screenY;
++#endif
+ 
+                 object = PokeathlonCourseMonObjects_Get(goalRoll->monObjects, i);
+                 trail = mon->trailIndex;
+diff --git a/src/pokeathlon/pokeathlon_goal_roll_field.c b/src/pokeathlon/pokeathlon_goal_roll_field.c
+index 54f51d7..442963c 100644
+--- a/src/pokeathlon/pokeathlon_goal_roll_field.c
++++ b/src/pokeathlon/pokeathlon_goal_roll_field.c
+@@ -243,7 +243,11 @@ void PokeathlonGoalRoll_CollideBalls(PokeathlonCourseData *course) {
+         for (i = 0, ballPosition = &ball->position, teams = goalRoll->mons; i < POKEATHLON_MONS; i++) {
+             VecFx32 center = { 0, 0, 0 };
+             VecFx32 normal;
++#ifdef SDK_PORT_3DS
++            s32 monRadius;
++#else
+             int monRadius;
++#endif
+             member = i % POKEATHLON_TEAM_SIZE;
+             participant = i / POKEATHLON_TEAM_SIZE;
+             mon = &teams[participant][member];
+diff --git a/src/pokeathlon/pokeathlon_hurdle_dash_race.c b/src/pokeathlon/pokeathlon_hurdle_dash_race.c
+index 25b4afc..bee1b09 100644
+--- a/src/pokeathlon/pokeathlon_hurdle_dash_race.c
++++ b/src/pokeathlon/pokeathlon_hurdle_dash_race.c
+@@ -386,8 +386,13 @@ static void PokeathlonHurdleDashMon_Update(int lane, PokeathlonHurdleDashMon *mo
+         Sprite_SetMatrix(sprite, &position);
+     }
+     {
++#ifdef SDK_PORT_3DS
++        s32 x;
++        s32 y;
++#else
+         int x;
+         int y;
++#endif
+         Sprite *sprite;
+         VecFx32 position;
+         PokeathlonCourseMonObject_GetSpritePosition(mon->monObject, &x, &y);
+diff --git a/src/pokeathlon/pokeathlon_lamp_jump.c b/src/pokeathlon/pokeathlon_lamp_jump.c
+index 372904c..a5a1997 100644
+--- a/src/pokeathlon/pokeathlon_lamp_jump.c
++++ b/src/pokeathlon/pokeathlon_lamp_jump.c
+@@ -318,7 +318,11 @@ BOOL PokeathlonLampJump_Init(PokeathlonCourseData *course) {
+     PokeathlonCourseCollision collisions[POKEATHLON_SIZE_CLASSES];
+     PokeathlonCoursePoint screenPos[POKEATHLON_TEAM_SIZE];
+     PokeathlonLampJumpMonParams params;
++#ifdef SDK_PORT_3DS
++    s32 screenX, screenY;
++#else
+     int screenX, screenY;
++#endif
+     PokeathlonLampJump *lampJump = PokeathlonCourse_GetWork(course);
+     int i, mode, count, monIndex, x, jumpIndex, jumpX, column;
+     u8 participant;
+@@ -1204,7 +1208,11 @@ void PokeathlonLampJump_UpdateJumps(PokeathlonCourseData *course, PokeathlonLamp
+ 
+ // One Pokemon on the trampoline: pressing it down, being thrown up, flying, landing.
+ static void PokeathlonLampJump_UpdateJump(PokeathlonCourseData *course, PokeathlonLampJump *lampJump, u8 mon) {
++#ifdef SDK_PORT_3DS
++    s32 heights[128];
++#else
+     int heights[128];
++#endif
+     PokeathlonLampJumpJump *jump = &lampJump->jumps[mon];
+     int column;
+     u8 participant;
+@@ -1609,7 +1617,11 @@ void PokeathlonLampJump_SetMonParams(PokeathlonCourseData *course, PokeathlonLam
+ BOOL PokeathlonLampJump_CollideMons(PokeathlonCourseData *course, PokeathlonLampJump *lampJump) {
+     VecFx32 posA;
+     VecFx32 posB;
++#ifdef SDK_PORT_3DS
++    s32 radiusA, radiusB, x, y;
++#else
+     int radiusA, radiusB, x, y;
++#endif
+     int i, j;
+     PokeathlonCourseMonObject *spriteA, *spriteB;
+     u8 participant;
+diff --git a/src/pokeathlon/pokeathlon_pennant_capture.c b/src/pokeathlon/pokeathlon_pennant_capture.c
+index fb2d24c..c19cfd0 100644
+--- a/src/pokeathlon/pokeathlon_pennant_capture.c
++++ b/src/pokeathlon/pokeathlon_pennant_capture.c
+@@ -52,7 +52,11 @@ static inline void PokeathlonPennantCapture_PlaceAtStart(PokeathlonPennantCaptur
+     player->position.y = FX32_CONST(416);
+     PokeathlonCourseMonObject_SetDrawPriorityStep(object, 3000);
+     if (participant == own && member == 0) {
++#ifdef SDK_PORT_3DS
++        PokeathlonCourseObject_GroundToCenter(object, x, 96, (s32 *)centerX, (s32 *)centerY);
++#else
+         PokeathlonCourseObject_GroundToCenter(object, x, 96, centerX, centerY);
++#endif
+         ownPosition->x = 128;
+         ownPosition->y = *centerY;
+     }
+diff --git a/src/pokeathlon/pokeathlon_pennant_capture_cpu.c b/src/pokeathlon/pokeathlon_pennant_capture_cpu.c
+index 68f81a3..347bf1a 100644
+--- a/src/pokeathlon/pokeathlon_pennant_capture_cpu.c
++++ b/src/pokeathlon/pokeathlon_pennant_capture_cpu.c
+@@ -15,8 +15,13 @@
+ extern const PokeathlonPennantCaptureSpriteIds gPokeathlonPennantCaptureSpriteIds[];
+ 
+ typedef struct PokeathlonPennantCaptureCpuPoint {
++#ifdef SDK_PORT_3DS
++    s32 y;
++    s32 x;
++#else
+     int y;
+     int x;
++#endif
+ } PokeathlonPennantCaptureCpuPoint;
+ 
+ static void PokeathlonPennantCaptureCpu_ChooseTarget(PokeathlonPennantCaptureCpu *cpu, u8 who);
+diff --git a/src/pokeathlon/pokeathlon_pennant_capture_field.c b/src/pokeathlon/pokeathlon_pennant_capture_field.c
+index dcc517d..8294335 100644
+--- a/src/pokeathlon/pokeathlon_pennant_capture_field.c
++++ b/src/pokeathlon/pokeathlon_pennant_capture_field.c
+@@ -28,10 +28,18 @@ void PokeathlonCourseMonObject_SetDrawPriority(PokeathlonCourseMonObject *object
+ void PokeathlonCourseMonObject_SetAnimStateRaw(PokeathlonCourseMonObject *object, u8 size);
+ void PokeathlonCourseMonObject_SetAnimState(PokeathlonCourseMonObject *object, u8 size);
+ void PokeathlonCourseMonObject_SetAnim(PokeathlonCourseMonObject *object, int anim);
++#ifdef SDK_PORT_3DS
++void PokeathlonCourseObject_GetCollisionCircle(PokeathlonCourseMonObject *object, fx32 x, fx32 y, fx32 *outX, fx32 *outY, s32 *outRadius);
++#else
+ void PokeathlonCourseObject_GetCollisionCircle(PokeathlonCourseMonObject *object, int x, int y, int *outX, int *outY, int *outRadius);
++#endif
+ int PokeathlonCourseObject_GetCollisionRadius(PokeathlonCourseMonObject *object);
+ void PokeathlonCourseObject_SetGroundPosition(PokeathlonCourseMonObject *object, int x, int y);
++#ifdef SDK_PORT_3DS
++void PokeathlonCourseObject_GroundToCenter(PokeathlonCourseMonObject *object, s32 x, s32 y, s32 *outX, s32 *outY);
++#else
+ void PokeathlonCourseObject_GroundToCenter(PokeathlonCourseMonObject *object, int x, int y, int *outX, int *outY);
++#endif
+ void PokeathlonCourseSpritePoolSprite_Show(PokeathlonCourseSpritePoolSprite *sprite, BOOL shown, BOOL show);
+ void PokeathlonCourseSpritePoolSprite_SetAnim(PokeathlonCourseSpritePoolSprite *sprite, int anim);
+ void PokeathlonCourseSpritePoolSprite_SetPosition(PokeathlonCourseSpritePoolSprite *sprite, VecFx32 *position);
+@@ -39,12 +47,21 @@ VecFx32 *PokeathlonCourseSpritePoolSprite_GetPosition(PokeathlonCourseSpritePool
+ void PokeathlonCourseSpritePoolSprite_SetDrawPriority(PokeathlonCourseSpritePoolSprite *sprite, int priority);
+ 
+ typedef struct PokeathlonPennantCaptureCollisionFrame {
++#ifdef SDK_PORT_3DS
++    s32 bY;
++    s32 bX;
++    s32 aY;
++    s32 aX;
++    s32 radiusB;
++    s32 radiusA;
++#else
+     int bY;
+     int bX;
+     int aY;
+     int aX;
+     int radiusB;
+     int radiusA;
++#endif
+     VecFx32 resolved;
+     VecFx32 zeroB;
+     VecFx32 zeroA;
+diff --git a/src/pokeathlon/pokeathlon_pennant_capture_play.c b/src/pokeathlon/pokeathlon_pennant_capture_play.c
+index c6d63fa..7eff94a 100644
+--- a/src/pokeathlon/pokeathlon_pennant_capture_play.c
++++ b/src/pokeathlon/pokeathlon_pennant_capture_play.c
+@@ -511,8 +511,13 @@ static void PokeathlonPennantCapture_ShowFrame(PokeathlonCourseData *course) {
+ 
+ static BOOL PokeathlonPennantCapture_IsTouchOnOwnMon(PokeathlonPennantCapture *work, int participant, int x, int y) {
+     PokeathlonPennantCapturePlayer *player = &work->players[participant];
++#ifdef SDK_PORT_3DS
++    s32 monX;
++    s32 monY;
++#else
+     int monX;
+     int monY;
++#endif
+     PokeathlonCourseMonObject *object;
+ 
+     GF_ASSERT(player->member < POKEATHLON_TEAM_SIZE);
+diff --git a/src/pokeathlon/pokeathlon_relay_run.c b/src/pokeathlon/pokeathlon_relay_run.c
+index 08f103a..7cfd3e6 100644
+--- a/src/pokeathlon/pokeathlon_relay_run.c
++++ b/src/pokeathlon/pokeathlon_relay_run.c
+@@ -329,7 +329,11 @@ BOOL PokeathlonRelayRun_Init(PokeathlonCourseData *course) {
+         int own;
+         PokeathlonCourseCollision collisions[POKEATHLON_SIZE_CLASSES];
+         PokeathlonCoursePoint ownPosition;
++#ifdef SDK_PORT_3DS
++        s32 centerX, centerY;
++#else
+         int centerX, centerY;
++#endif
+         PokeathlonRelayRunSetup setup;
+         PokeathlonRelayRunTeam *team;
+         int teamIndex;
+@@ -1962,8 +1966,15 @@ BOOL PokeathlonRelayRun_CollideRunners(PokeathlonCourseData *course, PokeathlonR
+     VecFx32 posP;
+     VecFx32 posQ;
+     VecFx32 delta;
++#ifdef SDK_PORT_3DS
++    s32 radP, radQ;
++    s32 px, py;
++    s32 qx, qy;
++#else
+     int radP, radQ;
+-    int px, py, qx, qy;
++    int px, py;
++    int qx, qy;
++#endif
+     PokeathlonCourseMonObject *objectP, *objectQ;
+     BOOL result;
+     u8 pushMember;
+diff --git a/src/pokeathlon/pokeathlon_relay_run_cpu.c b/src/pokeathlon/pokeathlon_relay_run_cpu.c
+index d3c3130..fa29ce4 100644
+--- a/src/pokeathlon/pokeathlon_relay_run_cpu.c
++++ b/src/pokeathlon/pokeathlon_relay_run_cpu.c
+@@ -151,9 +151,17 @@ static void PokeathlonRelayRunCpu_Think(PokeathlonCourseData *course, Pokeathlon
+     PokeathlonRelayRunCpuObstacle obstacles[RELAY_RUN_OBSTACLES];
+     PokeathlonRelayRunCpuTeam teams[POKEATHLON_PARTICIPANTS];
+     int laneScores[POKEATHLON_PARTICIPANTS];
++#ifdef SDK_PORT_3DS
++    s32 groundX, groundY;
++#else
+     int groundX, groundY;
++#endif
+     fx32 centerX, centerY;
++#ifdef SDK_PORT_3DS
++    s32 fromX, fromY;
++#else
+     int fromX, fromY;
++#endif
+     int threshold;
+     int *laneScore;
+     PokeathlonRelayRunCpuTeam *self;
+diff --git a/src/pokeathlon/pokeathlon_ring_drop_field.c b/src/pokeathlon/pokeathlon_ring_drop_field.c
+index 4d21842..43ae153 100644
+--- a/src/pokeathlon/pokeathlon_ring_drop_field.c
++++ b/src/pokeathlon/pokeathlon_ring_drop_field.c
+@@ -518,7 +518,11 @@ void PokeathlonRingDropMon_SetState(PokeathlonRingDropMon *mon, int state) {
+ 
+ static BOOL PokeathlonRingDropMon_Collide(PokeathlonRingDropMon *a, PokeathlonRingDropMon *b) {
+     VecFx32 delta, centerA, centerB;
++#ifdef SDK_PORT_3DS
++    s32 radiusA, radiusB;
++#else
+     int radiusA, radiusB;
++#endif
+     fx32 height = a->height - b->height;
+     if (height < 0) {
+         height = -height;
+diff --git a/src/pokeathlon/pokeathlon_ring_drop_mon.c b/src/pokeathlon/pokeathlon_ring_drop_mon.c
+index 16d8a34..c0b0f98 100644
+--- a/src/pokeathlon/pokeathlon_ring_drop_mon.c
++++ b/src/pokeathlon/pokeathlon_ring_drop_mon.c
+@@ -32,7 +32,11 @@ static void PokeathlonRingDropMon_Respawn(PokeathlonRingDropMon *mon) {
+ }
+ 
+ void PokeathlonRingDropMon_ResetToStart(PokeathlonRingDropMon *mon) {
++#ifdef SDK_PORT_3DS
++    s32 x, y;
++#else
+     int x, y;
++#endif
+     PokeathlonCourseObject_GroundToCenter(mon->member->object, gPokeathlonRingDropMonStartPositions[mon->flags.bits.participant][0], gPokeathlonRingDropMonStartPositions[mon->flags.bits.participant][1], &x, &y);
+     mon->position.x = x << FX32_SHIFT;
+     mon->position.y = y << FX32_SHIFT;
+-- 
+2.43.0
+

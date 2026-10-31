@@ -1,0 +1,274 @@
+From 37c452ad3d9a81251b3c7e2a1d853e38c0208096 Mon Sep 17 00:00:00 2001
+From: A3 <a3@invalid>
+Date: Sat, 31 Oct 2026 22:07:47 +0000
+Subject: [PATCH 1711/1712] application: use the SDK width types the app
+ helpers declare
+
+NitroSDK s32/u32 are long on 3DS, so GCC 14 rejects passing the game int
+locals and BOOL flags to helpers that take s32*/u32* (TextOBJ_GetPosition,
+System_GetTouchHeldCoords, DressUpGfx_GetSlot*, DressUp_Start*Transition,
+CodeEntryArgs_New, ManagedSprite_GetPositionFxXYWithSubscreenOffset,
+SwalotPlop_CalcArcStep, MimeJrTopOffsets). Under SDK_PORT_3DS give the
+locals the callee exact type, or cast the same-width pointer at the call
+site where the object belongs to another header (DressUpWork.transitionDone);
+the DS text stays under #else. Also restore the int return type of the
+PokedexApp_MainSeq_62 definition, which already has a static int prototype.
+
+Fixes the 3DS compile of src/application/{ball_capsule_editor,
+plaza_game_mime_jr_top,plaza_game_swalot_plop,wobbuffet_pop_scene}.c and
+src/application/{dress_up/dress_up,palpad/palpad_friend_code,
+pc_box/pc_box_ui,pokedex/pokedex_main_seq}.c.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/application/ball_capsule_editor.c       |  4 ++++
+ src/application/dress_up/dress_up.c         | 20 +++++++++++++++++++
+ src/application/palpad/palpad_friend_code.c |  4 ++++
+ src/application/pc_box/pc_box_ui.c          |  8 ++++++++
+ src/application/plaza_game_mime_jr_top.c    | 22 +++++++++++++++++++++
+ src/application/plaza_game_swalot_plop.c    |  5 +++++
+ src/application/pokedex/pokedex_main_seq.c  |  4 ++++
+ src/application/wobbuffet_pop_scene.c       |  5 +++++
+ 8 files changed, 72 insertions(+)
+
+diff --git a/src/application/ball_capsule_editor.c b/src/application/ball_capsule_editor.c
+index 65193c5..7dda218 100644
+--- a/src/application/ball_capsule_editor.c
++++ b/src/application/ball_capsule_editor.c
+@@ -3159,7 +3159,11 @@ static void BallCapsuleEditor_SetButtonFrame(ManagedSprite *button, u32 event) {
+ }
+ 
+ static void BallCapsuleEditor_MoveButtonLabel(TextOBJ *label, s32 dx, s32 dy) {
++#ifdef SDK_PORT_3DS
++    int x, y;
++#else
+     s32 x, y;
++#endif
+ 
+     if (label) {
+         TextOBJ_GetPosition(label, &x, &y);
+diff --git a/src/application/dress_up/dress_up.c b/src/application/dress_up/dress_up.c
+index d110cc0..efb8674 100644
+--- a/src/application/dress_up/dress_up.c
++++ b/src/application/dress_up/dress_up.c
+@@ -617,7 +617,11 @@ static BOOL DressUpGfx_IsTouchHeldOnSlot(DressUpSlot *slot) {
+ 
+ // TRUE if the touch is held on an opaque pixel of the slot (within 4 pixels of the touch point)
+ static BOOL DressUpGfx_HitTestSlotPixels(DressUpSlot *slot, int *x, int *y, NNSG2dCharacterData *hitMap) {
++#ifdef SDK_PORT_3DS
++    s32 slotX, slotY;
++#else
+     int slotX, slotY;
++#endif
+     int i, j;
+     if (!DressUpGfx_IsTouchHeldOnSlot(slot)) {
+         return FALSE;
+@@ -1387,7 +1391,11 @@ BOOL DressUp_Main(OverlayManager *man, int *state) {
+         break;
+     case DRESS_UP_STATE_EDIT:
+         if (work->uiState == DRESS_UP_UI_DONE) {
++#ifdef SDK_PORT_3DS
++            DressUp_StartFinishTransition(work, (u32 *)&work->transitionDone);
++#else
+             DressUp_StartFinishTransition(work, &work->transitionDone);
++#endif
+             *state = DRESS_UP_STATE_WAIT_FINISH_TRANSITION;
+         }
+         DressUpTouch_Update(&work->touch);
+@@ -1405,7 +1413,11 @@ BOOL DressUp_Main(OverlayManager *man, int *state) {
+         break;
+     case DRESS_UP_STATE_DRESSED_UP_PROMPT:
+         if (work->uiState == DRESS_UP_UI_DRESSED_NO) {
++#ifdef SDK_PORT_3DS
++            DressUp_StartReturnTransition(work, (u32 *)&work->transitionDone);
++#else
+             DressUp_StartReturnTransition(work, &work->transitionDone);
++#endif
+             *state = DRESS_UP_STATE_WAIT_RETURN_TRANSITION;
+         } else if (work->uiState == DRESS_UP_UI_DRESSED_YES) {
+             *state = DRESS_UP_STATE_SAVE_PROMPT;
+@@ -3717,7 +3729,11 @@ static void DressUpObj_GetPos(DressUpNode *node, int *x, int *y) {
+     int width;
+     int height;
+     if ((int)node->mode < DRESS_UP_OBJ_MON) {
++#ifdef SDK_PORT_3DS
++        DressUpGfx_GetSlotPos(node->object, (s32 *)x, (s32 *)y);
++#else
+         DressUpGfx_GetSlotPos(node->object, x, y);
++#endif
+         return;
+     }
+     {
+@@ -3733,7 +3749,11 @@ static void DressUpObj_GetPos(DressUpNode *node, int *x, int *y) {
+ 
+ static void DressUpObj_GetSize(DressUpNode *node, int *width, int *height) {
+     if ((int)node->mode < DRESS_UP_OBJ_MON) {
++#ifdef SDK_PORT_3DS
++        DressUpGfx_GetSlotSize(node->object, (s32 *)width, (s32 *)height);
++#else
+         DressUpGfx_GetSlotSize(node->object, width, height);
++#endif
+     } else {
+         DressUpMon_GetSize(node->object, width, height);
+     }
+diff --git a/src/application/palpad/palpad_friend_code.c b/src/application/palpad/palpad_friend_code.c
+index a59d3dd..6b4f7c2 100644
+--- a/src/application/palpad/palpad_friend_code.c
++++ b/src/application/palpad/palpad_friend_code.c
+@@ -36,7 +36,11 @@ static void PalPadFriendCode_Hide(PalPadFriendCode *friendCode, PalPadGfx *gfx);
+ static void PalPadFriendCode_HighlightReturn(PalPadFriendCode *friendCode, PalPadGfx *gfx, int highlight);
+ 
+ BOOL PalPadNaming_Main(PalPadNaming *naming, PalPadWork *work, PalPadShared *shared, PalPadGfx *gfx, enum HeapID heapId) {
++#ifdef SDK_PORT_3DS
++    int codeEntryParams[4];
++#else
+     u32 codeEntryParams[4];
++#endif
+ 
+     switch (shared->subState) {
+     case PALPAD_NAMING_STATE_REGISTER: // register a friend: name, then friend code
+diff --git a/src/application/pc_box/pc_box_ui.c b/src/application/pc_box/pc_box_ui.c
+index e87866a..6d92832 100644
+--- a/src/application/pc_box/pc_box_ui.c
++++ b/src/application/pc_box/pc_box_ui.c
+@@ -1782,7 +1782,11 @@ BOOL PCBox_WaitItemModeSelect(PCBoxWork *work) {
+ 
+ BOOL PCBox_UpdateItemModeBoxDrag(PCBoxWork *work) {
+     PCBoxView *view = work->view;
++#ifdef SDK_PORT_3DS
++    u32 x, y;
++#else
+     int x, y;
++#endif
+     u16 selected, raw;
+     int busy = PCBox_UpdateActionMenuSlide(view->panels);
+     BgCellManager_UpdateCellMove(work->view->panels, PC_BOX_PANEL_PARTY_BUTTON);
+@@ -1907,7 +1911,11 @@ BOOL PCBox_AnimateSwappedItemMove(PCBoxWork *work) {
+ 
+ BOOL PCBox_UpdateItemTrayDrag(PCBoxWork *work) {
+     PCBoxView *view = work->view;
++#ifdef SDK_PORT_3DS
++    u32 x, y;
++#else
+     int x, y;
++#endif
+     u16 selected, raw;
+     BgCellManager_UpdateCellMove(view->panels, PC_BOX_PANEL_CHANGE_BOX_BUTTON);
+     BgCellManager_UpdateCellMove(work->view->panels, PC_BOX_PANEL_SUMMARY_BUTTON);
+diff --git a/src/application/plaza_game_mime_jr_top.c b/src/application/plaza_game_mime_jr_top.c
+index 9cf9733..e39a7e2 100644
+--- a/src/application/plaza_game_mime_jr_top.c
++++ b/src/application/plaza_game_mime_jr_top.c
+@@ -2733,9 +2733,17 @@ static void MimeJrTopBurst_Task(SysTask *sysTask, MimeJrTopBurst *burst) {
+     switch (burst->state) {
+     case 0: {
+         MimeJrTopBurst *cur;
++#ifdef SDK_PORT_3DS
++        const int *xOffset;
++#else
+         const s32 *xOffset;
++#endif
+         MimeJrTopTween *xTween;
++#ifdef SDK_PORT_3DS
++        const int *yOffset;
++#else
+         const s32 *yOffset;
++#endif
+         MimeJrTopTween *yTween;
+         i = 0;
+         cur = burst;
+@@ -3364,8 +3372,13 @@ static void MimeJrTopGame_StartStage(MimeJrTopGame *game) {
+ 
+ // The sub screen BG layers slide apart for the dance.
+ static void MimeJrTopDance_SlideIn(MimeJrTopDance *dance) {
++#ifdef SDK_PORT_3DS
++    int *base = dance->flashBlend;
++    int *blend = dance->danceBlend;
++#else
+     s32 *base = dance->flashBlend;
+     s32 *blend = dance->danceBlend;
++#endif
+     BOOL done[5];
+     int i;
+     switch (dance->slideState) {
+@@ -3403,8 +3416,13 @@ static void MimeJrTopDance_SlideIn(MimeJrTopDance *dance) {
+ }
+ 
+ static void MimeJrTopDance_SlideOut(MimeJrTopDance *dance) {
++#ifdef SDK_PORT_3DS
++    int *base = dance->flashBlend;
++    int *blend = dance->danceBlend;
++#else
+     s32 *base = dance->flashBlend;
+     s32 *blend = dance->danceBlend;
++#endif
+     BOOL done[5];
+     int i;
+     switch (dance->slideState) {
+@@ -3520,7 +3538,11 @@ static void MimeJrTopGame_StartDance(MimeJrTopGame *game) {
+ 
+ // Routine of level 1: the two dancers circle in from opposite sides.
+ void MimeJrTopDance_Routine1(SysTask *sysTask, MimeJrTopDance *dance) {
++#ifdef SDK_PORT_3DS
++    fx32 x, y;
++#else
+     int x, y;
++#endif
+     int ax, ay, bx, by, a, b;
+     if (!IsPaletteFadeFinished() || dance->resources->connectionLost == TRUE) {
+         SysTask_Destroy(sysTask);
+diff --git a/src/application/plaza_game_swalot_plop.c b/src/application/plaza_game_swalot_plop.c
+index 0584e73..f13385d 100644
+--- a/src/application/plaza_game_swalot_plop.c
++++ b/src/application/plaza_game_swalot_plop.c
+@@ -3314,8 +3314,13 @@ static void SwalotPlopParticles_Free(SwalotPlopGfx *gfx, SwalotPlopParticle *par
+ 
+ static void SwalotPlopParticles_Update(SwalotPlopParticle *particles) {
+     int i;
++#ifdef SDK_PORT_3DS
++    int dx;
++    int dy;
++#else
+     s32 dx;
+     s32 dy;
++#endif
+     VecFx32 scale;
+ 
+     for (i = 0; i < 8; i++) {
+diff --git a/src/application/pokedex/pokedex_main_seq.c b/src/application/pokedex/pokedex_main_seq.c
+index 19dfba4..e5af0b3 100644
+--- a/src/application/pokedex/pokedex_main_seq.c
++++ b/src/application/pokedex/pokedex_main_seq.c
+@@ -2132,7 +2132,11 @@ static int PokedexApp_MainSeq_61(PokedexAppData *pokedexApp) {
+     return POKEDEXAPP_MAINSEQ_57;
+ }
+ 
++#ifdef SDK_PORT_3DS
++static int PokedexApp_MainSeq_62(PokedexAppData *pokedexApp) {
++#else
+ PokedexApp_MainSeq_62(PokedexAppData *pokedexApp) {
++#endif
+     switch (pokedexApp->seqState.state_10.state) {
+     case 0: {
+         u16 species = PokedexApp_GetCursorSpecies(pokedexApp);
+diff --git a/src/application/wobbuffet_pop_scene.c b/src/application/wobbuffet_pop_scene.c
+index 7b991ba..8e8b2be 100644
+--- a/src/application/wobbuffet_pop_scene.c
++++ b/src/application/wobbuffet_pop_scene.c
+@@ -1789,8 +1789,13 @@ void WobbuffetPopTextObj_Free(WobbuffetPopTextObj *textObj) {
+ }
+ 
+ void WobbuffetPopScoreDisplay_PlaceDigits(WobbuffetPopScoreDisplay *display) {
++#ifdef SDK_PORT_3DS
++    int x;
++    int y;
++#else
+     s32 x;
+     s32 y;
++#endif
+     s32 i;
+     s32 bottom;
+     s32 top;
+-- 
+2.43.0
+
