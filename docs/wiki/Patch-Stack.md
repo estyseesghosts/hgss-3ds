@@ -125,14 +125,21 @@ patches/NitroSDK/
   0101-fx-C-versions-of-the-matrix-asm-functions-SDK_PORT_3.patch
   0201-sdk-C-versions-of-small-hw-lock-FIFO-asm-functions-S.patch
   0301-sdk-GCC-fixes-for-os_thread-os_valarm-and-OSi_AlarmH.patch
+  0302-os-arena-stack-linker-symbol-replacements-SDK_PORT_3DS.patch
+  0303-math-MATH_CountPopulation-returns-32-bits-under-the-.patch
   0401-os-C-versions-of-the-CPSR-interrupt-functions-SDK_PO.patch
   0501-cp-os-C-versions-of-context-save-restore-and-divider.patch
+  0502-fx-touchpanel-hook-the-remaining-divider-and-square-root-writers.patch
   0601-sdk-port-hooks-for-IRQ-flag-clear-software-DMA-and-m.patch
+  0602-os-count-the-hardware-timers-in-software-SDK_PORT_3DS.patch
+  0603-fs-rom-archive-and-overlay-hooks-SDK_PORT_3DS.patch
+  0604-gx-3d-command-ports-and-matrix-stack-error-SDK_PORT_3DS.patch
   0701-card-CARD_SpiWait-stub-with-no-IR-peer-SDK_PORT_3DS.patch
   0801-math-C-version-of-MATH_QSort-SDK_PORT_3DS.patch
   0901-os-C-versions-of-OS_IrqHandler-and-OS_IrqHandler_Thr.patch
 patches/NitroSystem/
   0301-nns-GCC-count-leading-zeros-for-g2d-canvas-helpers-S.patch
+  0302-nns-gxfifo-words-early-3d-transfers-hidden-oam-SDK_PORT_3DS.patch
 patches/pokeheartgold/
   1001-types-64-bit-integers-4-byte-aligned-as-on-the-DS-SD.patch
   1101-nnsys-give-NNS_G2dInitCellTransferStateManager-its-r.patch
@@ -158,11 +165,27 @@ patches/pokeheartgold/
   1601-build-re-pin-the-headers-the-port-patch-stack-touche.patch
 ```
 
-NitroSDK additions in this session: `0302` (arena/stack symbols), `0303` (MATH_CountPopulation
-return width), `0502` (remaining DIV/SQRT writers), `0602` (software timers), `0603` (ROM archive and
-overlay hooks), `0604` (3D command ports and GXSTAT stack error). NitroSystem additions: `0302`
-(GXFIFO words, early 3D VRAM transfers, hidden OAM entries). See
-[Patch-Stack](#) catalog rows and [../progress/phase-1.md](../progress/phase-1.md) for the details.
+### Added in session 4
+
+| Stack | Patch | What it does | Verified by |
+| --- | --- | --- | --- |
+| NitroSDK | 0302 | Arena/stack linker symbols: `OSi_*_ARENA_LO_DEFAULT`, `OSi_SYS_STACKSIZE 0`, `OSi_IRQ_STACKSIZE 2048`, launcher stack in DTCM. | `tests/sdk/os_arena` (22 checks) |
+| NitroSDK | 0303 | `MATH_CountPopulation` returns `u32`, so callers with an `int` prototype see the byte zero-extended. | vendored `test_nitro` `test_math` |
+| NitroSDK | 0502 | DIV/SQRT hooks in `fx_vec*`, `fx_mtx44_ortho/perspective` and `tp.c` (the writers 0501 left). | `tests/sdk/div_sqrt_writers` (69 checks) |
+| NitroSDK | 0602 | Software timers: `OS_SetTimerCount/Control` hooked, `OS_GetTick/Lo` sync first. | `tests/sdk/os_timer` (23 checks) |
+| NitroSDK | 0603 | ROM archive answered by libpak; overlay info/image/clear/unload delegate to the port. | `tests/sdk/fs_overlay` (41 checks) |
+| NitroSDK | 0604 | `G3_*` immediates and matrix loads go through `NitroPort_GxDirectWrite`; the four GXSTAT stack-error clear sites call the port. | `tests/sdk/gx_3d` (119 checks) |
+| NitroSystem | 0302 | GXFIFO words through the port, early 3D VRAM transfers at halt, unused OAM entries hidden. | `tests/sdk/nns_port` (31 checks) |
+| pokeheartgold | 1203 | `mi_dma_gxcommand.c`'s local `GXFifoStat`/getter skipped when the compat header supplies them. | vendored `test_nitro`/`test_threads` link |
+| pokeheartgold | 1303 | 2D palette/OAM loaders use `HW_*` areas instead of `0x05000000`/`0x07000000` literals. | vendored `test_nitro` DMA section |
+| pokeheartgold | 1304 | RTC raw words read through `OS_GetSystemWork()->real_time_clock`. | vendored `test_arm7` `test_rtc` |
+| pokeheartgold | 1305 | Touch/PM/MIC shared words read through `OS_GetSystemWork()`. | vendored `test_arm7` `test_touch`/`test_power` |
+| pokeheartgold | 1401 | ARM7 sound driver from `sub/lib/src` + `NitroStaticInit` section attribute. | `tests/sdk/arm7_sound` (42 checks) |
+| pokeheartgold | 1402 | The SDK-header halves of 0602/0603/0604 (timers, overlay IDs, G3 immediates, `static inline MI_GetUncompressedSize`, `NNSi_GfdDoVramTransfer3D`). | the same suites |
+| pokeheartgold | 1403 | The finished-command tag is not written before the ARM7 knows the shared work. | vendored `test_arm7` `test_sound` (no longer crashes) |
+| pokeheartgold | 1501-1508 | Phase 2 game GCC fixes: RC4 in C, static/extern, snow tables, incomplete type, C++17 exception specs, three evaluation-order sites, three uninitialised battle locals. | `tests/game/rc4`; see [phase-2.md](../progress/phase-2.md) |
+| pokeheartgold | 1601 | Re-pins the alarm-partition header hashes (26 across two `profile.json` files). | DS gate gets past `tools/alarm-partition` |
+
 
 ## The port-side symbols the patches call
 
