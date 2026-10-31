@@ -1,0 +1,213 @@
+From b058fded93ab6190db80868c5f6df6ccb8dce6aa Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 03:30:28 +0000
+Subject: [PATCH] math: C version of MATH_QSort (SDK_PORT_3DS)
+
+lib/NitroSDK/src/math/math_qsort.c is an MWCC asm function that GCC cannot compile. Under
+SDK_PORT_3DS it gets a C version that reproduces the asm step for step. The order of equal
+elements and the sequence of comparator calls both depend on the algorithm, so the C code
+follows the asm's control flow exactly and is not a generic quicksort.
+
+Algorithm, as read from the asm (original lines 16-251):
+- count is compared as signed: count <= 1 returns at once, without touching work.
+- The explicit stack holds pairs of 32-bit addresses (lo, hi). With work != NULL it is the
+  caller's buffer. With NULL the asm reserves bitlen(count)*8 bytes on the caller's stack.
+  bitlen(x) = 32 - clz(x); the asm also pushes bitlen(width) above the stack, which the
+  epilogue uses. The stack starts with (base, base + (count-1)*width).
+- Each pop takes hi first, then lo. span = hi - lo.
+- span == width (two elements): compare(lo, hi); if the result is > 0 swap them. No other
+  call happens.
+- Otherwise the pivot index is span >> bitlen(width) (0 when the shift is 32), so the pivot
+  is lo + ((span >> bitlen(width)) * width). For power-of-two widths that is the floor
+  midpoint. For width 12 it is 3/4 of the way. The pivot is swapped with lo.
+- Scans with i = lo + width and j = hi, repeated:
+    left:  while (i < hi && compare(i, lo) < 0) i += width;
+    right: while (compare(j, lo) > 0) j -= width;      (no bound check)
+    if (i >= j) stop; otherwise swap(i, j); i += width; j -= width; if (i > j) stop.
+- Swap lo with j. Left size L = j - lo and right size R = hi - j, compared as signed.
+- If L > R: push (lo, j - width) when lo < j - width, then (j + width, hi) when
+  j + width < hi. Otherwise push the right range first and the left range last. Either way
+  the smaller side is popped next, so the stack depth stays about log2(count).
+- Comparator arguments: (element, pivot) in the scans and (lo, hi) in the two-element case.
+  The result is the signed int compared with 0.
+- Element moves swap bytes; the asm uses word swaps when width is a multiple of 4 and the
+  addresses are aligned. The result is the same. Pointer compares are signed 32-bit, as the
+  asm's cmp with bge/blt/ble is.
+
+The C version does the same thing: the same pivot, scans, comparator calls and order, the
+same push and pop order, and the same signed compares. The local stack has 32 pairs. The
+measured depth is at most bitlen(count) pairs (9 at count 1000), so that is enough.
+Width 0 is not a valid input: the asm's swap loop would run 2^30 times and write past the
+elements. No caller passes 0.
+
+Verified:
+- tests/sdk/math_qsort/run.sh: 11202 checks. It has golden comparator call logs and final
+  orders for 6 small cases and golden digests for 90 cases (widths 1-16, sizes up to 1000,
+  random, sorted, reversed, equal and few-valued keys), a property sweep (sorted,
+  permutation, no calls for count <= 1), and NULL vs work-buffer agreement.
+- The golden values come from a scratch interpreter for the ARM subset the asm uses. It
+  runs the unchanged asm text and is not part of this C code. Mutations fail the test:
+  swapping the comparator argument order and changing the pivot choice.
+- gcc -E -P without SDK_PORT_3DS matches the pristine file exactly. The DS branch is the
+  original asm, byte for byte.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/math/math_qsort.c | 129 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 129 insertions(+)
+
+diff --git a/src/math/math_qsort.c b/src/math/math_qsort.c
+index eddab72..011fb97 100644
+--- a/src/math/math_qsort.c
++++ b/src/math/math_qsort.c
+@@ -1,7 +1,9 @@
+ #include <nitro.h>
+ 
+ // The code below is compiled as ARM (32-bit) code.
++#ifndef SDK_PORT_3DS
+ #include <nitro/code32.h>
++#endif
+ 
+ // MATH_QSort: in-place quicksort with an explicit stack (on the caller's stack unless a work buffer is
+ // given).
+@@ -10,6 +12,132 @@ typedef int (*MATHQSortComparator)(const void *a, const void *b);
+ 
+ void MATH_QSort(void *base, u32 count, u32 width, MATHQSortComparator compare, void *work);
+ 
++#ifdef SDK_PORT_3DS
++/*
++ * GCC version for the port (SDK_PORT_3DS). It follows the asm in the #else branch step for step:
++ * the same pivot (lo + ((span >> bitlen(width)) * width)), the same scans and comparator calls
++ * with the same argument order, and the same push and pop order. So equal elements end in the
++ * same order and the comparator sees the same call sequence. Addresses are 32-bit and compared
++ * as signed values, as the asm's cmp/bge/blt do.
++ */
++typedef char mathQSortAddressIs32Bit[(sizeof(void *) == sizeof(u32)) ? 1 : -1];
++
++/* Each pending range is a (lo, hi) pair. The depth is bounded by about log2(count), so 32 pairs
++ * cover every count. */
++#define MATH_QSORT_LOCAL_PAIRS 32
++
++static u32 MathQSort_BitLength(u32 x)
++{
++    u32 bits = 0;
++    while (x != 0) {
++        bits++;
++        x >>= 1;
++    }
++    return bits;
++}
++
++static void MathQSort_Swap(u32 a, u32 b, u32 width)
++{
++    if (((a | b | width) & 3) == 0) {
++        u32 *pa = (u32 *)a;
++        u32 *pb = (u32 *)b;
++        u32 n;
++        for (n = width >> 2; n != 0; n--) {
++            u32 t = *pa;
++            *pa++ = *pb;
++            *pb++ = t;
++        }
++    } else {
++        u8 *pa = (u8 *)a;
++        u8 *pb = (u8 *)b;
++        u32 n;
++        for (n = width; n != 0; n--) {
++            u8 t = *pa;
++            *pa++ = *pb;
++            *pb++ = t;
++        }
++    }
++}
++
++void MATH_QSort(void *base, u32 count, u32 width, MATHQSortComparator compare, void *work)
++{
++    u32 localStack[2 * MATH_QSORT_LOCAL_PAIRS];
++    u32 *stack;
++    u32 top;
++    u32 bits;
++    u32 lo, hi, i, j, pivot, k;
++
++    if ((s32)count <= 1) {
++        return;
++    }
++    stack = (work != NULL) ? (u32 *)work : localStack;
++    bits = MathQSort_BitLength(width);
++    top = 0;
++    stack[top++] = (u32)base;
++    stack[top++] = (u32)base + (count - 1) * width;
++
++    while (top != 0) {
++        hi = stack[--top];
++        lo = stack[--top];
++
++        if (hi - lo == width) {
++            /* Two elements: swap only when compare(lo, hi) > 0. */
++            if (compare((const void *)lo, (const void *)hi) > 0) {
++                MathQSort_Swap(lo, hi, width);
++            }
++            continue;
++        }
++
++        /* Midpoint-style pivot: element index (span >> bitlen(width)), 0 when the shift is 32. */
++        k = (bits >= 32) ? 0 : ((hi - lo) >> bits);
++        pivot = lo + k * width;
++        MathQSort_Swap(pivot, lo, width);
++
++        /* Scans compare each element with the pivot, which sits at lo. */
++        i = lo + width;
++        j = hi;
++        for (;;) {
++            while ((s32)i < (s32)hi && compare((const void *)i, (const void *)lo) < 0) {
++                i += width;
++            }
++            while (compare((const void *)j, (const void *)lo) > 0) {
++                j -= width;
++            }
++            if ((s32)i >= (s32)j) {
++                break;
++            }
++            MathQSort_Swap(i, j, width);
++            i += width;
++            j -= width;
++            if ((s32)i > (s32)j) {
++                break;
++            }
++        }
++        MathQSort_Swap(lo, j, width);
++
++        /* Push the larger side first, so the smaller side is popped next. */
++        if ((s32)(j - lo) > (s32)(hi - j)) {
++            if ((s32)lo < (s32)(j - width)) {
++                stack[top++] = lo;
++                stack[top++] = j - width;
++            }
++            if ((s32)(j + width) < (s32)hi) {
++                stack[top++] = j + width;
++                stack[top++] = hi;
++            }
++        } else {
++            if ((s32)(j + width) < (s32)hi) {
++                stack[top++] = j + width;
++                stack[top++] = hi;
++            }
++            if ((s32)lo < (s32)(j - width)) {
++                stack[top++] = lo;
++                stack[top++] = j - width;
++            }
++        }
++    }
++}
++#else
+ #pragma force_active on
+ 
+ // clang-format off
+@@ -250,3 +378,4 @@ asm void MATH_QSort(void *base, u32 count, u32 width, MATHQSortComparator compar
+     bx lr
+ }
+ // clang-format on
++#endif
+-- 
+2.43.0
+
