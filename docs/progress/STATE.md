@@ -1,21 +1,21 @@
 # Current state
 
-Last verified: **2026-10-31 (session 4)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with the
-code at commit `e242375` and **39 patches**. Everything below that says "verified" was run on that tree on that
-date. If you change the patch stack, rerun the commands and update this page; do not trust it blindly.
+Last verified: **2026-10-31 (session 5)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with the
+code at working-tree commit `35f6235` and **61 patches**. Everything below that says "verified" was run on that
+tree on that date. If you change the patch stack, rerun the commands and update this page; do not trust it blindly.
 
-**One line:** Phase 1 is one hang away from done (the vendored `test_arm7` `test_sound` spin); every other
-vendored suite passes, `make test` is green and `libnitro.a` builds. Phase 2 has started: the game source
-list, overlay table, generated headers, `.s` conversion, stubs and a build harness exist; 1044/1094 game
-files compile and the link is a documented 966-symbol work queue. No game binary links yet.
+**One line:** Phase 1's test matrix is green (`make port-tests` exit 0, including `test_arm7` and
+`test_nitrosystem`), the game compiles completely on host32, both port archives build, and the host link is
+down to **34 symbols** from 966; the DS gate still has not passed (a debug-info shape pin is the last blocker),
+and the 3DS side is still blocked by `std_sprintf`, the ARM7 C-file rule and ~45 devkitARM-only compile errors.
 
 ## Phases
 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **In progress, one hang left** | 39 patches apply from scratch; survey 270/284 (gcc 13) / 269/284 (gcc 10); port survey 46/46; `libnitro.a` builds with 0 errors; vendored `pak` 120 checks, `nitro` 702+120+68, all 0 failed; `test_arm7` hangs in `test_sound`; DS gate not rerun since patch 1601. The runtime debugging log is [agent-notes/p1-runtime-bringup.md](agent-notes/p1-runtime-bringup.md). [phase-1.md](phase-1.md) |
-| 2 Game code under GCC | **In progress** | `tools/game_sources.py`, `game_overlays.py`, `prepare_game_headers.py`, `s_to_gas.py`, `hgss_game.py`; 1044/1094 game files compile, 150/150 `.s` assemble, 966 unresolved symbols at the host link. [phase-2.md](phase-2.md) |
+| 1 SDK patch stack | **Code complete, gate owed** | 61 patches apply from scratch; `make test` 204 tests + all SDK suites; `make port-tests` **exit 0** (pak, nitro, nitrosystem); `libnitro.a` + `libnitrosystem.a` build; DS gate not yet passed (last pass at 10 patches). [phase-1.md](phase-1.md), [agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md) |
+| 2 Game code under GCC | **In progress, 34 symbols left** | 1092/1092 files compile, 150/150 `.s`, both archives link; **34 unique unresolved symbols** (MSL runtime, C++ runtime, MB stubs, 5 pokéwalker aliases); `--check-overlays` and `symbol_crosscheck.py` exist but no PC binary yet. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | Not started | `builder/pack.py` exists (used by the pak tests); no ROM extractor. |
 | 4-11 | Not started | See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
@@ -27,21 +27,20 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (39 patches applied)` |
-| Host tests | `make test` | **exit 0**; 182 Python tests + all 18 SDK suites |
-| SDK parses (gcc 13, default) | `make sdk-survey` | **270/284** parse, 14 fail (all port-replaced) |
-| SDK parses (gcc 10, the port's compiler) | `python3 tools/sdk_compile_survey.py --m32 --gcc gcc-10` | **269/284**; the extra failure is `ctrdg/CTRDG_common.c` |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (61 patches applied)` |
+| Host tests | `make test` | **exit 0**; **204 Python tests** + all 18 SDK suites (incl. the new arm9 flush suite) |
+| Vendored port tests | `make port-tests` | **exit 0**: pak, all nitro suites, nitrosystem **17,122 checks 0 failed** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | **46/46** compile (**exit 0**) |
-| Vendored libraries (host32) | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | **exit 0**, 0 errors, `libnitro.a` |
-| Vendored suites | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` | **pak 120, test_nitro 702, test_fs_pak 120, test_threads 68 — all 0 failed; `test_arm7` hangs in `test_sound`** |
-| `make port-tests` | `make port-tests` | real target now (runs the three subprojects); **fails on the same `test_arm7` hang** |
-| Save layout | `make layout` | 0 differences in 804 values (last run before the 39-patch stack; layout patches did not change) |
-| DS-side gate | [wiki/Daily-Workflow.md](../wiki/Daily-Workflow.md#the-ds-side-gate) | **not passed at 39 patches**. Last full pass: 10 patches. At 34 patches it got past `sub/` and stopped at the `tools/alarm-partition` header pins; 1601 re-pins them, so a rerun at 39 is owed and is the only strong proof. |
+| Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/main-g61` | **1092/1092 files compile, 0 failed**; 150/150 `.s`; both archives build |
+| Game link (host32) | same command | **34 unique unresolved symbols** (was 966); no binary yet |
+| 3DS compile | `python3 tools/hgss_game.py --target 3ds --keep-going ...` | ~1049/1094 compiled, ~45 fail (devkitARM-only); 3DS `libnitro.a` still blocked by `std_sprintf` |
+| Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
+| DS-side gate | [wiki/Daily-Workflow.md](../wiki/Daily-Workflow.md#the-ds-side-gate) | **not passed** at the final stack. Last pass: 10 patches. 1601/1602 fixed five pin classes; a debug-info shape pin remains (§7 of the session note). |
 
-### Vendored suites: what has actually run at 39 patches
+### Vendored suites: the full matrix at 61 patches
 
-Verified in `/work/v18-test.log` and `/work/v19-test.log` (in this order; the run stops at the first
-failure):
+`make port-tests` is now the single check (exit 0). It runs, in order: `pak`, the whole `nitro`
+subproject, then `nitrosystem`. Every suite and its count:
 
 | Suite | Result |
 | --- | --- |
@@ -49,67 +48,90 @@ failure):
 | `test_nitro` | 702 checks, 0 failed |
 | `test_fs_pak` | 120 checks, 0 failed |
 | `test_threads` | 68 checks, 0 failed |
-| `test_arm7` | backup, RTC, power and touch pass; **hangs in `test_sound`** |
-
-**Not yet run at 39 patches** (the suite order stops at `test_arm7`): `test_sound_chip`,
-`test_sound_sequence`, `test_render`, `test_gx3d`, `test_gx3d_plumbing`, `test_vram_transfer`,
-`test_upscale`, `test_xbrz`, `test_shadow`, `test_lowermenu`, `test_options` and `nitrosystem`. Earlier
-sessions reported individual passes for several of them before the last patch wave (numbers in the
-agent notes), but that is not a 39-patch run — treat them as "expected to pass, unverified". The
-`nitrosystem` subproject also needs the `nns_all_headers.c` unity-file conflict fixed first
-(see the next actions).
+| `test_arm7` | **676 checks, 0 failures** (the old `test_sound` spin is fixed) |
+| `test_sound_chip` | 51 checks, 0 failures |
+| `test_sound_sequence` | 12 checks, 0 failures |
+| `test_render` | 2071 checks, 0 failed |
+| `test_gx3d` | 326 checks, 0 failures (+228 on its own thread) |
+| `test_gx3d_plumbing` | 231 checks, 0 failures |
+| `test_vram_transfer` | 24 checks, 0 failures |
+| `test_upscale` | 160 checks, 0 failures |
+| `test_lowermenu` | 246 checks, 0 failures |
+| `test_options` | 49 checks, 0 failures |
+| `test_xbrz` | 266 checks, 0 failures |
+| `test_shadow` | 375 checks, 0 failures |
+| `nitrosystem` | **17,122 checks, 0 failed** |
 
 ### What still fails, and why
 
-Only one class remains in Phase 1: **`test_arm7` `test_sound` spins**. The genuine ARM7 sequencer is
-linked in, the test drives the ARM9 API without a full boot, and the finished-command tag never
-advances (nothing pumps `N7_SND_CommandProc` for it). Everything else that failed this session is
-fixed; the full list with root causes is in
-[agent-notes/p1-runtime-bringup.md](agent-notes/p1-runtime-bringup.md). The pattern behind most of
-them: **DS-side code that addresses main/shared memory by literal address** (`0x027FFxxx`,
-`0x05000000`, `0x07000000`) now points nowhere, because patches 1301/1302 moved those regions into the
-port's arrays. Fixed for RTC (1304), touch/PM/MIC (1305) and the 2D VRAM loaders (1303). This is the
-first thing to grep for when the next suite crashes.
+**Phase 1 code failures: none.** The two blockers were real bugs, both documented with root causes in
+[agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md):
+
+- `test_arm7` was not a missing pump. The decompilation mixes two NitroSDK revisions: `SND_command.c`
+  owns a 4-byte `sFreeList` pointer, `snd_flush_command.c` reads a 40-byte `CommandState` through it.
+  The port links both, so no command reached the ARM7. Patch 1404.
+- `test_nitrosystem` needed the compat headers fixed **and** a real `.bss` layout bug in
+  `gfd_linked_list_tex_vram_man_reset.c` corrected (NitroSystem patch 0303).
+
+The remaining failure class is the **DS gate** (§ next actions) and the **3DS build** (§9 of the
+session note). The pattern behind the earlier runtime failures remains: **DS-side code that addresses
+main/shared memory by literal address** (`0x027FFxxx`, `0x05000000`, `0x07000000`, and the sound
+register block at `0x04000400`) now points nowhere, because patches 1301/1302 moved those regions into
+the port's arrays. Fixed for RTC (1304), touch/PM/MIC (1305), the 2D VRAM loaders (1303), the sound
+registers (1405) and the 3D texture loaders (1406). This is the first thing to grep for when a suite
+crashes.
 
 ### Phase 2 state in one paragraph
 
-`tools/game_sources.py` + `game_overlays.py` read HGSS's own build files (1012 C, 56 C++, 150 ARM9
-`.s`, 129 overlays); `prepare_game_headers.py` produces every generated header without MWCC or a ROM
-(byte-identical against a matching build); `s_to_gas.py` assembles all 150 `.s` under both compilers
-with no symbol/section/alignment difference; Wi-Fi/WM/VCT/dsprot stubs exist; `hgss_game.py` compiles
-the game and reaches both links. 1044/1094 files compile (50 fail), 150/150 `.s` assemble, the host
-link reports **966 unique unresolved symbols** — that list is the work queue and is in
-[phase-2.md](phase-2.md).
+The harness reads HGSS's own build files (1012 C, 56 C++, 150 ARM9 `.s`, 129 overlays), produces every
+generated header without MWCC or a ROM, converts the `.s` files, builds both port archives, groups the
+overlay sections, generates the Wi-Fi stand-ins and links. **1092 of 1092 game files compile** (patches
+1509–1525), 150/150 `.s` assemble, and the host link is down to **34 unique unresolved symbols**:
+MSL soft-float/string runtime (11), C++ runtime (6), multiboot stubs (12) and five Pokéwalker interior
+aliases that need `tools/object_aliases.py`. `--check-overlays` and `tools/symbol_crosscheck.py` exist;
+neither has run against a real linked binary yet.
 
 ## Next actions, in order
 
-1. **Fix the `test_arm7` sound spin**, then `make port-tests` green: decide who pumps
-   `N7_SND_CommandProc` for a test that calls the ARM9 API directly (synchronous process on push in
-   `port_snd.c`, or a tick from the wait). Do not edit the vendored test.
-2. **`test_nitrosystem`**: Slice F reported the generated `nns_all_headers.c` unity file failing on
-   `NNSSndHandle` and conflicting SND prototypes from `hgss/compat/include/nitro/snd/ARM9/interface.h`;
-   fix the compat header, then run the subproject.
-3. **DS-side gate at 39 patches**, both versions, with `make -C tools/mwasmarm_patcher` first.
-4. **Close Phase 1** in `phase-1.md`/STATE/wiki once 1-3 are green.
-5. **Phase 2**: work the 966-symbol queue in `phase-2.md`; then `--check-overlays`,
-   `tools/symbol_crosscheck.py`, and the docs.
+1. **Close the last 34 host32 symbols** ([phase-2.md](phase-2.md) has the grouped list):
+   - run `tools/object_aliases.py` over game objects with an `.alias-map.json` (the five Pokéwalker
+     aliases; the DS build does this and the harness does not);
+   - add the MSL runtime compat (`_fadd`/`_ffix`/`_fflt`/`_f_lltof`/`_f_ulltof`/`_ll_mul`/`_ll_udiv`/
+     `_s32_div_f`/`_fdiv`, `strnicmp`, `__lower_mapC`) with the *bit-pattern* ABI the game declares;
+   - add the C++ runtime pieces (`Bytes::~Bytes()`, `Deque::~Deque()`, `operator new[]`/`delete[]`,
+     `std::nothrow`, the vector throw helper) — link libstdc++ or define them explicitly;
+   - add documented MB_* stand-ins (no download-play consumer).
+2. **Link `pokeheartgold-pc`**, run `--check-overlays` on the real binary (expect all 129), then
+   `tools/symbol_crosscheck.py` and refine the allowlist.
+3. **Replace the two harness-weakened duplicate globals** (`FrontierScript_ReadByte`,
+   `sListMenuTemplate`) with a real per-overlay/local fix.
+4. **DS gate at 61+ patches, both versions**, from `/work/pokeheartgold` (the path is part of the pin).
+   Regenerate the MSL `*-shape.json` debug-info pins first (see the session note §7); the last run
+   stopped there, not on a code difference.
+5. **3DS**: `hgss/std_sprintf.c` `va_list` arithmetic, the ARM7 rule rejecting
+   `ds_sound_tables.c`, then the ~45 devkitARM-only compile errors; then the 3DS link.
+6. **Close Phase 1/2 docs** once the gate and the two binaries are green.
 
 
 ## Open decisions
 
-- **The `test_arm7` sound spin (the only Phase 1 blocker):** should the virtual ARM7 process a pushed
-  command synchronously (`NitroPort_HandleSound` → `N7_SND_CommandProc`) so a test that calls the ARM9
-  API without a full boot sees the tag advance, or should `port_snd.c` run its tick from `OS_Halt` and
-  the wait? Both are port-layer; the vendored test must not change. Recommendation: synchronous
-  processing — it matches "the ARM7 is always running" while keeping the audio thread optional.
-- `test_nitrosystem`'s unity file conflicts: fix `hgss/compat/include/nitro/snd/ARM9/interface.h`
-  (drop/forward the prototypes that clash with `SND_*`) — chosen; do not special-case the test.
+- **MB stub policy:** may the last 12 `MB_*` (multiboot / DS download play) symbols be documented
+  no-op/error stand-ins? Nothing on PC/3DS uses them, and the allowlist already classifies MB as
+  stubbed. Alternative: compile the multiboot sources.
+- **C++ runtime:** link `libstdc++` for the `std::` pieces, or keep explicit small definitions for
+  `Bytes`/`Deque` destructors and `throw_length_error` (the port builds with `-fno-exceptions
+  -fno-rtti`)? Recommendation: explicit definitions, so the port does not grow a full C++ runtime for
+  two symbols.
+- **3DS depth for Phase 2:** is "the static link reaches zero unresolved" still the bar, or should
+  `std_sprintf` and the ARM7 rule be fixed now so a real `.3dsx` is produced? The shell and the
+  libctru link already exist.
+- **MSL declaration mismatch:** `wifi_plaza_instrument.c` declares the soft-float helpers with
+  bit-pattern types, `pokeathlon_relay_run.c` declares `f32 _fflt(int)`. The compat header plus a
+  `SDK_PORT_3DS` patch must pick the bit-pattern form for both; do not implement a naive float C file.
 - `g2d_CellTransferManager.h:24` stays fixed by patch 1101 (keep the patch, not a devkitARM pin).
 - Port-side fixes go to the Platinum maintainer as upstream PRs where they are generic (the assert /
   math force-includes, the NNS table weak refs); HGSS-only shape changes stay in `hgss/`.
-- The survey still defaults to gcc 13 but the port builds with gcc 10; both numbers are recorded.
-- Commit trailer is `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` (earlier agent notes
-  sometimes say Haiku 5.5).
+- Commit trailer is `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 
 ## Resume in five minutes
 
@@ -119,14 +141,19 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
-python3 tools/bootstrap.py            # "already at ... with 39 patches" if in sync
-make test                            # exit 0
+python3 tools/bootstrap.py            # "already at ... with 61 patches" if in sync
+make test                            # exit 0 (204 tests + SDK suites)
+make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/port_compile_survey.py # 46/46
-python3 tools/hgss_nitro.py make --target host32 --out /work/out/try test   # all three subprojects
+python3 tools/hgss_game.py --target host32 --keep-going --out /work/main-g61 -j5
+                                     # 1092/1092 compile, 34 unresolved, no binary yet
 ```
 
 If `bootstrap.py` reports a patch-count mismatch, run `--clean`. If `build/` looks empty on the Mac,
-that is expected: it is a volume (`hgss-build`) inside the container.
+that is expected: it is a volume (`hgss-build`) inside the container. Do **not** run
+`bootstrap --clean` while a build or `make test` is reading the tree, and do not run `make test`
+concurrently with a harness build: both touch the shared `build/hgss-sdk` shim (the test that used to
+do it is fixed, but the rule is cheap to keep).
 
 ## Environment facts (measured in this container)
 
@@ -147,6 +174,28 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-10-31 (session 5) — Phase 1 suites green, game compiles completely, link 966 → 34
+
+- **Phase 1 fixed at the root.** `test_arm7` was two NitroSDK revisions disagreeing about `sFreeList`
+  (patch 1404); `libnitrosystem.a`/`test_nitrosystem` needed the compat headers plus a real `.bss`
+  layout fix in `gfd_linked_list_tex_vram_man_reset.c` (NitroSystem 0303). The newly reachable
+  suites then exposed the sound register offsets/volume table (1405), 3D texture VRAM (1406) and the
+  `g3imm` direct writes. **`make port-tests` exit 0; nitrosystem 17,122 checks, 0 failed.**
+- **Phase 2 compile complete**: patches 1509–1525 (case labels, SDK prototype types, static linkage,
+  static initializers, MSL/lobby `operator new`, PPW C++ names, `ball_capsule_editor`).
+  **1092/1092 files compile, 0 failed** (was 1044/1094 with 50 failing); 150/150 `.s`.
+- **Library set**: `libnitrosystem.a` links; all 21 `lib/NitroDWC/asm` data objects link (they have no
+  `T` symbols) except four that reference a non-TLS `errno`; `lib/syscall/src/_secure_*.c` are
+  excluded as unused DS secure-area firmware. Link: **34 unresolved** (was 966).
+- **Infrastructure**: `main_3ds.c`, `--check-overlays` (129/0 on a temporary link) and
+  `tools/symbol_crosscheck.py` landed earlier in the session (commit `07ca172`).
+- **DS gate**: five tools pin inputs (1601/1602), the gate must run at `/work/pokeheartgold` because
+  the producer pins embed the absolute source path, and a debug-info shape pin is still open. Last
+  full pass remains 10 patches.
+- **Process trap paid for**: a test re-pointed the shared `build/hgss-sdk` shim at `/up`, producing 763
+  spurious failures in a concurrent harness; the test is now isolated.
+- Full audit: [agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md).
 
 ### 2026-10-31 (session 4) — Phase 1 patch stack finished, vendored suites running, Phase 2 tooling + harness
 

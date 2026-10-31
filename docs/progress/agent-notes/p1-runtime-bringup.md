@@ -184,6 +184,23 @@ error, and serialise bootstrap against builds.
 
 ## Open: `test_arm7` `test_sound` spins
 
+**RESOLVED 2026-10-31 (session 5), patch 1404.** The suspicion below (nothing pumps the command
+processor) was wrong: `port_snd.c` already called `N7_SND_CommandProc` synchronously. The real cause
+was the decompilation mixing two NitroSDK revisions — `SND_command.c` owns a 4-byte `sFreeList`
+pointer and the tag counters, `snd_flush_command.c` reads a 40-byte `CommandState` through it. The DS
+keeps them in separate objects; the port links both, so the flush never saw `sReserveList` and wrote
+the neighbouring tags. No command reached the ARM7. Under `SDK_PORT_3DS` the 4.2 flush now lives in
+`SND_command.c`; `snd_flush_command.c` compiles only for the DS. `test_arm7` is 676 checks, 0
+failures; `tests/sdk/arm7_sound/test_arm9_flush.c` covers the blocking flush. Full write-up:
+[agent-notes/p2-wave-a-session5.md](p2-wave-a-session5.md) §1.
+
+After this, the run reached the rest of the suite order, which exposed two more real defects: the
+sound-register offset/volume-table bug (patch 1405), the 3D texture VRAM bug (patch 1406), and the
+`g3imm` direct register writes. All are documented in the same note.
+
+<details>
+<summary>Original (superseded) diagnosis</summary>
+
 After the five fixes above, `test_arm7` runs through backup, RTC, power and touch, then **hangs in
 `test_sound`** (99.9 % CPU, no output). It is a spin, not a deadlock on a lock: the process is
 runnable. The likely site is `SND_WaitForCommandProc`/`SND_IsFinishedCommandTag`: the genuine ARM7
@@ -194,6 +211,8 @@ advances.
 Next step: decide whether the virtual ARM7 should process the queue synchronously when a command is
 pushed (`NitroPort_HandleSound` → `N7_SND_CommandProc`) or whether `port_snd.c` must run its tick from
 `OS_Halt`/the test's wait. Both are port-layer changes; the vendored test must not be edited.
+
+</details>
 
 ## Facts worth remembering
 

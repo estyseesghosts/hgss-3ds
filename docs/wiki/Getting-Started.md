@@ -173,11 +173,11 @@ If the first `make patch_mwasmarm` step fails, see [Troubleshooting](#the-mwasma
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/bootstrap.py'
 ```
 
-This fetches the decomp at the commit in `upstream.lock` into `build/upstream/`, applies the 15 patch files from `patches/` as commits, and links `build/NitroSDK` and `build/NitroSystem` to the SDK sources. The fetch needs network access to GitHub.
+This fetches the decomp at the commit in `upstream.lock` into `build/upstream/`, applies the 61 patch files from `patches/` as commits, and links `build/NitroSDK` and `build/NitroSystem` to the SDK sources. The fetch needs network access to GitHub.
 
-**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, thirty-nine `  applying ...` lines, and `Done: build/upstream (39 patches applied), build/NitroSDK, build/NitroSystem`.
+**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, sixty-one `  applying ...` lines, and `Done: build/upstream (61 patches applied), build/NitroSDK, build/NitroSystem`.
 
-Running it again prints `upstream: already at 8cbb4a19ab78 with 39 patches`.
+Running it again prints `upstream: already at 8cbb4a19ab78 with 61 patches`.
 
 ## 9. Run `make test`
 
@@ -185,12 +185,12 @@ Running it again prints `upstream: already at 8cbb4a19ab78 with 39 patches`.
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && make test'
 ```
 
-This runs the 19 Python tests and then the eleven SDK host suites. It is the same command CI runs on the synthetic-data image.
+This runs the 204 Python tests and then the eighteen SDK host suites. It is the same command CI runs on the synthetic-data image.
 
 **You should see:**
 
-- `Ran 19 tests`, then `OK`.
-- One `== tests/sdk/<name>` header for each of: `card_spi_wait`, `cp_context`, `fx`, `gcc_fixes`, `irq_handler`, `math_qsort`, `memory_map`, `nns_clz`, `os_system`, `port_hooks`, `small`.
+- `Ran 204 tests`, then `OK`.
+- One `== tests/sdk/<name>` header for each of the eighteen suites (including `arm7_sound`, `div_sqrt_writers`, `fx`, `gcc_fixes`, `irq_handler`, `math_qsort`, `memory_map`, `nns_clz`, `os_system`, `port_hooks`, `small`).
 - `428 passed, 0 failed` from the `fx` suite.
 - `sdk small: all ok` at the end.
 - Exit status 0. It took about 30 seconds in the last run.
@@ -206,7 +206,7 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/hgss_nitro.py make --target host32 --out /work/out/first lib -k -j8'
 ```
 
-**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` with no errors. `make port-tests` runs the vendored suites: every one passes except `test_arm7`, which hangs in `test_sound` (the open Phase 1 item on 2026-10-31).
+**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` and `libnitrosystem.a` with no errors. `make port-tests` runs the vendored suites: **all of them pass** (at 61 patches; nitrosystem 17,122 checks). The remaining work is the game link (34 symbols) and the DS gate, in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 
 `hgss_nitro.py` explains the shim it builds in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired). The next work and the full error map are in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 

@@ -83,6 +83,59 @@ Some differences are not in the SDK's design. They come from how GCC and MWCC re
 - `__declspec(noinline)`, which GCC does not know. Patch `0301` uses `__attribute__((noinline))` on the GCC branch.
 - `u64` alignment, which changes struct layouts. Patch `1001` fixes it. See [Save-Compatibility](Save-Compatibility.md).
 
+## Revision mixing inside one decompilation
+
+HGSS's tree is not internally consistent about which NitroSDK revision a file came from. Two examples
+found in session 5 matter for the port because it links files the DS build kept in separate objects:
+
+- **The ARM9 sound command flush.** `lib/NitroSDK/src/snd/SND_command.c` owns a **4-byte**
+  `sFreeList` pointer, `sReserveList`, `sWaitingCommandListQueue` and the tag counters.
+  `lib/NitroSDK/src/snd/snd_flush_command.c` is a later revision whose private `CommandState` is
+  **40 bytes** and is read through that same `sFreeList`. On the DS only the later file defines
+  `SND_FlushCommand`, so nothing notices. The port links both C files into one archive, so the later
+  definition read a pointer as a struct, never saw `sReserveList`, and wrote the neighbouring tag
+  counters. Patch `1404` keeps the flush with the state it updates under `SDK_PORT_3DS`.
+- **`MATH_CountPopulation`'s return width** (patch `0303`) is the same class: the decomp defines it as
+  `u8` but declares it `int` in two headers; MWCC's register behaviour hides the difference, GCC's
+  EABI does not.
+
+### Sound register and volume-table differences
+
+Patch 1401's first port of the ARM7 registers treated `NitroPort_SoundRegisters` as relative to
+`0x04000400`. The array is indexed by the **low 16 bits of the DS address**: `SOUNDCNT` at `0x500`, a
+channel's control at `0x400 + channel*16` (channel 4 at `0x440`), captures at `0x508`/`0x510`. Every
+write landed `0x400` low and the mixer read zeros (patch `1405`). The same patch replaces the modelled
+BIOS volume curve with NitroSDK 4.2's 724-entry table: its low entries stay non-zero, while
+`round(127·10^(dB/20))` rounds them to 0 and silences an `attack = 0` envelope.
+
+### Graphics differences not visible in the header comparison
+
+- `lib/NitroSDK/src/gx/gx_load3d.c` still copied 3D textures to the raw LCDC address `0x06800000`
+  after the 2D loaders were fixed (1303). On the port that address is unmapped; patch `1406` maps the
+  table's pages onto `NitroPort_LcdcVram`, keeping zero entries zero so the loader's "no second
+  block" meaning survives.
+- `hgss/compat/include/nitro/gx/g3imm.h`'s `G3_StoreMtx`, `G3_RestoreMtx`, `G3_Scale` and
+  `G3_TexCoord` wrote `reg_G3_MTX_*` directly. The port's geometry engine only sees
+  `NitroPort_GxDirectWrite` (HGSS's own header already routes the other G3 helpers that way).
+
+### NitroSystem differences
+
+- **Three declaration sets for four `SND_*` functions.** HGSS's flat `SND_interface.h`/`SND_command.h`,
+  `lib/include/nnsys/snd_internal.h`, and the port's compat header disagreed. The flat headers cannot
+  be combined with the public ones: their `SND_work_shared.h` redefines `SNDChannelInfo`/
+  `SNDTrackInfo`. The port keeps one declaration set (see `hgss/compat/README.md`).
+- **`NNSSndHandle` include order.** HGSS's `nnsys/snd.h` does not include `snd/player.h`, but
+  `snd/main.h` uses `NNSSndHandle`. A unity file that includes every header in path order fails; the
+  compat `nitro/snd.h` pulls the heap/player headers first.
+- **A real `.bss` layout bug in `gfd_linked_list_tex_vram_man_reset.c`.** Three separate globals are
+  read as one `LnkTexVramManager` at +0/+4/+8. GCC's `.bss` order puts them at 0x0/0x14/0x18; patch
+  `NitroSystem/0303` emits one ordered block under `SDK_PORT_3DS`.
+- **An empty inline-symbol list is normal here.** HGSS's NNS headers are all `static inline`; the
+  vendored weaken step must tolerate an empty `nm` output (the harness's `NM` wrapper appends one
+  harmless name).
+
+
+
 ## The survey: 243 to 270 of 284
 
 The survey is `tools/sdk_compile_survey.py`. It runs `gcc -fsyntax-only` on every `.c` file under `lib/NitroSDK/src` and `lib/NitroSystem/src`, with the port's flags and `-DSDK_PORT_3DS`. A file counts as parsing if GCC reports no error. It does not link or run anything ([tools/sdk_compile_survey.py](../../tools/sdk_compile_survey.py), docstring).
@@ -90,7 +143,7 @@ The survey is `tools/sdk_compile_survey.py`. It runs `gcc -fsyntax-only` on ever
 The total is 284 files. That is 190 in NitroSDK plus 94 in NitroSystem, which I counted in the pinned tree.
 
 - **Baseline, before any patch:** 243 of 284 parse, at 32-bit ([docs/progress/phase-1.md](../progress/phase-1.md)).
-- **With all 39 patches:** 270 of 284 parse with gcc 13, 269 with gcc 10 ([docs/progress/STATE.md](../progress/STATE.md)). The extra gcc-10 failure is `ctrdg/CTRDG_common.c`; `SND_command.c` was fixed by patch 1201.
+- **At the 39-patch measurement:** 270 of 284 parse with gcc 13, 269 with gcc 10 ([docs/progress/STATE.md](../progress/STATE.md)). The extra gcc-10 failure is `ctrdg/CTRDG_common.c`; `SND_command.c` was fixed by patch 1201. The survey has not been rerun since the `14xx`/`15xx` patches; rerun it when changing SDK code.
 
 ### The 14 files that still do not parse
 

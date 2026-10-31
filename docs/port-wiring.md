@@ -1,10 +1,12 @@
 # Wiring the vendored port layer to the HGSS SDK (Phase 1)
 
-> **Status 2026-10-31 (session 4): wired and building.** `libnitro.a` compiles with zero errors from 139
-> HGSS SDK sources plus `hgss/compat`, the ARM7 sound driver and the NNS shim. The vendored suites run:
-> `pak` 120 checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 — 0 failed. `test_arm7`
-> passes backup/RTC/power/touch and **hangs in `test_sound`**; `test_nitrosystem` is not reached yet.
-> The failure history is [progress/agent-notes/p1-runtime-bringup.md](progress/agent-notes/p1-runtime-bringup.md).
+> **Status 2026-10-31 (session 5): wired, building and green.** `libnitro.a` and `libnitrosystem.a`
+> compile with zero errors from HGSS's SDK sources plus `hgss/compat`, the ARM7 sound driver and the NNS
+> shim. `make port-tests` exits 0: `pak` 120, the whole nitro sequence (`test_arm7` 676,
+> `test_sound_sequence` 12, `test_render` 2071, `test_gx3d` 326+228, `test_vram_transfer` 24,
+> `test_shadow` 375, …) and `test_nitrosystem` 17,122 — all 0 failed. The failure history is
+> [progress/agent-notes/p1-runtime-bringup.md](progress/agent-notes/p1-runtime-bringup.md) and
+> [progress/agent-notes/p2-wave-a-session5.md](progress/agent-notes/p2-wave-a-session5.md).
 > The sections below are the original wiring analysis; the numbers in them are from before the wiring
 > landed and are kept as history.
 
@@ -35,10 +37,11 @@ name needed which kind of fix; every row is now resolved:
 | `REG_ADDR_DMA0CNT` / `REG_ADDR_DMA0_CLR_DATA` are absolute addresses, outside the 1301 remap | mi_dma (via port_hooks) | patch 1302 (done) |
 
 The fast survey is `python3 tools/port_compile_survey.py`. The real build is
-`python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> lib -k -j8`: **0 errors**. The
-suites run with the `test` goal; one hangs (`test_arm7`/`test_sound`), the rest pass. See
-[progress/STATE.md](progress/STATE.md) and
-[progress/agent-notes/p1-runtime-bringup.md](progress/agent-notes/p1-runtime-bringup.md) for the
+`python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> lib -k -j8`: **0 errors**, both
+archives. The suites run with the `test` goal and **all pass** (`make port-tests` exit 0). See
+[progress/STATE.md](progress/STATE.md),
+[progress/agent-notes/p1-runtime-bringup.md](progress/agent-notes/p1-runtime-bringup.md) and
+[progress/agent-notes/p2-wave-a-session5.md](progress/agent-notes/p2-wave-a-session5.md) for the
 runtime failures and their causes.
 
 ## Not just compile errors

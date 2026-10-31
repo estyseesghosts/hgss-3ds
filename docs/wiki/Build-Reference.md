@@ -70,16 +70,17 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 
 | Target | Command | Output | State |
 | --- | --- | --- | --- |
-| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **39 patches** |
-| Host test gate | `make test` | test results only | **green** (182 Python tests + 18 SDK suites) |
+| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **61 patches** |
+| Host test gate | `make test` | test results only | **green** (204 Python tests + 18 SDK suites) |
 | SDK syntax survey | `make sdk-survey` or `python3 tools/sdk_compile_survey.py --m32 -j8` | counts | 270/284 (gcc 13), 269/284 (gcc 10) |
 | Port source survey | `python3 tools/port_compile_survey.py` | counts + first errors | **46/46, exit 0** |
-| Port layer host32 libraries | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | `libnitro.a` under `/work/out/x` | **works, 0 errors** |
-| Vendored port suites | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` or `make port-tests` | test output | `pak` 120, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 — 0 failed; **`test_arm7` hangs in `test_sound`** |
+| Port layer host32 libraries | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | `libnitro.a`, `libnitrosystem.a` under `/work/out/x` | **both build, 0 errors** |
+| Vendored port suites | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` or `make port-tests` | test output | **exit 0**: pak 120, the whole nitro sequence (arm7 676, sound_sequence 12, render 2071, gx3d 326+228, vram 24, shadow 375, …), nitrosystem **17,122** — 0 failed |
 | Save-layout probe | `make layout` | differences | 0/804 (last run) |
-| DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | ROM in `/work` | works; needs MWCC; **not passed at 39 patches** |
+| DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | ROM in `/work` | works; needs MWCC; **not passed at 61 patches** (last pass 10) |
 | Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
-| Game for 3DS or PC | `make game-pc` / `make game-3ds` | `build/` | **compiles; does not link yet** — 966 unresolved symbols ([phase-2.md](../progress/phase-2.md)) |
+| Game for PC | `make game-pc` | `build/pokeheartgold-pc` | **1092/1092 compile, 34 unresolved; no binary yet** ([phase-2.md](../progress/phase-2.md)) |
+| Game for 3DS | `make game-3ds` | `build/pokeheartgold.3dsx` | compiles ~1049/1094; 3DS `libnitro.a` blocked by `std_sprintf` and the ARM7 rule; no binary yet |
 
 There is no `make game`, `make matching` or `builder/` in this repo. See
 [Tools-Reference](Tools-Reference.md#named-in-the-docs-but-not-in-the-repo).
@@ -97,7 +98,7 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && python3 tools/bootstrap.py'
 
-# 2. host tests (19 Python tests + 11 SDK suites)
+# 2. host tests (204 Python tests + 18 SDK suites)
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && make test'
 
@@ -210,9 +211,19 @@ python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test
 runs overwrite each other. `-k` keeps going after the first failing file so you see all errors.
 `tools/port_compile_survey.py` is the fast per-file syntax measure; the make build is the real thing.
 
-Current state: the libraries build with zero errors and every suite passes except `test_arm7`, which
-hangs in `test_sound`. The failure history and root causes are in
-[../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md).
+Two `--out` details matter since session 5:
+
+- `NNS_INLINE_SYMS` was hardcoded in `3ds_port/common.mk`; `nitrosystem_overrides()` now passes
+  `NNS_INLINE_SYMS=<out>/gen/nns_inline.syms` and creates the directory, so a private output is
+  really private.
+- HGSS's NitroSystem headers are all `static inline`, so the `nns_all_headers.o` symbol list is
+  legitimately empty, and binutils 2.42's `objcopy --weaken-symbols=` rejects an empty file. The
+  harness passes an `NM` wrapper that appends one harmless nonexistent `T` name for that object.
+
+Current state: both libraries build with zero errors and **every suite passes**, including
+`test_arm7`, `test_sound_sequence` and `test_nitrosystem`. The failure history and root causes are in
+[../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md) and
+[../progress/agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md).
 
 ## 8. Troubleshooting
 
@@ -259,13 +270,63 @@ default.
 It compares the number of applied commits with the number of patch files and does not notice edits
 to a patch's contents. After adding, removing or editing a patch: `python3 tools/bootstrap.py --clean`.
 
-### The DS gate stops with "physical input drift" or "production closure drift"
+### The DS gate stops with "physical input drift", "production closure drift" or "header drift"
 
-`tools/arm7-alarm-partition/build.py` and `tools/alarm-partition/build.py` verify the SHA-256 of every
-header they read before building. A patch that edits one of those headers (all inside
-`#ifdef SDK_PORT_3DS`) makes the check fail and names the file. Update the pins in the two
-`profile.json` files — patch `1601` is the example — and rerun the gate. The pin is provenance, not ROM
+Five decomp tools verify their inputs before building, not two:
+
+- `tools/arm7-alarm-partition/build.py` — `physical input drift`, `C_header_pins`;
+- `tools/alarm-partition/build.py` — `production closure drift`, `closure`;
+- `tools/msl-new-partition/build.py`, `tools/msl-d1-partition/build.py`,
+  `tools/dwc-iterator-advance/build.py` — `header drift`, `unregistered source`, `complete producer
+  section/symbol/relocation/payload drift`.
+
+A patch that edits one of those headers (all inside `#ifdef SDK_PORT_3DS`) makes the check fail and
+names the file. Update the pins in the `profile.json` files — patches `1601` and `1602` are the
+examples — and rerun. The MSL tools pin more than headers: `producers.*.source_sha256` (patches 1505
+and 1519 changed those sources) and the complete producer object. The pin is provenance, not ROM
 content; the ROM SHA1 is the proof.
+
+**Run the gate from `/work/pokeheartgold`.** The MSL/DWC producer pins embed the absolute source
+directory (`Z:\work\pokeheartgold\src\…`) in an object payload, so a clone at `/work/patched` fails
+with `complete producer … payload drift` even though the code is identical. Rename the old reference
+tree aside and clone into that path; the recipe in
+[Daily-Workflow](Daily-Workflow.md#the-ds-side-gate) does.
+
+**A debug-info shape pin can still be stale after a `#ifdef`-only patch.** Adding lines under
+`#ifdef SDK_PORT_3DS` shifts source line numbers, so MWCC's debug sections change even though the
+generated code does not. `msl-new-partition` compares the whole object, including those sections.
+Regenerate `scalar-shape.json`/`array-shape.json` with the tool's normalizer; do not hand-edit them.
+This was open at session 5 (observed: two payload hashes, a section length 238 vs 226, a symbol size
+48 vs 36).
+
+### `link failed (0 unresolved symbols)` but there is no binary
+
+`ld` can abort on an earlier error before it finishes symbol resolution; the harness parses only the
+lines `ld` emitted. Read the whole `link.log`. The session-5 example was a four-object NitroDWC data
+group that references `errno` as a non-TLS symbol, clashing with glibc's TLS definition
+(`errno: TLS definition in /lib32/libc.so.6 section .tbss mismatches non-TLS reference`). Those four
+(`dwc_gamespy_bss.o`, `dwc_lib_bss.o`, `dwc_lib_data.o`, `dwc_lib_rodata.o`) are DWC-internal libc
+state and are excluded from the link.
+
+### `make test` and a harness run disagree (hundreds of spurious compile failures)
+
+Both paths use the shared `build/hgss-sdk` and `build/hgss-nns` symlinks. A test that called
+`make_shim()` with a fake root re-pointed them at a nonexistent tree, and a concurrent harness then
+failed in 763 files with NNS incomplete-type errors. The test now keeps its shim in a temp `BUILD`;
+still, do not run `make test` concurrently with a harness build, and do not run
+`bootstrap --clean` while anything reads the tree.
+
+### The 3DS `libnitro.a` fails in `hgss/std_sprintf.c`
+
+devkitARM rejects the `va_list` arithmetic (`invalid operands to binary + (va_list and int)`). This is
+unrelated to the host32 build (which uses glibc's `va_list`); it blocks the 3DS archive and therefore
+the 3DS link. Fix at the source under `SDK_PORT_3DS`.
+
+### The 3DS ARM7 rule rejects `hgss/compat/src/ds_sound_tables.c`
+
+The vendored rule feeds the file to the assembler path (`junk at end of line`, `unrecognized symbol
+type ""`) because it is an ARM7 compat C file. Give it a `.S`/`.c` distinction or build it as C with
+the ARM7 defines and rename it like the other compat files, in the `tools/hgss_nitro.py` override.
 
 ### `make patch_mwasmarm` says `tools/mwasmarm_patcher/mwasmarm_patcher: No such file or directory`
 

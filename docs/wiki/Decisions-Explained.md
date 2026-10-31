@@ -196,6 +196,13 @@ These choices are explained in full inside the patch messages in `patches/`. Eac
 - **The `CountLeadingZeros` helper returns 32 for zero** (NitroSystem patch `0301`). The DS `clz` instruction gives 32 for zero, and `__builtin_clz(0)` is undefined.
 - **`OS_SpinWait` returns at once on the port** (patch `0401`). The DS version is a cycle delay, and nothing on the port needs it.
 - **The `int` return type is added to one prototype, on the port only** (patch `1101`). GCC 14 and later reject a prototype with implicit `int`. The patch message says the definition already returns `int`, so the DS text does not need to change.
+- **The ARM9 sound flush lives in `SND_command.c` on the port** (patch `1404`). The decomp mixes a 4-byte `sFreeList` pointer (in `SND_command.c`) with a 40-byte `CommandState` (in `snd_flush_command.c`). The DS keeps them in separate objects; the port links both. Moving the flush next to the state is the smallest change that keeps the MWCC text untouched.
+- **Sound registers are indexed by the DS address's low 16 bits** (patch `1405`). The mixer reads `SOUNDCNT` at `0x500` and channel 4 at `0x440`; the first port subtracted `0x400`. The volume table is NitroSDK 4.2's real 724-entry table, because its low entries are non-zero and an `attack = 0` envelope depends on them.
+- **3D texture pages become host pointers** (patch `1406`). The loader's copy expressions stay the DS ones; only the LCDC page number is translated. Keeping zero entries zero preserves the "no second block" meaning.
+- **NitroDWC's asm data is linked even though its functions are stubbed.** Every `lib/NitroDWC/asm` object has no `T` symbols; the lobby and wifi_setup code reads the tables directly. Four libc-state blobs that reference a non-TLS `errno` are excluded.
+- **The DS secure-area images are excluded from the PC/3DS build.** They are embedded MWCC asm, no source references them, and the bytes are proprietary firmware.
+- **The overlay self-check disables static initializers while it loads.** It tests the loader (`.data` restored, `.bss` cleared), not the game's init code; an application overlay's initializer may touch game state. The `.sinit` pointers are still validated against `FS_LoadOverlayInfo`.
+- **The symbol cross-check is an allowlist, not a silent pass.** A missing symbol means a source file was left out; every absent symbol needs an explicit replaced/stubbed reason in `tools/symbol_crosscheck_allowlist.txt`.
 
 ## Notes on the record
 

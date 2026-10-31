@@ -82,13 +82,16 @@ pokeheartgold-3ds/
   upstream.lock          pinned decomp commit (ctrl-cheeb-del/pokeheartgold)
   platinum.lock          pinned Platinum port commit whose 3ds_port/ is vendored
   patches/
-    NitroSDK/            9 patches (numbered 0101 to 0901)
-    NitroSystem/         1 patch  (0301)
-    pokeheartgold/       5 patches (1001, 1101, 1201, 1301, 1302)
+    NitroSDK/            15 patches (0101-0901, with gaps)
+    NitroSystem/         3 patches (0301-0303)
+    pokeheartgold/       43 patches (1001-1602, grouped by area)
   3ds_port/              vendored from Platinum: nitro/, nitrosystem/, pak/, game/
-  hgss/compat/include/   HGSS names for headers the port includes (currently only .gitkeep)
-  tools/                 bootstrap.py, hgss_nitro.py, savetool.py, layout_probe/, surveys, ...
-  tests/                 unit tests for tools, layout probe, sdk/ (11 host suites), inputs/
+  hgss/compat/include/   HGSS names for headers the port includes, plus nnsys/hgss_compat.h
+  hgss/compat/src/       SDK stand-ins, sound tables, NNS tables, MSL runtime (planned)
+  hgss/game/             app shells (PC/3DS), stubs, game-facing glue
+  tools/                 bootstrap.py, hgss_nitro.py, hgss_game.py, s_to_gas.py,
+                         game_sources.py, game_overlays.py, symbol_crosscheck.py, ...
+  tests/                 unit tests for tools, layout probe, sdk/ (18 host suites), game/
   docs/                  BASE.md, sdk-diff.md, port-wiring.md, decisions.md, progress/, wiki/
   .github/workflows/     matching.yml (disabled), port.yml (make test)
   build/                 generated: build/upstream, build/hgss-sdk, outputs (git-ignored volume)
@@ -101,8 +104,8 @@ pokeheartgold-3ds/
 | Phase | Plan exit criterion | Status | What the record shows |
 | --- | --- | --- | --- |
 | 0 Baseline | Matching DS build in CI; reference captures and save fixtures exist | **Partial** | The phase record says "complete except items marked NOT DONE". Both matching SHA1s are verified inside the dev container ([docs/progress/phase-0.md](../progress/phase-0.md), "Matching build: resolved"). Marked NOT DONE: golden captures (BizHawk could not run on the macOS host) and the input scripts' calibration. The record also has no save fixtures ("no saves yet") and does not report the determinism check. `matching.yml` is disabled. |
-| 1 Port scaffold, SDK rebase | HGSS NitroSDK and NitroSystem compile with GCC under `SDK_PORT_3DS`; port unit tests pass | **Partial** | <br>39 patches in `patches/`. Survey: 270 of 284 SDK files parse (gcc 13; 269 with the port's gcc 10), up from 243. Layout probe: 0 differences across 804 values. `make test` is green (182 Python tests + 18 host suites). The vendored suites run against HGSS and pass (`pak` 120, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 checks); `test_arm7` hangs in `test_sound`, `test_nitrosystem` is not reached. The DS gate last passed with 10 patches and has not been rerun at 39. ([docs/progress/STATE.md](../progress/STATE.md).) |
-| 2 Game under GCC, link | `pokeheartgold-pc` and `pokeheartgold.3dsx` link with no unresolved symbols | **Not started** | No game object has been compiled or linked ([docs/progress/phase-1.md](../progress/phase-1.md), exit checklist). |
+| 1 Port scaffold, SDK rebase | HGSS NitroSDK and NitroSystem compile with GCC under `SDK_PORT_3DS`; port unit tests pass | **Code complete; gate owed** | <br>61 patches. Survey: 270 of 284 SDK files parse (gcc 13; 269 with the port's gcc 10), up from 243. Layout probe: 0 differences across 804 values. `make test` green (204 Python tests + 18 host suites). `make port-tests` **exit 0**: pak 120, the whole nitro sequence (arm7 676, sound_sequence 12, render 2071, gx3d 326+228, vram 24, shadow 375, …) and nitrosystem 17,122 — all 0 failed. The DS gate last passed with 10 patches; five build-tool input pins were fixed in 1601/1602, and one debug-info shape pin remains ([docs/progress/STATE.md](../progress/STATE.md)). |
+| 2 Game under GCC, link | `pokeheartgold-pc` and `pokeheartgold.3dsx` link with no unresolved symbols | **Partial** | 1092/1092 game files compile, 150/150 `.s`; both port archives build. Host link: **34 unresolved** (MSL runtime, C++ runtime, MB stubs, five pokéwalker aliases); no binary yet. The 3DS link is blocked by `std_sprintf`, the ARM7 rule and ~45 devkitARM-only compile errors. `--check-overlays` and `symbol_crosscheck.py` exist but need the real binary ([docs/progress/phase-2.md](../progress/phase-2.md)). |
 | 3 Data pipeline | Builder makes `heartgold3ds.pak` and `manifest.json` | **Not started** | No `builder/` directory. |
 | 4 PC build reaches Oak | Scripted run from boot to the end of Oak's speech matches melonDS | **Not started** | No HGSS PC build. |
 | 5 3DS build reaches Oak | Same run on a New 3DS | **Not started** | No HGSS `.3dsx`. |
@@ -117,14 +120,17 @@ The gameplan's Phase 1 deliverables list 27 NitroSDK and 5 NitroSystem patches t
 
 ### Known gaps in the hardware layer for HGSS
 
-These are the items the phase-1 record names as not done. Each one is a reason the port cannot yet run the game.
+These are the items the phase-1 record names as not done. Each one is a reason the port cannot yet run the game. Items 1-5 are now implemented (session 5) and marked accordingly; the list is kept as history where useful.
 
-- The header-level patches in `lib/include`: timer hooks (Platinum 0013) and overlay ID symbols as bytes (0010).
-- The overlay patches (Platinum 0011, 0014, 0027): the libpak hook and the overlay hooks, including static initializers.
-- The 3D command ports (Platinum 0024 and 0025). `g3imm.c` still stores directly to the FIFO, so matrix sends do not reach the port's 3D translator.
-- The ARM7 sound driver, which has to be rebuilt from `sub/` rather than rebased (Platinum 0018 to 0023).
-- The PXI decoders for RTC, touch and power. HGSS sends literal command words where the port decodes named constants ([docs/port-wiring.md](../port-wiring.md), "PXI protocols differ").
-- The vendored port's own unit tests are not wired to the HGSS source list. This is the open Phase 1 exit criterion.
+- **Done:** the header-level patches in `lib/include` (timer hooks 1402, overlay ID symbols 0603/1402, static initializers 1401).
+- **Done:** the overlay hooks and libpak (0603/1402); static initializers (1401/1513/1525).
+- **Done:** the 3D command ports (0604 and `g3imm`/`G3_*` forwarding in the compat header); matrix sends now reach the port's translator.
+- **Done:** the ARM7 sound driver, rebuilt from `sub/` (1401), the command-flush revision fix (1404), absolute register offsets and the real volume table (1405).
+- **Done:** the virtual ARM7 decoders for RTC, touch, power and sound; HGSS's literal command words are handled.
+- **Done:** the vendored port's unit tests are wired to the HGSS source list (`hgss_nitro.py`), and `make port-tests` is green.
+- **Open:** the two duplicate globals the game harness weakens (`FrontierScript_ReadByte`, `sListMenuTemplate`) need a real per-overlay/local fix.
+- **Open:** `tools/object_aliases.py` is not run by the game harness, so interior aliases (the five `gPokewalkerIr*`) are missing.
+- **Open:** the 3DS build's `std_sprintf`/ARM7-rule/devkitARM-only compile failures (Phase 2 link).
 
 ## Notes on the record
 

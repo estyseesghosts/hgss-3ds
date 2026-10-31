@@ -81,8 +81,8 @@ bash tests/sdk/fx/run.sh build/upstream
 
 `make port-tests` runs the vendored `3ds_port` suites (`pak`, `nitro`, `nitrosystem`) against HGSS's
 SDK. It is its own target, not part of `make test`, because it needs a full `host32` build. Current
-state: every suite passes except `test_arm7`, which hangs in `test_sound`; see
-[../progress/STATE.md](../progress/STATE.md).
+state (61 patches): **exit 0**; every suite passes, including `test_arm7` (676), `test_sound_sequence`
+(12) and `nitrosystem` (17,122 checks). See [../progress/STATE.md](../progress/STATE.md).
 
 ## The port layer
 
@@ -106,10 +106,12 @@ python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> test
 - `--subproject {pak,nitro,nitrosystem,all}` narrows `test`; the default for `test` is all three.
 - `python3 tools/hgss_nitro.py list` prints the HGSS source lists and the excluded files; `shim` recreates the shims and prints the overrides.
 
-Current state (2026-10-31): `libnitro.a` builds with 0 errors; `pak` 120 checks, `test_nitro` 702,
-`test_fs_pak` 120, `test_threads` 68, all 0 failed; **`test_arm7` hangs in `test_sound`**. The failure
-history, including every segfault and its root cause, is
-[../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md).
+Current state (2026-10-31, 61 patches): `libnitro.a` and `libnitrosystem.a` build with 0 errors;
+`make port-tests` exits 0 — pak 120, the whole nitro sequence (arm7 676, sound_sequence 12, render
+2071, gx3d 326+228, vram 24, shadow 375, …) and nitrosystem 17,122. The failure history, including
+every segfault and root cause, is in
+[../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md) and
+[../progress/agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md).
 
 `hgss/compat/include/` is on the shim's include path and holds HGSS names for Platinum headers. Do not
 edit the vendored files for HGSS-only names: add a header or a new source (`port_pm_hgss.c`, compat C
@@ -266,11 +268,30 @@ These come from things the repo already recorded.
 - **Bootstrap does not see patch edits.** After you change a patch's contents, use `--clean`. Editing a patch without `--clean` leaves `build/upstream` with the old text, and the tests run against the old code.
 - **Outputs that contain game code stay local.** The matching ROM, the decomp build and any `.3dsx` or `.cia` belong in `/work` or on your own machine, never in the repo, a CI artifact or a message.
 - **Golden frames are git-ignored.** `tests/golden/` shows game art. Only the input scripts and the capture tools are committed. See [tools/golden/README.md](../../tools/golden/README.md).
-- **The vendored `3ds_port/` tests are wired, one suite still hangs.** `make port-tests` is real and
-  runs `pak`, `nitro` and `nitrosystem` against HGSS's SDK; everything passes except `test_arm7`'s
-  `test_sound`, which spins. To debug a vendored test, see
+- **The vendored `3ds_port/` tests are wired and green.** `make port-tests` is real and runs `pak`,
+  `nitro` and `nitrosystem` against HGSS's SDK; at 61 patches it exits 0 (nitrosystem 17,122 checks).
+  To debug a vendored test, see
   [Build-Reference](Build-Reference.md#a-vendored-test-segfaults-or-hangs-at-100--cpu); never edit the
   test to make it pass.
+- **Do not run `make test` and a harness build at the same time.** Both use the shared
+  `build/hgss-sdk`/`build/hgss-nns` symlinks. A test that called `make_shim()` with a fake root once
+  re-pointed them at `/up`, and a concurrent harness failed in 763 files with NNS incomplete-type
+  errors. The test is now isolated, but the shared state remains a hazard; serialise the two.
+- **Do not run `bootstrap --clean` while anything reads `build/upstream`.** It deletes the tree; the
+  symptom is a header that certainly exists reported missing mid-build.
+- **The DS gate must run from `/work/pokeheartgold`.** The MSL/DWC partition tools pin the complete
+  producer object and MWCC embeds the absolute source path; `/work/patched` can never match. Five
+  tools pin inputs (`1601`/`1602`), and the MSL `*-shape.json` debug-info pins go stale when an
+  `#ifdef SDK_PORT_3DS` block shifts source lines. See
+  [Build-Reference](Build-Reference.md#the-ds-gate-stops-with-physical-input-drift-production-closure-drift-or-header-drift).
+- **The game build is missing one decomp stage: `tools/object_aliases.py`.** The DS build adds labels
+  inside BSS objects (the five `gPokewalkerIr*`) and Thumb entry points from `.alias-map.json` files.
+  The harness does not run it yet; do not hand-write those symbols.
+- **A link that prints `0 unresolved symbols` may have aborted early.** Read the whole `link.log`; an
+  earlier `ld` error (e.g. a non-TLS `errno` reference clashing with glibc) stops symbol resolution.
+- **`MSL_C` is not all replaced by newlib.** The float/64-bit runtime and `strnicmp`/`__lower_mapC`
+  have no host equivalents; they need a compat implementation with the **bit-pattern** ABI the game
+  declares, not a plain C float file.
 - **A host test that links an SDK object needs the port's arrays.** Patch 1301 moved the registers into `NitroPort_IoReg` and friends; link `tests/sdk/port_memory.c` (the suites already do). If a register write faults at `0x04000000`, look for an absolute address in an SDK header (patch 1302 fixed two) instead of mapping the page in the test.
 - **`onCreate.sh` runs once.** Its private-file check and `wineboot` run only when the container is created. Changing the Wine version in the Dockerfile needs a new container. The private folder is a live mount, so files you add to it later are visible without a rebuild. Only the one-time checks need the new container.
 - **The matching build is not `make`.** Use `tools/matching-build.sh`, or the ROM will not match. See [Getting-Started](Getting-Started.md#the-matching-sha1-does-not-match).

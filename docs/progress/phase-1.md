@@ -1,11 +1,36 @@
 # Phase 1 progress
 
-Status: **in progress, one hang left.** The SDK patch stack is now **39 patches**; `make test` is green,
-`libnitro.a` builds with zero errors, and the vendored suites run in order: `pak-backed NitroFS` 120
-checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 — all with 0 failures. The single open exit criterion is
-`test_arm7`, which passes backup/RTC/power/touch and then **hangs in `test_sound`**. The DS-side gate has
-not been rerun since the stack grew past the last passing run.
+Status: **code complete; the DS-side gate is the only exit criterion still owed.** The stack is **61
+patches** (NitroSDK 15, NitroSystem 3, pokeheartgold 43). `make test` is green (204 tests + all SDK
+suites), `libnitro.a` and `libnitrosystem.a` build, and **`make port-tests` exits 0** across all three
+subprojects: pak 120 checks, the whole nitro sequence (`test_arm7` 676, `test_sound_sequence` 12,
+`test_render` 2071, `test_gx3d` 326+228, `test_vram_transfer` 24, `test_shadow` 375, …) and
+nitrosystem **17,122 checks, 0 failed**. The DS gate has not passed since the 10-patch run; see the
+session 5 update and [agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md) §7.
 
+> **Update 2026-10-31 (session 5).** Phase 1's code is finished and the full vendored matrix is green.
+>
+> - **`test_arm7`**: the spin was not a missing pump. The decompilation mixes two NitroSDK revisions —
+>   `SND_command.c` owns a 4-byte `sFreeList` pointer and the tag counters, `snd_flush_command.c`
+>   reads a 40-byte `CommandState` through that pointer. The port links both, so the flush never saw
+>   `sReserveList` and its writes landed on the tag counters. Patch **1404** moves the 4.2 flush next
+>   to the state it updates; `tests/sdk/arm7_sound/test_arm9_flush.c` (24 checks) covers it.
+> - **`libnitrosystem.a`/`test_nitrosystem`**: the compat headers now provide one declaration set for
+>   the four disputed `SND_*` functions, `NNSSndHandle` exists before any NNS header, and **NitroSystem
+>   patch 0303** fixes a real `.bss` layout bug in `gfd_linked_list_tex_vram_man_reset.c` (three
+>   separate globals read as a struct at +0/+4/+8). Harness fixes: `NNS_INLINE_SYMS` now respects
+>   `--out`, and an `NM` wrapper keeps binutils 2.42 from failing on an empty weaken list.
+> - **Newly reachable suites exposed three more port bugs**: patch **1405** (sound registers were
+>   mapped 0x400 low; the BIOS volume table was a formula, not the 724-entry SDK table), patch
+>   **1406** (`GX_LoadTex*` still wrote raw LCDC VRAM), and `g3imm`'s direct G3 register writes now go
+>   through `NitroPort_GxDirectWrite`.
+> - **DS gate:** five decomp tools pin inputs, not two. Patches **1601/1602** re-pin them. The MSL/DWC
+>   tools also pin the *complete producer object*, and MWCC embeds the absolute source directory, so
+>   the gate must run from **`/work/pokeheartgold`** (the docs used `/work/patched`). A debug-info
+>   shape pin (`msl-new-partition` `*-shape.json`) is still open: adding `#ifdef` lines shifts line
+>   numbers and changes MWCC's debug sections even though the code is identical. Regenerate the shape
+>   pins before the final run.
+>
 > **Update 2026-10-31 (session 4).** The compat layer, the remaining patch categories and the vendored
 > test wiring all landed. Patches added: `0302` (arena/stack symbols), `0303` (MATH_CountPopulation
 > return width), `0502` (remaining DIV/SQRT writers), `0602` (software timers), `0603` (ROM archive and
@@ -28,22 +53,21 @@ not been rerun since the stack grew past the last passing run.
 - Container: `cd /Users/terezi/hgss/pokeheartgold-3ds && devcontainer up --workspace-folder .` then
   `devcontainer exec --workspace-folder . bash -c '...'`. Repo inside = `/workspaces/pokeheartgold-3ds`.
 - Rebuild the patched tree from scratch: `python3 tools/bootstrap.py --clean` (applies `patches/**`
-  in numeric order per stack, generates `fx_const.h`). Expected: **39 patches**.
+  in numeric order per stack, generates `fx_const.h`). Expected: **61 patches**.
 - Measure: `python3 tools/sdk_compile_survey.py -j 10 --m32` (gcc-13: 270/284) and with
   `--gcc gcc-10` (269/284). Port: `python3 tools/port_compile_survey.py` (46/46) and
-  `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` (0 errors).
-- Tests: `make test` (182 Python tests + 18 SDK suites; exit 0). Vendored:
+  `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` (0 errors, both archives).
+- Tests: `make test` (204 Python tests + 18 SDK suites; exit 0). Vendored:
   `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` (all three subprojects)
-  or `make port-tests`. One suite: `bash tests/sdk/<name>/run.sh build/upstream`.
+  or `make port-tests` (**exit 0**). One suite: `bash tests/sdk/<name>/run.sh build/upstream`.
 - DS-side gate (hard rule 3): move the old reference tree aside and clone `build/upstream` to
   **`/work/pokeheartgold`** (the MSL partition tools pin the absolute source path inside the object),
   `tools/install-ds-toolchain.sh /work/pokeheartgold`, **`make -C tools/mwasmarm_patcher`** (its binary
   is git-ignored; the gate fails without it), `make patch_mwasmarm MWCCVER=2.0/sp2p3`,
   `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` (~18 min), expect ROM SHA1 `4fcded0e…`.
-  **Not passed at 39 patches.** Five build tools pin inputs (`tools/arm7-alarm-partition`,
-  `tools/alarm-partition`, `tools/msl-new-partition`, `tools/msl-d1-partition`,
-  `tools/dwc-iterator-advance`); patches `1601`/`1602` re-pin them, and a new patch that touches a
-  pinned header or the `to91_msl_*_new.cpp` sources needs a new pin.
+  **Not passed at 61 patches.** Five build tools pin inputs; patches `1601`/`1602` re-pin the header
+  and source classes. One debug-info shape pin (`msl-new-partition` `*-shape.json`) is still stale
+  after patch 1519 and must be regenerated before the final run (see the session-5 note §7).
 - Patch authoring: clone `build/upstream` to `/work/wt/<name>`, edit, commit, then
   `git format-patch -1 --relative=lib/NitroSDK --start-number N -o /workspaces/pokeheartgold-3ds/patches/NitroSDK`
   (use `--relative=lib/NitroSystem` for NitroSystem; patches touching other trees go to
@@ -136,12 +160,12 @@ Caveat: `mi_memory.c` also defines `MI_Copy32B/36B/48B/64B` that the port's `mi_
 
 | Item | Result |
 | --- | --- |
-| `bootstrap.py` applies all patches cleanly from scratch | **PASS**: 39 patches, `git am`, fails hard on a bad patch (unit-tested); also re-run in a fresh clone in the CI image |
+| `bootstrap.py` applies all patches cleanly from scratch | **PASS**: 61 patches, `git am`, fails hard on a bad patch (unit-tested); also re-run in a fresh clone in the CI image |
 | `docs/sdk-diff.md` complete | **PARTIAL**: PXI tags, OSSystemWork/SNDSharedWork field lists, G3 opcodes, card backup, `CARD_SpiWait*`, asm inventory done; RTC/TP/PM/MIC payload formats, IRQ/thread struct layouts, NitroSystem detail not compared (the port-wiring review found the PXI encodings differ) |
-| 27 + 5 patches rebased, each with a message | **NOT AS SPECIFIED, by evidence**: none of Platinum's patches applies to HGSS's different SDK tree (`git am` impossible); the triage found 4 trivial / 16 moderate / 3 rewrite / 4 N/A. Done as fresh HGSS patches by function: asm-to-C 0101, 0201, 0301, 0401, 0501, 0801, 0901 (Platinum 0003, 0006, 0008, 0012 equivalents), hooks 0601 (0009, 0017, 0026) and 0501 (0002), `u64` 1001 (0016), NNS 0301 (0001 partly), memory map 1301/1302 (0005), timers 0602 (0013), overlay + libpak 0603 (0010/0011/0014) with the header halves in 1402, 3D 0604 (0024/0025), static initializers 1401 (0027), ARM7 sound 1401/1403 (0018-0023 rewritten against `sub/`), NitroSystem 0302 (0003/0004/0005). 39 patches total. |
+| 27 + 5 patches rebased, each with a message | **NOT AS SPECIFIED, by evidence**: none of Platinum's patches applies to HGSS's different SDK tree (`git am` impossible); the triage found 4 trivial / 16 moderate / 3 rewrite / 4 N/A. Done as fresh HGSS patches by function: asm-to-C 0101, 0201, 0301, 0401, 0501, 0801, 0901 (Platinum 0003, 0006, 0008, 0012 equivalents), hooks 0601 (0009, 0017, 0026) and 0501 (0002), `u64` 1001 (0016), NNS 0301 (0001 partly), memory map 1301/1302 (0005), timers 0602 (0013), overlay + libpak 0603 (0010/0011/0014) with the header halves in 1402, 3D 0604 (0024/0025), static initializers 1401/1513/1525 (0027), ARM7 sound 1401/1403-1405 (0018-0023 rewritten against `sub/`), NitroSystem 0302/0303 (0003/0004/0005), and the Phase 2 game fixes 1501-1525. 61 patches total at session 5. |
 | HGSS-only SDK patches added | **PASS** for `CARD_SpiWait*` (0701), the GCC-10 fixes (1201) and the absolute MI DMA registers (1302). Mic PXI not examined. |
 | Layout probe: zero differences, or each explained and fixed | **PASS**: 804 values, 45 save roots; 55 differences found and fixed by patch 1001; 0 remain for host `-m32`, `-m32 -malign-double`, devkitARM |
-| Port unit tests green on `host` (and `host32`) | **PARTIAL — one hang**: the vendored suites build and run against HGSS. `pak` 120 checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68, all 0 failed; `test_arm7` passes backup/RTC/power/touch and hangs in `test_sound`; `test_nitrosystem` not reached. `make port-tests` is real and fails only on that hang. |
+| Port unit tests green on `host` (and `host32`) | **PASS**: `make port-tests` exit 0 at 61 patches. pak 120, the whole nitro sequence (`test_arm7` 676, `test_sound_sequence` 12, `test_render` 2071, `test_gx3d` 326+228, `test_vram_transfer` 24, `test_shadow` 375, …) and `test_nitrosystem` 17,122 checks — all 0 failed. |
 | `port.yml` passing | **NOT VERIFIED on GitHub** (no remote). A dry run of its exact steps (fresh clone, same image, same `docker run`) passes locally |
 | No game code compiled yet | **PASS**: only lib/ SDK and NitroSystem sources were compiled with GCC; the layout probe includes game *headers* (and 7 save-struct `.c` files, syntax and DWARF only). No game object was linked. |
 
@@ -152,6 +176,25 @@ ROM with SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37`, 0 failed checks, 18m43
 not change the DS build. **`1001`, `1101`, `1201`, `1301` and `1302` are not in that run.** Their text is inside
 `#ifdef SDK_PORT_3DS` and `gcc -E -P` without the macro is identical to the unpatched headers (checked), but a full rebuild
 including them has not been run. Run it before closing Phase 1. SoulSilver was not re-run against the patched tree.
+
+**Update 2026-10-31 (session 5): still not passed, but the blockers are now understood.** The gate did
+not stop on a code difference; it stopped on build-tool input pins:
+
+- Five tools pin inputs, not two: `arm7-alarm-partition`, `alarm-partition`, `msl-new-partition`,
+  `msl-d1-partition` and `dwc-iterator-advance`. Patches **1601/1602** re-pin them. The MSL tools pin
+  headers, producer **source hashes** and the **complete producer object**; `types.h` (1001),
+  `tree-iterator4.h` (the upstream bump) and `to91_msl_{scalar,array}_new.cpp` (1505 and 1519) all
+  changed.
+- The MSL/DWC producer pins embed the absolute source directory (`Z:\work\pokeheartgold\src\…`), so
+  the gate can only pass from **`/work/pokeheartgold`**, not `/work/patched`. The procedure is
+  corrected in [Daily-Workflow](../wiki/Daily-Workflow.md#the-ds-side-gate).
+- One pin class is still open: adding `#ifdef` lines shifts source line numbers and changes MWCC's
+  debug sections, so `msl-new-partition`'s `scalar-shape.json`/`array-shape.json` no longer match even
+  though the code is identical. Regenerate those shape fixtures with the tool's own normalizer, then
+  run both versions at the final count. Until then the gate cannot pass by construction.
+
+The full evidence and the exact observed diffs are in
+[agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md) §7.
 
 ## Deviations from the plan and why
 

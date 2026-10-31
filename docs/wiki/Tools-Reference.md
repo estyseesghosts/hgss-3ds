@@ -85,9 +85,23 @@ Compiles the game and links a target. See [Build-Reference](Build-Reference.md#3
 
 - **Usage:** `python3 tools/hgss_game.py --target {host32,3ds} [--keep-going] [--out DIR] [-- {make args}]`
 - **Does:** runs `prepare_game_headers.py`, compiles `src/**/*.c|*.cpp` plus the port-compiled `lib/` sources, assembles the `.s` files, builds `libnitro.a`/`libnitrosystem.a`, writes the overlay table and ID script, generates the Wi-Fi stubs, and links `build/pokeheartgold-pc` or a 3DS static link.
-- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1044/1094 compile, 150/150 `.s`, 966 unresolved symbols.
+- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1092/1092 compile, 150/150 `.s`, **34 unresolved symbols** (MSL/C++ runtime, MB stubs, five pokéwalker aliases); no binary yet.
 - **Needs:** the container. The 3DS target needs devkitARM (present).
 - **Tested by:** `tests/test_hgss_game.py`.
+
+### `tools/symbol_crosscheck.py`
+
+Compares the linked PC program's global C-named symbols against the DS reference ELF. Every symbol the
+DS build defines must be present in the PC ELF, or listed with a reason in
+`tools/symbol_crosscheck_allowlist.txt`. A missing symbol means a source file was left out of the PC
+build, so this is the convergence signal for the unresolved-symbol work.
+
+- **Usage:** `python3 tools/symbol_crosscheck.py [--pc build/pokeheartgold-pc] [--reference ELF] [--no-build-reference]`
+- **Reference:** `build/reference/main.elf`, then `/work/pokeheartgold/build/heartgold.us/main.elf`, then
+  the SoulSilver ELF; `--no-build-reference` skips `tools/matching-build.sh`.
+- **Output:** matched / allowlisted / missing counts and the missing set; exit 1 on any missing symbol.
+  `--help` works without pyelftools (it is imported only when an ELF is read).
+- **Tested by:** `tests/test_symbol_crosscheck.py` (synthetic symbol tables).
 
 ### `tools/install-ds-toolchain.sh`
 
@@ -252,7 +266,7 @@ From the repo `Makefile`:
 | `make tool-tests` | `python3 -I -m unittest discover -s tests` | |
 | `make sdk-tests` | every `tests/sdk/*/run.sh build/upstream` | |
 | `make sdk-survey` | `tools/sdk_compile_survey.py -j $(nproc) --m32` | Exits 1 while files fail (14 at last run). |
-| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. Everything passes except `test_arm7`'s `test_sound` (hang). |
+| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 61 patches** (nitrosystem 17,122 checks). |
 | `make layout` | `bash tests/layout_probe/run.sh` | |
 | `make clean` | `rm -rf build` | Deletes everything under `build/`, including `build/upstream` and `build/reference`. |
 
