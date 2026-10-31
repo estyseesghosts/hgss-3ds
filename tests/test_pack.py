@@ -1,5 +1,6 @@
 """Synthetic pack-format tests. No ROMs or game assets are used."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -11,11 +12,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from builder.extract_rom import extract  # noqa: E402
 from builder.pack import (DEFAULT_BUILD_ID, ENTRY, HEADER,  # noqa: E402
                           HEARTGOLD_PAK_BUILD_ID, PLATINUM_PAK_BUILD_ID,
                           main, pack, read_pak, write_pak)
+from tests.synthetic_rom import synthetic_nds  # noqa: E402
 
 SHA1 = "0123456789abcdef0123456789abcdef01234567"
+# A supported (clean HG US) digest, for the CLI tests: the CLI checks the
+# ROM SHA-1 against builder/verify_rom.SUPPORTED. The data is synthetic.
+HG_SHA1 = "4fcded0e2713dc03929845de631d0932ea2b5a37"
 
 
 class PakTests(unittest.TestCase):
@@ -39,12 +45,12 @@ class PakTests(unittest.TestCase):
             json.dumps({"files": files, **extra}), encoding="utf-8")
 
     def test_build_ids(self):
-        # Phase 3 wires HEARTGOLD_PAK_BUILD_ID to the boot-time pak check;
-        # Platinum's ID stays as an alias so the vendored test fixtures
-        # (which pass their own build IDs) keep working.
+        # The builder's default is the ID the game program checks at boot
+        # (HEARTGOLD_PAK_BUILD_ID); Platinum's stays as the adapted-from
+        # alias the vendored fixtures name.
         self.assertEqual(HEARTGOLD_PAK_BUILD_ID, "heartgold-nitrofs-1")
         self.assertEqual(PLATINUM_PAK_BUILD_ID, "platinum-nitrofs-1")
-        self.assertEqual(DEFAULT_BUILD_ID, PLATINUM_PAK_BUILD_ID)
+        self.assertEqual(DEFAULT_BUILD_ID, HEARTGOLD_PAK_BUILD_ID)
 
     def test_round_trip_sorted_ids_and_padding(self):
         pack(self.root, self.out, build_id="release-2026.10", rom_sha1=SHA1)
@@ -74,25 +80,74 @@ class PakTests(unittest.TestCase):
             pack(self.root, self.out, build_id="v1", rom_sha1="f" * 40)
 
     def test_cli_uses_manifest_sha1(self):
-        # No builder/verify_rom.py yet (Phase 3), so the CLI cannot check
-        # the digest against supported ROMs; it still packs with the
-        # manifest's SHA-1.
-        self.write_manifest(self.files, rom_sha1=SHA1)
+        self.write_manifest(self.files, rom_sha1=HG_SHA1)
         with patch.object(sys, "argv", ["pack.py", str(self.root), "-o", str(self.out),
                                        "--build-id", "dev-001"]):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main(), 0)
         decoded = read_pak(self.out)
         self.assertEqual(decoded["build_id"], "dev-001")
-        self.assertEqual(decoded["rom_sha1"], SHA1)
+        self.assertEqual(decoded["rom_sha1"], HG_SHA1)
+
+    def test_cli_default_build_id_is_the_games(self):
+        self.write_manifest(self.files, rom_sha1=HG_SHA1)
+        with patch.object(sys, "argv", ["pack.py", str(self.root), "-o", str(self.out)]):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(), 0)
+        self.assertEqual(read_pak(self.out)["build_id"], HEARTGOLD_PAK_BUILD_ID)
+        self.assertEqual(read_pak(self.out)["build_id"], "heartgold-nitrofs-1")
+
+    def test_wrong_build_id_is_visible_in_the_pack(self):
+        # The C reader (tests/sdk/pak_boot) refuses this pack for the game;
+        # here check the builder wrote the ID it was told, not the default.
+        pack(self.root, self.out, build_id="platinum-nitrofs-1", rom_sha1=HG_SHA1)
+        self.assertEqual(read_pak(self.out)["build_id"], PLATINUM_PAK_BUILD_ID)
+        self.assertNotEqual(read_pak(self.out)["build_id"], HEARTGOLD_PAK_BUILD_ID)
+
+    def test_cli_rejects_an_unsupported_rom(self):
+        self.write_manifest(self.files, rom_sha1=SHA1)
+        with patch.object(sys, "argv", ["pack.py", str(self.root), "-o", str(self.out)]):
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                with self.assertRaises(SystemExit) as result:
+                    main()
+        self.assertEqual(result.exception.code, 1)
+        self.assertIn("Unsupported ROM", errors.getvalue())
+        self.assertFalse(self.out.exists())
+
+    def test_cli_rejects_an_unsupported_rom_argument(self):
+        with patch.object(sys, "argv", ["pack.py", str(self.root), "-o", str(self.out),
+                                       "--rom-sha1", "f" * 40]):
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                with self.assertRaises(SystemExit) as result:
+                    main()
+        self.assertEqual(result.exception.code, 1)
+        self.assertIn("Unsupported ROM", errors.getvalue())
 
     def test_cli_rom_sha1_argument(self):
         with patch.object(sys, "argv", ["pack.py", str(self.root), "-o", str(self.out),
                                        "--build-id", "dev-001",
-                                       "--rom-sha1", SHA1]):
+                                       "--rom-sha1", HG_SHA1]):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main(), 0)
-        self.assertEqual(read_pak(self.out)["rom_sha1"], SHA1)
+        self.assertEqual(read_pak(self.out)["rom_sha1"], HG_SHA1)
+
+    def test_synthetic_extract_then_pack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rom_bytes, _ = synthetic_nds()
+            rom = Path(tmp) / "synthetic.nds"
+            rom.write_bytes(rom_bytes)
+            extracted = Path(tmp) / "extracted"
+            extract(rom, extracted, verify=False)
+            packed = Path(tmp) / "synthetic.pak"
+            # The synthetic digest isn't in verify_rom.SUPPORTED, so the CLI
+            # would refuse it; pack() directly (the CLI is covered above).
+            pack(extracted, packed, build_id=DEFAULT_BUILD_ID)
+            decoded = read_pak(packed)
+            self.assertEqual(decoded["build_id"], "heartgold-nitrofs-1")
+            self.assertEqual(decoded["rom_sha1"],
+                             hashlib.sha1(rom_bytes).hexdigest())
+            self.assertEqual(decoded["files"], {
+                0: b"ovl0", 1: b"ovl1", 2: b"data:/a.bin", 3: b"data:d/sub/b.bin"})
 
     def test_cli_rejects_conflicting_sha1(self):
         self.write_manifest(self.files, rom_sha1=SHA1)
