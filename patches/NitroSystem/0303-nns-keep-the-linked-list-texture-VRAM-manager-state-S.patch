@@ -1,0 +1,93 @@
+From 7dbf5caa29013df3ba76b582cea091776b8e0691 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 19:15:16 +0000
+Subject: [PATCH] nns: keep the linked-list texture VRAM manager state
+ contiguous (SDK_PORT_3DS)
+
+gfd_linked_list_tex_vram_man.c declares gLnkTexVramFreeList as an
+LnkTexVramManager and reads freeList/freeListFor4x4/work at +0/+4/+8 (+0/+8/+16
+on a 64-bit host). The reset half defines the same three names as three
+separate globals. GCC lays separately declared globals out in .bss in an order
+of its choosing; here it put gLnkTexVramWork first, so the overlay read
+unrelated storage and NNS_GfdInitLnkTexVramManager crashed on its first
+block-pool write (the NitroSystem unit test Gfd case).
+
+Under SDK_PORT_3DS emit the three names at the DS offsets in one .bss block,
+same symbols and sizes (4/4/20 on 32-bit, 8/8/32 on 64-bit). The DS build keeps
+the original three definitions verbatim.
+
+Identity: gcc-10 -m32 -std=gnu99 -E -P without SDK_PORT_3DS (with SDK_ARM9,
+SDK_TS, SDK_4M, SDK_CODE_ARM, SDK_FINALROM, NNS_FINALROM) over the unpatched
+and patched file is identical: 5155 lines, diff 0.
+
+Verified: tools/hgss_nitro.py test --subproject nitrosystem -> 17122 checks,
+0 failed (651 models).
+---
+ src/gfd_linked_list_tex_vram_man_reset.c | 48 ++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/src/gfd_linked_list_tex_vram_man_reset.c b/src/gfd_linked_list_tex_vram_man_reset.c
+index b26acde..f3284e9 100644
+--- a/src/gfd_linked_list_tex_vram_man_reset.c
++++ b/src/gfd_linked_list_tex_vram_man_reset.c
+@@ -17,9 +17,57 @@ typedef struct LnkTexVramSlotTable {
+     LnkTexVramSlot slot[4];
+ } LnkTexVramSlotTable;
+ 
++#ifdef SDK_PORT_3DS
++// The manager code treats &gLnkTexVramFreeList as an LnkTexVramManager:
++// freeList at +0, freeListFor4x4 at +4 and work at +8 (double those on a
++// 64-bit host). GCC does not keep separately declared globals in declaration
++// order - it put gLnkTexVramWork first - so the overlay read unrelated .bss.
++// Emit the three names at their DS offsets in one .bss block; the names and
++// sizes are unchanged (4/4/20 on 32-bit, 8/8/32 on a 64-bit host).
++extern LnkVramBlock *gLnkTexVramFreeList;
++extern LnkVramBlock *gLnkTexVramFreeList4x4;
++extern LnkTexVramManagerWork gLnkTexVramWork;
++
++#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 8
++#define HGSS_LNK_PTR_SLOT 8
++#define HGSS_LNK_WORK_SIZE 32
++#define HGSS_LNK_ALIGN 8
++#else
++#define HGSS_LNK_PTR_SLOT 4
++#define HGSS_LNK_WORK_SIZE 20
++#define HGSS_LNK_ALIGN 4
++#endif
++#define HGSS_LNK_STR_(x) #x
++#define HGSS_LNK_STR(x) HGSS_LNK_STR_(x)
++__asm__(
++    // pushsection/popsection: GCC emits its debug info after this block and
++    // assumes the assembler's current section is still .text.
++    "  .pushsection .bss\n"
++    "  .balign " HGSS_LNK_STR(HGSS_LNK_ALIGN) "\n"
++    "  .global gLnkTexVramFreeList\n"
++    "  .global gLnkTexVramFreeList4x4\n"
++    "  .global gLnkTexVramWork\n"
++    "gLnkTexVramFreeList:\n"
++    "  .space " HGSS_LNK_STR(HGSS_LNK_PTR_SLOT) "\n"
++    "  .size gLnkTexVramFreeList, " HGSS_LNK_STR(HGSS_LNK_PTR_SLOT) "\n"
++    "gLnkTexVramFreeList4x4:\n"
++    "  .space " HGSS_LNK_STR(HGSS_LNK_PTR_SLOT) "\n"
++    "  .size gLnkTexVramFreeList4x4, " HGSS_LNK_STR(HGSS_LNK_PTR_SLOT) "\n"
++    "gLnkTexVramWork:\n"
++    "  .space " HGSS_LNK_STR(HGSS_LNK_WORK_SIZE) "\n"
++    "  .size gLnkTexVramWork, " HGSS_LNK_STR(HGSS_LNK_WORK_SIZE) "\n"
++    "  .popsection\n"
++);
++#undef HGSS_LNK_STR
++#undef HGSS_LNK_STR_
++#undef HGSS_LNK_ALIGN
++#undef HGSS_LNK_WORK_SIZE
++#undef HGSS_LNK_PTR_SLOT
++#else
+ LnkVramBlock *gLnkTexVramFreeList4x4; // free list for 4x4-compressed texel data
+ LnkVramBlock *gLnkTexVramFreeList;    // free list for other textures (start of the whole manager state)
+ LnkTexVramManagerWork gLnkTexVramWork;
++#endif
+ 
+ extern const LnkTexVramSlotTable gLnkTexVramSlotTable;
+ 
+-- 
+2.43.0
+

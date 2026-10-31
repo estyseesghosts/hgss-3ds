@@ -8,13 +8,23 @@
  * SNDCommand typedef, the SND_COMMAND_* flags and the SNDCommandID enum
  * (ntrtwl include/nitro/snd/common/command.h values). Only
  * 3ds_port/nitro/src/port_snd.c includes this path.
+ *
+ * The flat SND_command.h is deliberately not included: it declares
+ * `const struct SNDCommand *SND_RecvCommandReply(u32)`, while NitroSystem's
+ * nnsys/snd_internal.h declares the same function as returning `const void *`.
+ * Both headers end up in the generated nns_all_headers.c unity file, and two
+ * incompatible prototyped declarations are an error. Nothing in the port
+ * dereferences struct SNDCommand (port_snd.c queues opaque pointers), so an
+ * incomplete struct is enough and leaves the decomp's own declaration as the
+ * only one.
  */
 
 #ifndef NITRO_SND_COMMON_COMMAND_H_
 #define NITRO_SND_COMMON_COMMAND_H_
 
 #include <nitro/types.h>
-#include <SND_command.h>
+
+struct SNDCommand;
 
 #ifdef __cplusplus
 extern "C" {

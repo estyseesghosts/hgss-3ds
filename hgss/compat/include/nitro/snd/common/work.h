@@ -11,6 +11,10 @@
  * there, as here). The typedef below uses ntrtwl's member names
  * (include/nitro/snd/common/work.h), which the port's tests read; HGSS's
  * SND_ReadDriverInfo fills the same bytes.
+ *
+ * The struct is tagged `SNDDriverInfo` so its type is the same one the flat
+ * SND_work_shared.h names as `struct SNDDriverInfo` (the ntrtwl member names
+ * are a compat-only spelling; the layout, 0x11E0 bytes, is HGSS's).
  */
 
 #ifndef HGSS_COMPAT_SND_COMMON_WORK_H
@@ -18,7 +22,7 @@
 
 #include_next <nitro/snd/common/work.h>
 
-typedef struct {
+typedef struct SNDDriverInfo {
     u8 work[0x1180];
     u32 chCtrl[16];
     void *workAddress;

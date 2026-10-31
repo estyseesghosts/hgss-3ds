@@ -10,7 +10,7 @@
  * sbc callback tables, billboard state. Translated MWAS -> GAS as in
  * nns_data.c. Every function reference here (DoTransfer, Alloc/Free,
  * Allocator, CpuLoadOAM, DrawGlyph/Clear, NNSi_G3d, texmtxCalc) is defined
- * by the 94 lib/NitroSystem/src/*.c files tools/hgss_nitro.py compiles
+ * by the 94 C files under lib/NitroSystem/src that tools/hgss_nitro.py compiles
  * alongside, so the references always resolve inside libnitrosystem.a.
  *
  * Compiled into libnitrosystem.a by tools/hgss_nitro.py (as
@@ -18,6 +18,76 @@
  */
 
 __asm__(
+/* The labels below are the library's public data. Without these .global
+ * directives they assembled as local symbols (STB_LOCAL): nm saw the bytes
+ * but no other object could reference them, so linking a NitroSystem test
+ * failed on every table (gBillboardYMtx, gTexGenTexImageCmds,
+ * gFndExpHeapAllocatorFunc, ...). Keep the list in step with the labels. */
+"  .global gFndExpHeapAllocatorFunc\n"
+"  .global gLnkTexVramSlotTable\n"
+"  .global gG2dSoftSpriteCameraUp\n"
+"  .global gG2dSoftSpriteCameraTarget\n"
+"  .global gObjHeights\n"
+"  .global gObjWidths\n"
+"  .global gCellTransferDstTypes\n"
+"  .global gObjColorModeTexFmts\n"
+"  .global gTexSizeInChars\n"
+"  .global gObjTexSizeS\n"
+"  .global gObjTexSizeT\n"
+"  .global gRndCoreIdentityMtx\n"
+"  .global _021093F0\n"
+"  .global gCharCanvasVTableBG\n"
+"  .global gCharCanvasVTableObj1D\n"
+"  .global gCharShiftTable\n"
+"  .global gObjShapeSizeAttrs\n"
+"  .global gMatColorMasks\n"
+"  .global gPivotMtxIndices\n"
+"  .global gJntAnmPivotMtxIndices\n"
+"  .global gFrmTexVramSearch4x4\n"
+"  .global gFrmTexVramSearchNormal\n"
+"  .global gFrmTexVramRegions\n"
+"  .global gFrmTexVramRegion1\n"
+"  .global gFrmTexVramRegion2\n"
+"  .global _02110998\n"
+"  .global _021109B0\n"
+"  .global gOamLoadFuncs\n"
+"  .global gRendererContext\n"
+"  .global gRendererTranslationMtx\n"
+"  .global gOamSoftEmuAutoZOffsetStep\n"
+"  .global gAnmObjInitFuncCount\n"
+"  .global gAnmCalcFuncNsBva\n"
+"  .global gAnmCalcFuncNsBca\n"
+"  .global gAnmCalcFuncNsBta\n"
+"  .global gAnmCalcFuncNsBtp\n"
+"  .global gAnmCalcFuncNsBma\n"
+"  .global gAnmBlendVisDefault\n"
+"  .global gAnmBlendJntDefault\n"
+"  .global gAnmBlendMatDefault\n"
+"  .global gAnmObjInitFuncs\n"
+"  .global gAnmObjInitFuncsFirstFunc\n"
+"  .global gSendJointSRTFuncs\n"
+"  .global gGetJointScaleFuncs\n"
+"  .global gSendTexSRTFuncs\n"
+"  .global gTexGenTexImageCmds\n"
+"  .global gPrjMapTexImageParam\n"
+"  .global gEnvMapTexImageParam\n"
+"  .global gSbcMatFuncs\n"
+"  .global gSbcShpFuncs\n"
+"  .global gPrjMapTexMtx\n"
+"  .global gBillboardCmd\n"
+"  .global gBillboardCmdParams\n"
+"  .global gBillboardMtx\n"
+"  .global gBillboardTrans\n"
+"  .global gBillboardScale\n"
+"  .global gBillboardYCmd\n"
+"  .global gBillboardYCmdParams\n"
+"  .global gBillboardYMtx\n"
+"  .global gBillboardYTrans\n"
+"  .global gBillboardYScale\n"
+"  .global gSbcFuncs\n"
+"  .global gTexMtxCalcFuncsMaya\n"
+"  .global gTexMtxCalcFuncs3dsMax\n"
+"  .global gTexMtxCalcFuncsXsi\n"
 "  .section .rodata,\"a\",@progbits\n"
 "  .balign 4\n"
 "gFndExpHeapAllocatorFunc:\n"
