@@ -1,4 +1,4 @@
-From a5abc4895e4a1774d85684fcc5f402ec28d46bf0 Mon Sep 17 00:00:00 2001
+From d773cf3213b42b9ba84c0a6bc367d7f03fbcd848 Mon Sep 17 00:00:00 2001
 From: pokeheartgold-3ds <port@invalid>
 Date: Sat, 31 Oct 2026 21:44:10 +0000
 Subject: [PATCH] build: re-pin the MSL new producer debug-line shapes after
@@ -18,11 +18,13 @@ length). Every allocated/executable section is identical, and the tool's
 producer profile still asserts the code function sizes and payloads.
 
 Regenerated with tools/msl-new-partition/shape.py (not edited by hand), as
-the gate documentation requires.
+the gate documentation requires. profile.json pins the two fixtures
+themselves as modules, so their new hashes are re-pinned in the same patch.
 ---
  tools/msl-new-partition/array-shape.json  | 4 ++--
+ tools/msl-new-partition/profile.json      | 4 ++--
  tools/msl-new-partition/scalar-shape.json | 8 ++++----
- 2 files changed, 6 insertions(+), 6 deletions(-)
+ 3 files changed, 8 insertions(+), 8 deletions(-)
 
 diff --git a/tools/msl-new-partition/array-shape.json b/tools/msl-new-partition/array-shape.json
 index a205cc8..136a9da 100644
@@ -46,6 +48,21 @@ index a205cc8..136a9da 100644
      },
      {
        "index": 11,
+diff --git a/tools/msl-new-partition/profile.json b/tools/msl-new-partition/profile.json
+index 8ba7b72..a744f81 100644
+--- a/tools/msl-new-partition/profile.json
++++ b/tools/msl-new-partition/profile.json
+@@ -11,8 +11,8 @@
+     "shape.py": "cc26491c69384097da9a1d50c50bc393ed4ae45459d1ea86268a0e45c7a924b2",
+     "select-scalar.py": "7eae79a99b9a47af9da22075da4d5276878923ca7a6bca0f66ed310cd8be7226",
+     "select-array.py": "72fb8a280618686b80b313e00283816e2930c7103b1a4bcffb8b4689580ebea2",
+-    "scalar-shape.json": "8f0c643e8745aeefed8e3ea4a310974fdfa30125b9e72ac7c89b8acb57f6eab8",
+-    "array-shape.json": "77479e7b6395781a05d131e1a6f76358a9bf87f8668d45bc7065309f52aedada",
++    "scalar-shape.json": "7c74e4ca4b44ce33fcfdeea4f1613a330a01efc01e86060ceeebd3141e1abf6e",
++    "array-shape.json": "b708a123d4f95b58ec3ae9108fab86c238f4993237d07249a7187560ed6270bc",
+     "new.mk": "32ea3dde18c6b1c291fda1d297cd62404e664cb941b986ae1e22490c453c5276"
+   },
+   "producers": {
 diff --git a/tools/msl-new-partition/scalar-shape.json b/tools/msl-new-partition/scalar-shape.json
 index f86ed0f..8cf0ba7 100644
 --- a/tools/msl-new-partition/scalar-shape.json
