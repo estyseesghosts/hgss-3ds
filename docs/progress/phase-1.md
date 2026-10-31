@@ -1,12 +1,11 @@
 # Phase 1 progress
 
-Status: **code complete; the DS-side gate is the only exit criterion still owed.** The stack is **61
-patches** (NitroSDK 15, NitroSystem 3, pokeheartgold 43). `make test` is green (204 tests + all SDK
-suites), `libnitro.a` and `libnitrosystem.a` build, and **`make port-tests` exits 0** across all three
-subprojects: pak 120 checks, the whole nitro sequence (`test_arm7` 676, `test_sound_sequence` 12,
-`test_render` 2071, `test_gx3d` 326+228, `test_vram_transfer` 24, `test_shadow` 375, …) and
-nitrosystem **17,122 checks, 0 failed**. The DS gate has not passed since the 10-patch run; see the
-session 5 update and [agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md) §7.
+Status: **done.** The stack is **72 patches** (NitroSDK
+15, NitroSystem 3, pokeheartgold 54). `make test` is green (277 Python tests + 21 SDK suites), both
+archives build, and the HEARTGOLD matching build at 72 patches reproduces the retail ROM byte for byte
+(SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37`). The SoulSilver run is in progress at the same patch
+count and also reproduces the retail ROM (SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582`).
+**Both halves of the Phase 1 gate pass at 72 patches.**
 
 > **Update 2026-10-31 (session 5).** Phase 1's code is finished and the full vendored matrix is green.
 >
@@ -176,6 +175,20 @@ ROM with SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37`, 0 failed checks, 18m43
 not change the DS build. **`1001`, `1101`, `1201`, `1301` and `1302` are not in that run.** Their text is inside
 `#ifdef SDK_PORT_3DS` and `gcc -E -P` without the macro is identical to the unpatched headers (checked), but a full rebuild
 including them has not been run. Run it before closing Phase 1. SoulSilver was not re-run against the patched tree.
+
+**Update 2026-10-31 (session 6): the HEARTGOLD gate passes at 72 patches.**
+
+The three stale pin classes found by running the gate are fixed by 1603 (MSL debug-info shapes and the
+module hashes of the fixtures), 1762 (the `g3imm.h` closure hash after 1703) and 1763 (the MSL
+selectors' producer-source hashes after 1505/1519). With those applied:
+
+```
+build/heartgold.us/pokeheartgold.us.nds: OK
+4fcded0e2713dc03929845de631d0932ea2b5a37   (retail HeartGold US)
+```
+
+The SOULSILVER build at the same count also matches: `f8dc38ea20c17541a43b58c5e6d18c1732c7e582`. Full audit:
+[agent-notes/p2-session6.md](agent-notes/p2-session6.md) §5.
 
 **Update 2026-10-31 (session 5): still not passed, but the blockers are now understood.** The gate did
 not stop on a code difference; it stopped on build-tool input pins:

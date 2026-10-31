@@ -114,14 +114,13 @@ result to one clear line, shown by the 3DS shell and printed by the PC one:
 | ROM SHA-1 not in the reader's table | the data pack was made from a ROM this version doesn't support |
 | Out of memory | out of memory opening the data pack |
 
-> **Known gap (open item, see [../decisions.md](../decisions.md)).** The
-> pinned `3ds_port/pak` reader lists Platinum's two USA SHA-1s, not
-> HeartGold's or SoulSilver's, so a pack made from a real HG/SS cartridge
-> currently stops at "the data pack was made from a ROM this version doesn't
-> support". The builder and the error mapping are correct; the reader's
-> allowlist needs the two digests above (a change to the vendored, pinned
-> tree, so it needs a decision rather than an edit here). The host boot test
-> `tests/sdk/pak_boot` covers every other result with a synthetic pack.
+The reader's ROM allowlist is HGSS's, not Platinum's, without editing the
+vendored tree: `tools/hgss_game.py` generates a build-private copy of
+`3ds_port/pak/src/pak.c` with the two digests above (from
+`builder/verify_rom.py`) prepended, compiles it as a program object and links
+it before `libnitro.a`; the archive's own `pak_reader.o` member is then never
+loaded. `3ds_port/` stays byte-identical to `platinum.lock`. The host boot
+test `tests/sdk/pak_boot` covers the OK path and every other result.
 
 ## Read cache
 

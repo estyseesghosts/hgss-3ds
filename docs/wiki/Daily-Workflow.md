@@ -250,6 +250,8 @@ Patch names look like `0101-fx-C-versions-of-the-matrix-asm-functions-SDK_PORT_3
 | 11 | NitroSystem header fix (`pokeheartgold/1101`, return type) |
 | 12 | GCC-only fixes (`pokeheartgold/1201`: unnamed parameter, CRC headers, `OS_IrqHandler`, PXI tag) |
 | 13 | memory map (`pokeheartgold/1301` arrays, `1302` absolute DMA registers) |
+| 14-16 | Phase 1/2 runtime, game GCC and decomp build metadata (`14xx`-`16xx`) |
+| 17 | Phase 2/3 program runtimes, 3DS build fixes, 3DS-only type fixes and pin re-pins (`17xx`) |
 
 Patches `1001`-`1302` live in `patches/pokeheartgold/` because they touch more than one tree (or the
 decomp root). The numbers are not shared between stacks: `NitroSDK/0301` and `NitroSystem/0301` are

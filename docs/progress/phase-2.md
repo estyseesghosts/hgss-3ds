@@ -1,5 +1,11 @@
 # Phase 2 progress
 
+Status: **complete for the Phase 2 exit criterion.** `pokeheartgold-pc` links with **0 unresolved
+symbols**, `--check-overlays` passes on the real binary (129 overlays, 0 failed), and
+`tools/symbol_crosscheck.py` reports **0 missing** against the DS reference. The 3DS side compiles
+1092/1092 game files, builds both archives and links `pokeheartgold.3dsx` with 0 unresolved. Phase 1's
+DS gate is the remaining formal gate (see below).
+
 Status: **in progress — the game compiles completely and the host link is 34 symbols from zero.** 1092 of
 1092 C/C++ files compile on host32, 150/150 ARM9 `.s` assemble, both port archives build, and the
 host link is down from **966 to 34 unique unresolved symbols**. `--check-overlays` and
@@ -37,7 +43,29 @@ still has its own blockers (`std_sprintf`, the ARM7 C-file rule, ~45 devkitARM-o
 > `--check-overlays` (129 overlays, green on a temporary link) and `tools/symbol_crosscheck.py` +
 > allowlist. Full audit: [agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md).
 
-## The 34 remaining unresolved symbols
+## Session 6 update (2026-10-31): the 34 symbols are closed
+
+| Check | Session 5 | Now |
+| --- | --- | --- |
+| host32 compile | 1092/1092 | 1092/1092 |
+| host32 link | 34 unresolved, no binary | **0 unresolved, `pokeheartgold-pc`** |
+| `--check-overlays` | not on a real binary | **129 overlays (2 with static initializers), 0 failed** |
+| `symbol_crosscheck.py` | not on a real binary | matched 21,407 · allowlisted 3,328 · **missing 0** |
+| 3DS compile | ~1049/1094, 45 fail | **1092/1092, 0 failed** |
+| 3DS archives | `std_sprintf` + ARM7 fail | **both build, 0 errors** |
+| 3DS link | none | **0 unresolved, `pokeheartgold.3dsx`** |
+| Python tests | 204 | **277** (+ 21 SDK suites) |
+
+The 34 were closed as designed: `tools/object_aliases.py` runs as a build stage (the five Pokéwalker
+aliases); `hgss/compat/src/msl_runtime.c` implements the bit-pattern MSL ABI and patch 1760 reconciles
+the three TUs that declared the float form; `hgss/game/app/cpp_runtime.c` defines the six MWCC-mangled
+C++ runtime names; `hgss/game/stubs/mb_stubs.c` is the documented multiboot stand-in; patch 1761 makes
+the two duplicate globals file-local. The 3DS work is patches 1701-1703 (va_list/type fixes),
+1710-1712 (the 41 devkitARM-only files), the ARM GAS `%progbits`/`%object` fix in the compat sound/NNS
+data, and the two packaging fixes (enum overlay IDs, `.version` segment padding). Full audit:
+[agent-notes/p2-session6.md](agent-notes/p2-session6.md).
+
+## The 34 remaining unresolved symbols (session-5 measurement, kept for provenance)
 
 | Count | Group | Cause / next step |
 | --- | --- | --- |
@@ -86,13 +114,15 @@ python3 tools/hgss_game.py --target 3ds --keep-going --out /work/main-3ds -j 5
 - `hgss/game/app/main_3ds.c` now exists and the libctru link resolves `main`/libctru symbols; the
   1556-unresolved figure was measured before the shell and before a 3DS port archive.
 
-## Loose ends before judging Phase 2
+## Loose ends
 
-- The harness still weakens two duplicate globals (`FrontierScript_ReadByte`, `sListMenuTemplate`).
-  Replace with a real per-overlay/local fix; otherwise the overlay check can pass for the wrong reason.
-- `--check-overlays` and `symbol_crosscheck.py` must run on the real `pokeheartgold-pc` once it links.
-- The two C++ files and the lobby need a `-fno-exceptions -fno-rtti` compatibility check (they build
-  with those flags today; the C++ runtime symbols above are the remaining evidence).
+- The duplicate-global census is 0 (patch 1761); the weaken pass remains for genuine header inlines.
+- The overlay check and the cross-check both ran on the real binaries (see the session-6 update).
+- The C++ runtime is six explicit definitions in `hgss/game/app/cpp_runtime.c`; the lobby builds with
+  `-fno-exceptions -fno-rtti` and the vector throw helper aborts, as on a DS without exceptions.
+- The cross-check allowlist is now explicit (3,398 named rows, no wildcards); its 48 game-source rows
+  were audited: every owner is compiled and in the link set, and `--gc-sections` drops the unreferenced
+  function (the DS linker kept every static object).
 
 ## Historical measurement (39 patches, kept for provenance)
 
