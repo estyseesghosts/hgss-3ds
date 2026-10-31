@@ -1,0 +1,291 @@
+From bf2112354b815301c22741518b84c0e62e0461e3 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 03:32:18 +0000
+Subject: [PATCH] sdk: port hooks for IRQ flag clear, software DMA and matrix
+ result sync (SDK_PORT_3DS)
+
+Three SDK_PORT_3DS edits in lib/NitroSDK/src, each reproducing a DS behaviour
+the port cannot get from its plain memory. Every new line is under
+#ifdef SDK_PORT_3DS, and the DS build's preprocessed output is unchanged
+(gcc -E -P of each touched file, with and without -DSDK_ARM9, identical to HEAD).
+Ported from pokeplatinum-3ds NitroSDK patches 0017, 0009 and 0026, rebased onto
+HGSS's sources. Differences from Platinum are noted per part.
+
+(a) IRQ requests are cleared by bits, not by storing a mask (Platinum 0017)
+    The DS's IF is write-1-to-clear: a store of a mask clears the bits set in
+    it and leaves the rest. In the port IF is plain memory, so a store would
+    set the bits of the mask and drop every other pending request.
+    - os/os_interrupt.c:115-121 OS_ResetRequestIrqMask: reg_OS_IF &= ~newMask.
+    - os/os_tick.c:64-68 OS_SetTick: reg_OS_IF &= ~OSi_TICK_IE_TIMER.
+    No other write to reg_OS_IF exists in lib/NitroSDK/src (checked). Platinum's
+    patch matches these two sites; HGSS names the parameter newMask.
+
+(b) DMA register writes start the port's software DMA (Platinum 0009)
+    NitroPort_DmaStart runs the transfer and clears the busy bit. The hook is
+    called once per control-register write, after the write:
+    - mi/mi_dma.c:19-21 MIi_DmaSetParams (covers MI_DmaCopy32Async, MI_HBlank*,
+      MIi_CardDmaCopy32, MI_SendGXCommand and the async GX path, which all write
+      through it), :52-54 MIi_DmaSetParams_wait (MI_DmaCopy32, MI_DmaCopy16),
+      :62-64 MIi_DmaSetParams_noInt, :98-100 MIi_DmaSetParams_wait_noInt
+      (MI_DmaFill32, MI_DmaFill32Async, via the static inline wrappers in
+      mi/dma.h), and :234-236 MI_StopDma.
+    - The channel-0 dummy transfer (if (!dmaNo) writing 0x81400001) is not
+      written under the port: at :39-50, :81-96, :191-200 and :221-232.
+      Platinum keeps it. On the port it would replace the real transfer's
+      registers before the start (lost DMA0 copies in the _wait variants) and
+      leave channel 0 busy in MI_WaitDma with nothing to clear it. HGSS has no
+      MIi_DUMMY_DMA_NO macro; the inline dummy is the equivalent Platinum
+      guards in its header.
+    - MI_WaitDma (:186) gets no start: under the port it writes no control
+      register. MI_StopDma's start is a no-op (it just cleared ENABLE); it is
+      kept so every control write is followed by the hook.
+    - mi/mi_dma_hblank.c, mi_dma_card.c and mi_dma_gxcommand.c write their
+      control registers only through MIi_DmaSetParams, so they need no edit.
+    - MIi_CheckDma0SourceAddress (:273-280) is skipped under the port, as in
+      Platinum: its 0x04xxxxxx and 0x08000000-and-up rejection is a DS
+      channel-0 limit; the 3DS heap starts at 0x08000000.
+
+(c) Matrix result registers are synced before a read (Platinum 0026)
+    The port works out the clip and vector result registers when the SDK reads
+    them. NitroPort_Gx3dSyncResults runs before the busy check and the copy:
+    - gx/g3x.c:123-125 G3X_GetClipMtx, :134-136 G3X_GetVectorMtx.
+    These are the only readers of CLIPMTX_RESULT_0 / VECMTX_RESULT_0 in
+    lib/NitroSDK/src. G3X_GetBoxTestResult reads only GXSTAT's TR bit, which the
+    port refreshes itself, so it has no hook. HGSS has no G3X_GetPosTestResult
+    or G3X_GetVecTestResult. Platinum's functions carry an SDK_NULL_ASSERT and a
+    G3X_IsGeometryBusy() wrapper, which HGSS does not have; the sync is placed
+    where the busy check is.
+
+Tests: tests/sdk/port_hooks/ (run.sh [ROOT]): IRQ clear on the RAM-backed
+reg_OS_IF (10 checks); a start hook per DMA entry point with the registers as
+written at the call, channel-0 dummy and address-check skips (60 checks); the
+GX sync before the busy check and the copy (10 checks). Each was broken on
+purpose and caught.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/gx/g3x.c          | 12 +++++++++++
+ src/mi/mi_dma.c       | 48 +++++++++++++++++++++++++++++++++++++++++++
+ src/os/os_interrupt.c |  5 +++++
+ src/os/os_tick.c      |  4 ++++
+ 4 files changed, 69 insertions(+)
+
+diff --git a/src/gx/g3x.c b/src/gx/g3x.c
+index 1bcc5b1..f2d0a55 100644
+--- a/src/gx/g3x.c
++++ b/src/gx/g3x.c
+@@ -25,6 +25,12 @@ void G3X_SetHOffset(u32 offset);
+ 
+ extern u32 GXi_DmaId;
+ 
++#ifdef SDK_PORT_3DS
++/* The port's geometry engine works out the matrix result registers when they're read
++ * (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0026). */
++extern void NitroPort_Gx3dSyncResults(void);
++#endif
++
+ void G3X_Init() {
+     G3X_ClearFifo();
+     reg_G3_END_VTXS = 0x0;
+@@ -113,6 +119,9 @@ void G3X_SetFog(u32 enable, u32 alphamode, u32 depth, s32 offset) {
+ }
+ 
+ u32 G3X_GetClipMtx(void *dst) {
++#ifdef SDK_PORT_3DS
++    NitroPort_Gx3dSyncResults();
++#endif
+     if (reg_G3X_GXSTAT & REG_G3X_GXSTAT_B_MASK) {
+         return (u32)-1;
+     } else {
+@@ -122,6 +131,9 @@ u32 G3X_GetClipMtx(void *dst) {
+ }
+ 
+ u32 G3X_GetVectorMtx(void *dst) {
++#ifdef SDK_PORT_3DS
++    NitroPort_Gx3dSyncResults();
++#endif
+     if (reg_G3X_GXSTAT & REG_G3X_GXSTAT_B_MASK) {
+         return (u32)-1;
+     } else {
+diff --git a/src/mi/mi_dma.c b/src/mi/mi_dma.c
+index a5692a9..c2c1f3a 100644
+--- a/src/mi/mi_dma.c
++++ b/src/mi/mi_dma.c
+@@ -2,6 +2,12 @@
+ #include <nitro/code32.h>
+ #include <nitro/section.h>
+ 
++#ifdef SDK_PORT_3DS
++/* The port's software DMA (3ds_port/nitro/src/port_dma.c). Called once a channel's
++ * registers are written: it runs the transfer and clears the busy bit. */
++extern void NitroPort_DmaStart(u32 dmaNo);
++#endif
++
+ #pragma section ITCM begin
+ void MIi_DmaSetParams(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+     OSIntrMode lastIntrMode = OS_DisableInterrupts();
+@@ -10,6 +16,9 @@ void MIi_DmaSetParams(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+     *(p + 1) = (vu32)dest;
+     *(p + 2) = (vu32)ctrl;
+     (void)OS_RestoreInterrupts(lastIntrMode);
++#ifdef SDK_PORT_3DS
++    NitroPort_DmaStart(dmaNo);
++#endif
+ }
+ 
+ void MIi_DmaSetParams_wait(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+@@ -27,13 +36,22 @@ void MIi_DmaSetParams_wait(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+         u32 delay = reg_MI_DMA0SAD;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    /* No channel-0 dummy transfer on the port: the DS workaround for a hardware fault
++     * isn't needed there, and the dummy would replace this transfer's registers
++     * before the port runs it. */
++#else
+     if (!dmaNo) {
+         *p = (vu32)0;
+         *(p + 1) = (vu32)0;
+         *(p + 2) = (vu32)0x81400001;
+     }
++#endif
+ 
+     (void)OS_RestoreInterrupts(enabled);
++#ifdef SDK_PORT_3DS
++    NitroPort_DmaStart(dmaNo);
++#endif
+ }
+ 
+ void MIi_DmaSetParams_noInt(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+@@ -41,6 +59,9 @@ void MIi_DmaSetParams_noInt(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+     *p = (vu32)src;
+     *(p + 1) = (vu32)dest;
+     *(p + 2) = (vu32)ctrl;
++#ifdef SDK_PORT_3DS
++    NitroPort_DmaStart(dmaNo);
++#endif
+ }
+ 
+ void MIi_DmaSetParams_wait_noInt(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+@@ -57,11 +78,15 @@ void MIi_DmaSetParams_wait_noInt(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+         u32 delay = reg_MI_DMA0SAD;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    /* No channel-0 dummy transfer on the port (see MIi_DmaSetParams_wait). */
++#else
+     if (!dmaNo) {
+         *p = (vu32)0;
+         *(p + 1) = (vu32)0;
+         *(p + 2) = (vu32)0x81400001;
+     }
++#endif
+ 
+     // delay cycles
+     {
+@@ -70,6 +95,9 @@ void MIi_DmaSetParams_wait_noInt(u32 dmaNo, u32 src, u32 dest, u32 ctrl) {
+     {
+         u32 delay = reg_MI_DMA0SAD;
+     }
++#ifdef SDK_PORT_3DS
++    NitroPort_DmaStart(dmaNo);
++#endif
+ }
+ #pragma section ITCM end
+ 
+@@ -160,12 +188,17 @@ void MI_WaitDma(u32 dmaNo) {
+     vu32 *dmaCntp;
+     MIi_WAIT_BEFOREDMA(dmaCntp, dmaNo);
+ 
++#ifdef SDK_PORT_3DS
++    /* No channel-0 dummy on the port, so no channel is left busy with nothing to clear it
++     * (see MIi_DmaSetParams_wait). No control register is written here, so no start. */
++#else
+     if (!dmaNo) {
+         vu32 *p = (vu32 *)((u32)REG_DMA0SAD_ADDR + dmaNo * 12);
+         *p = (vu32)0;
+         *(p + 1) = (vu32)0;
+         *(p + 2) = (vu32)0x81400001;
+     }
++#endif
+ 
+     (void)OS_RestoreInterrupts(lastIntrMode);
+ }
+@@ -185,14 +218,22 @@ void MI_StopDma(u32 dmaNo) {
+         s32 delay = dmaCntp[0];
+     }
+ 
++#ifdef SDK_PORT_3DS
++    /* No channel-0 dummy on the port (see MIi_DmaSetParams_wait). The stop just cleared the
++     * enable bit, so the port's start does nothing; it is called for the register write. */
++#else
+     if (!dmaNo) {
+         vu32 *p = (vu32 *)((u32)REG_DMA0SAD_ADDR + dmaNo * 12);
+         *p = (vu32)0;
+         *(p + 1) = (vu32)0;
+         *(p + 2) = (vu32)0x81400001;
+     }
++#endif
+ 
+     (void)OS_RestoreInterrupts(lastIntrMode);
++#ifdef SDK_PORT_3DS
++    NitroPort_DmaStart(dmaNo);
++#endif
+ }
+ 
+ void MIi_CheckAnotherAutoDMA(u32 dmaNo, u32 dmaType) {
+@@ -230,6 +271,12 @@ void MIi_CheckAnotherAutoDMA(u32 dmaNo, u32 dmaType) {
+ }
+ 
+ void MIi_CheckDma0SourceAddress(u32 dmaNo, u32 src, u32 size, u32 dir) {
++#ifdef SDK_PORT_3DS
++    /* DS addresses: channel 0 can't read the I/O registers (0x04xxxxxx) or the GBA slot
++     * (0x08000000 and up). On the 3DS the application heap starts at 0x08000000 and the
++     * port's DMA reads any address, so the check would stop the game for nothing. */
++    (void)dmaNo; (void)src; (void)size; (void)dir;
++#else
+     if (!dmaNo) {
+         u32 addStart = src & 0xff000000;
+         u32 addEnd;
+@@ -251,4 +298,5 @@ void MIi_CheckDma0SourceAddress(u32 dmaNo, u32 src, u32 size, u32 dir) {
+             OS_Terminate();
+         }
+     }
++#endif
+ }
+diff --git a/src/os/os_interrupt.c b/src/os/os_interrupt.c
+index 17bf2fb..648685b 100644
+--- a/src/os/os_interrupt.c
++++ b/src/os/os_interrupt.c
+@@ -113,7 +113,12 @@ OSIrqMask OS_DisableIrqMask(OSIrqMask newMask) {
+ OSIrqMask OS_ResetRequestIrqMask(OSIrqMask newMask) {
+     BOOL ime = OS_DisableIrq();
+     OSIrqMask prep = reg_OS_IF;
++#ifdef SDK_PORT_3DS
++    /* IF is write-1-to-clear on the DS; in the port it is plain memory (Platinum NitroSDK 0017). */
++    reg_OS_IF &= ~newMask;
++#else
+     reg_OS_IF = newMask;
++#endif
+     OS_RestoreIrq(ime);
+     return prep;
+ }
+diff --git a/src/os/os_tick.c b/src/os/os_tick.c
+index 08f3146..79733d2 100644
+--- a/src/os/os_tick.c
++++ b/src/os/os_tick.c
+@@ -61,7 +61,11 @@ u16 OS_GetTickLo(void) {
+ 
+ void OS_SetTick(OSTick tick) {
+     OSIntrMode enabled = OS_DisableInterrupts();
++#ifdef SDK_PORT_3DS
++    reg_OS_IF &= ~OSi_TICK_IE_TIMER; /* write-1-to-clear on the DS (Platinum NitroSDK 0017) */
++#else
+     reg_OS_IF = OSi_TICK_IE_TIMER;
++#endif
+     OSi_NeedResetTimer = TRUE;
+     OSi_TickCounter = tick >> 16;
+     OS_SetTimerControl(OSi_TICK_TIMER, 0);
+-- 
+2.43.0
+
