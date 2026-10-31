@@ -536,3 +536,37 @@ class PakReaderTests(unittest.TestCase):
                     hg.pak_reader_source(Path(tmp) / "out")
             finally:
                 hg.PAK_READER = original
+
+
+class ThreeDsxTests(unittest.TestCase):
+    """The .3dsx packaging step after a successful 3DS link."""
+
+    def test_command_is_tool_elf_output(self):
+        cmd = hg.three_dsx_command(Path("/dkp/tools/bin/3dsxtool"),
+                                   Path("/out/game.elf"), Path("/out/game.3dsx"))
+        self.assertEqual(cmd, ["/dkp/tools/bin/3dsxtool",
+                               "/out/game.elf", "/out/game.3dsx"])
+
+    def test_host32_is_not_packaged(self):
+        self.assertIsNone(hg.package_three_dsx(Path("/nonexistent.elf"), "host32"))
+
+    def test_packages_next_to_the_elf_without_the_3ds_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tool = root / "tools" / "bin" / "3dsxtool"
+            tool.parent.mkdir(parents=True)
+            tool.write_text("#!/bin/sh\nprintf 'dsx' > \"$2\"\n")
+            tool.chmod(0o755)
+            elf = root / "pokeheartgold-3ds.elf"
+            elf.write_bytes(b"elf")
+            old = os.environ.get("DEVKITPRO")
+            os.environ["DEVKITPRO"] = str(root)
+            try:
+                dsx = hg.package_three_dsx(elf, "3ds")
+            finally:
+                if old is None:
+                    os.environ.pop("DEVKITPRO", None)
+                else:
+                    os.environ["DEVKITPRO"] = old
+            self.assertEqual(dsx, root / "pokeheartgold.3dsx")
+            self.assertEqual(dsx.read_bytes(), b"dsx")

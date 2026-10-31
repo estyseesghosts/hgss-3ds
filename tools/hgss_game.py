@@ -597,6 +597,39 @@ def wifi_stub_command(nm: str, root: Path, objects: list[Path],
     return cmd
 
 
+def three_dsx_command(tool: Path, elf: Path, dsx: Path) -> list[str]:
+    """The 3dsxtool invocation: a Homebrew Launcher program from the ELF.
+
+    No SMDH: the icon/banner and title metadata are Phase 5 (they come from
+    the user's own cartridge). 3dsxtool accepts an ELF alone."""
+    return [str(tool), str(elf), str(dsx)]
+
+
+def package_three_dsx(binary: Path, target: str) -> Path | None:
+    """Package a linked 3DS ELF as a .3dsx next to it, or do nothing.
+
+    Packaging is deliberately after the link: a static link with zero
+    unresolved symbols is the Phase 2 bar, and the .3dsx is the runnable
+    artifact for the Homebrew Launcher. A missing 3dsxtool is reported, not
+    fatal (the ELF is already the proof of the link).
+    """
+    if target != "3ds":
+        return None
+    tool = devkitpro() / "tools" / "bin" / "3dsxtool"
+    dsx = binary.with_name(binary.name.replace("-3ds.elf", "").replace(".elf", "")
+                           + ".3dsx")
+    if not tool.is_file():
+        print(f"   note: {tool} not found; leaving {binary.name} unpackaged")
+        return None
+    proc = subprocess.run(three_dsx_command(tool, binary, dsx),
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"   note: 3dsxtool failed: {(proc.stderr or proc.stdout).strip()}")
+        return None
+    print(f"   packaged {dsx} ({dsx.stat().st_size} bytes)")
+    return dsx
+
+
 def link_command(cc: str, target: str, app_objects: list[Path],
                  game_objects: list[Path], stub_objects: list[Path],
                  overlay_table: Path, overlay_ids: Path,
@@ -982,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
     (out / "link.log").write_text(text, encoding="utf-8")
     if proc.returncode == 0 and binary.is_file():
         print(f"   linked {binary}")
+        package_three_dsx(binary, args.target)
         return 0
     print(f"   link failed ({len(unresolved)} unresolved symbols); log: {out / 'link.log'}")
     for name in unresolved:
