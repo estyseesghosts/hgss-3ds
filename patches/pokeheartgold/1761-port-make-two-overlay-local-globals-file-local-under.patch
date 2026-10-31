@@ -1,0 +1,103 @@
+From 0f69591feaedf4b087521c1b85b7ae52dbecd758 Mon Sep 17 00:00:00 2001
+From: A1 <a1@localhost>
+Date: Sat, 31 Oct 2026 21:48:24 +0000
+Subject: [PATCH 1761/1761] port: make two overlay-local globals file-local
+ under SDK_PORT_3DS
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The port links every overlay into one ELF. Two globals the DS build keeps
+apart then collide, and the harness used to hide that by weakening both
+definitions:
+
+- include/frontier/frontier_script_commands.h:8 defines FrontierScript_ReadByte
+  as a plain (non-static) `u8 inline`. Under GCC -fgnu89-inline a plain inline
+  function emits a strong external definition in every TU that includes the
+  header, so every frontier command object owned one. Make it `static inline`
+  under the port, which is what a header-local helper means.
+- src/voltorb_flip/voltorb_flip.c:194 and
+  src/application/pokegear/map/pokegear_map_view.c:24 both define a global
+  const TouchscreenListMenuTemplate sListMenuTemplate. Voltorb Flip and the
+  Pokégear map live in different DS overlays and neither file exports the name;
+  make both `static` under the port.
+
+The DS text stays under #else, so without SDK_PORT_3DS the preprocessed output
+is unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ include/frontier/frontier_script_commands.h      | 10 ++++++++++
+ src/application/pokegear/map/pokegear_map_view.c |  9 +++++++++
+ src/voltorb_flip/voltorb_flip.c                  |  9 +++++++++
+ 3 files changed, 28 insertions(+)
+
+diff --git a/include/frontier/frontier_script_commands.h b/include/frontier/frontier_script_commands.h
+index 80b4b28..17f5256 100644
+--- a/include/frontier/frontier_script_commands.h
++++ b/include/frontier/frontier_script_commands.h
+@@ -5,9 +5,19 @@
+ 
+ #include "message_format.h"
+ 
++#ifdef SDK_PORT_3DS
++/* GCC's -fgnu89-inline emits a strong external definition for a plain
++ * `inline` function in every TU that includes this header, so the port's
++ * single program would have one FrontierScript_ReadByte per frontier command
++ * object. The function is header-local by intent; make that explicit. */
++static inline u8 FrontierScript_ReadByte(FrontierScriptContext *ctx) {
++    return *(ctx->scriptPtr++);
++}
++#else
+ u8 inline FrontierScript_ReadByte(FrontierScriptContext *ctx) {
+     return *(ctx->scriptPtr++);
+ }
++#endif
+ 
+ typedef BOOL (*FrontierFunction)(FrontierScriptContext *);
+ 
+diff --git a/src/application/pokegear/map/pokegear_map_view.c b/src/application/pokegear/map/pokegear_map_view.c
+index 4a05b98..920f60b 100644
+--- a/src/application/pokegear/map/pokegear_map_view.c
++++ b/src/application/pokegear/map/pokegear_map_view.c
+@@ -21,7 +21,16 @@ static void PokegearMap_PrintLocationPanel(PokegearMapAppData *mapApp, BOOL copy
+ static void PokegearMap_PrintMarkingECWord(PokegearMapAppData *mapApp, u8 index, u16 word);
+ static void PokegearMap_GetLandmarkNameFromMapID(u16 mapno, enum HeapID heapID, String *dest);
+ 
++#ifdef SDK_PORT_3DS
++/* Voltorb Flip is an overlay and the Pokégear map is part of another; the DS
++ * links them as separate programs, so both may own a file-local
++ * sListMenuTemplate. The port links every overlay into one ELF, where the two
++ * globals collide. Neither file exports the name; make it local. */
++static const TouchscreenListMenuTemplate sListMenuTemplate = {
++#else
+ const TouchscreenListMenuTemplate sListMenuTemplate = {
++#endif
++
+     .wrapAround = TRUE,
+     .centered = TRUE,
+     .xOffset = 0,
+diff --git a/src/voltorb_flip/voltorb_flip.c b/src/voltorb_flip/voltorb_flip.c
+index 97742e9..b0e0215 100644
+--- a/src/voltorb_flip/voltorb_flip.c
++++ b/src/voltorb_flip/voltorb_flip.c
+@@ -191,7 +191,16 @@ const u8 sCardFaceUpTileIDs[5][2] = {
+     { 0x6B, 0x0B },
+ };
+ 
++#ifdef SDK_PORT_3DS
++/* Voltorb Flip is an overlay and the Pokégear map is part of another; the DS
++ * links them as separate programs, so both may own a file-local
++ * sListMenuTemplate. The port links every overlay into one ELF, where the two
++ * globals collide. Neither file exports the name; make it local. */
++static const TouchscreenListMenuTemplate sListMenuTemplate = {
++#else
+ const TouchscreenListMenuTemplate sListMenuTemplate = {
++#endif
++
+     .wrapAround = TRUE,
+     .centered = TRUE,
+     .xOffset = 0,
+-- 
+2.43.0
+
