@@ -16,7 +16,7 @@ and the 3DS side is still blocked by `std_sprintf`, the ARM7 C-file rule and ~45
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
 | 1 SDK patch stack | **Code complete, gate owed** | 61 patches apply from scratch; `make test` 204 tests + all SDK suites; `make port-tests` **exit 0** (pak, nitro, nitrosystem); `libnitro.a` + `libnitrosystem.a` build; DS gate not yet passed (last pass at 10 patches). [phase-1.md](phase-1.md), [agent-notes/p2-wave-a-session5.md](agent-notes/p2-wave-a-session5.md) |
 | 2 Game code under GCC | **In progress, 34 symbols left** | 1092/1092 files compile, 150/150 `.s`, both archives link; **34 unique unresolved symbols** (MSL runtime, C++ runtime, MB stubs, 5 pokéwalker aliases); `--check-overlays` and `symbol_crosscheck.py` exist but no PC binary yet. [phase-2.md](phase-2.md) |
-| 3 Data pipeline | Not started | `builder/pack.py` exists (used by the pak tests); no ROM extractor. |
+| 3 Data pipeline | **Partial** | `builder/pack.py` exists (used by the pak tests); the ROM extractor and manifest generation are not written. |
 | 4-11 | Not started | See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 
