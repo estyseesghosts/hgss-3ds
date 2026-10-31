@@ -1,4 +1,12 @@
-# Wiring the vendored port layer to the HGSS SDK (Phase 1, not finished)
+# Wiring the vendored port layer to the HGSS SDK (Phase 1)
+
+> **Status 2026-10-31 (session 4): wired and building.** `libnitro.a` compiles with zero errors from 139
+> HGSS SDK sources plus `hgss/compat`, the ARM7 sound driver and the NNS shim. The vendored suites run:
+> `pak` 120 checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 — 0 failed. `test_arm7`
+> passes backup/RTC/power/touch and **hangs in `test_sound`**; `test_nitrosystem` is not reached yet.
+> The failure history is [progress/agent-notes/p1-runtime-bringup.md](progress/agent-notes/p1-runtime-bringup.md).
+> The sections below are the original wiring analysis; the numbers in them are from before the wiring
+> landed and are kept as history.
 
 `3ds_port/` is vendored byte-identical from pokeplatinum-3ds and was written against the ntrtwl NitroSDK
 (`libraries/<lib>/src/*.c`, `include/nitro/**`). HGSS's SDK is a flat reconstruction (`lib/NitroSDK/src/<lib>/*.c`,
@@ -10,24 +18,28 @@ container, after `bootstrap.py`).
 
 Port sources syntax-checked against the patched HGSS headers, using a shim include directory that exposes only
 `nitro*`, `nnsys*`, `cw*` from `lib/include` (HGSS's `stdarg.h`/`stddef.h`/`string.h` there shadow the system ones the
-port code needs; without the shim only 11/46 compile): **29/46 compile** (2026-10-31; it was 26/46 before patches
-1201, 1301 and 1302). The other 17 fail for these causes:
+port code needs; without the shim only 11/46 compile). **Current: 46/46 compile, exit 0.**
+
+The table below is the state before the compat layer landed (29/46) and is kept as the map of which
+name needed which kind of fix; every row is now resolved:
 
 | Cause | Files | Kind |
 | --- | --- | --- |
-| `nitro/spi/common/type.h`, `nitro/rtc/common/fifo.h`, `nitro/snd/common/command.h`, `nitro/dgt/dgt.h`, `nitro/ioreg.h`, `nitro/hw/ARM9/mmap_global.h` not found (HGSS names: `spi/common/pm_common.h`, none, flat `SND_command.h`, `dgt/common.h`, `hw/io_reg.h`, `hw/ARM9/mmap.h`) | port_pm, port_tp, port_rtc, port_snd, dgt, port_cp, port_ioreg | compat headers (new files) |
-| `card_common.h` (HGSS: `CARD_common.h`) | port_card | case; port-layer fix, or compat header |
-| `MIUnpackBitsParam`, `CTRDGBackupType`, `HW_ROM_HEADER_BUF_END`, `MI_DMA_TIMING_IMM`, `GX_FIFOINTR_COND_UNDERHALF`, `PXI_FIFO_TAG_CTRDG_PHI` undeclared (HGSS has no or different names) | mi_uncompress, ctrdg, port_boot, port_dma, port_gx, pxi | define in a compat header |
-| `struct MATHCRC8Table` redefined (HGSS has two copies of the header: `lib/include/nitro/math/crc.h` and `lib/NitroSDK/include/MATH_crc.h`) | port_gx3d* | include order / header guard |
-| `MIi_CpuClear16` prototype differs from the port's definition | mi_memory | port or SDK signature |
-| `OS_IrqHandler()` called with no argument (HGSS takes an `OSIrqMask`) | port_os | **fixed** by patch 1201: the port prototype and C definition are `(void)` |
-| `NitroPort_LcdcVram` undeclared | port_render2d | port-internal header, probably a missing generated header |
-| `REG_ADDR_DMA0CNT` / `REG_ADDR_DMA0_CLR_DATA` are absolute addresses, outside the 1301 remap | mi_dma (via port_hooks) | **fixed** by patch 1302 |
+| `nitro/spi/common/type.h`, `nitro/rtc/common/fifo.h`, `nitro/snd/common/command.h`, `nitro/dgt/dgt.h`, `nitro/ioreg.h`, `nitro/hw/ARM9/mmap_global.h` not found (HGSS names: `spi/common/pm_common.h`, none, flat `SND_command.h`, `dgt/common.h`, `hw/io_reg.h`, `hw/ARM9/mmap.h`) | port_pm, port_tp, port_rtc, port_snd, dgt, port_cp, port_ioreg | compat headers (done) |
+| `card_common.h` (HGSS: `CARD_common.h`) | port_card | compat header, case- and `NITRO_H_`-aware (done) |
+| `MIUnpackBitsParam`, `CTRDGBackupType`, `HW_ROM_HEADER_BUF_END`, `MI_DMA_TIMING_IMM`, `GX_FIFOINTR_COND_UNDERHALF`, `PXI_FIFO_TAG_CTRDG_PHI` undeclared (HGSS has no or different names) | mi_uncompress, ctrdg, port_boot, port_dma, port_gx, pxi | compat headers (done) |
+| `struct MATHCRC8Table` redefined (HGSS has two copies of the header) | port_gx3d* | patch 1201 guard (done) |
+| `MIi_CpuClear16` prototype differs from the port's definition | mi_memory | patch 1202 signature match (done) |
+| `OS_IrqHandler()` called with no argument (HGSS takes an `OSIrqMask`) | port_os | patch 1201 (done) |
+| `NitroPort_LcdcVram` undeclared | port_render2d | already fixed by 1301; the note was stale |
+| `REG_ADDR_DMA0CNT` / `REG_ADDR_DMA0_CLR_DATA` are absolute addresses, outside the 1301 remap | mi_dma (via port_hooks) | patch 1302 (done) |
 
 The fast survey is `python3 tools/port_compile_survey.py`. The real build is
-`python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> lib -k -j8`; on 2026-10-31 it
-stops with **44 errors in 9 objects** (svc, pxi, port_dma, mi_memory, port_boot, port_gx, ctrdg,
-port_os, mi_uncompress). `docs/progress/STATE.md` has the grouped list and the next actions.
+`python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> lib -k -j8`: **0 errors**. The
+suites run with the `test` goal; one hangs (`test_arm7`/`test_sound`), the rest pass. See
+[progress/STATE.md](progress/STATE.md) and
+[progress/agent-notes/p1-runtime-bringup.md](progress/agent-notes/p1-runtime-bringup.md) for the
+runtime failures and their causes.
 
 ## Not just compile errors
 
@@ -60,5 +72,9 @@ port_os, mi_uncompress). `docs/progress/STATE.md` has the grouped list and the n
 - `hgss/compat/include` is on the include path for HGSS names of Platinum headers. It is empty today
   (only `.gitkeep`); writing it is the next task.
 
-The first gate is a link of `libnitro` for `TARGET=host32`, then the vendored tests one by one. The
-current error map is above and in [docs/progress/STATE.md](progress/STATE.md).
+The shim is built (`tools/hgss_nitro.py`) and the libraries build; the first gate (link `libnitro` for
+`TARGET=host32`) passed, and the vendored tests run one by one. What the wiring still exposes is not a
+compile problem but a runtime one: DS-side code that addresses main/shared memory by literal address.
+Patches 1303-1305 fixed the classes the tests hit (2D VRAM, RTC, touch/PM/MIC); the trade-off is that
+any remaining literal is a crash for the next suite that reaches it. The current error map above is kept
+as history; see [progress/STATE.md](progress/STATE.md) for live numbers.

@@ -42,7 +42,7 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **Co-Authored-By.** The commit trailer that [CONTRIBUTING.md](../../CONTRIBUTING.md) asks for on commits written with AI help. See [Contributing](Contributing.md).
 
-**Compat header.** A small header in `hgss/compat/include/` that gives the port layer the name HGSS uses (or lacks) for something the Platinum code includes, without editing the vendored file. The directory is on the `hgss_nitro.py` include path; it is still empty ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
+**Compat header.** A small header in `hgss/compat/include/` that gives the port layer the name HGSS uses (or lacks) for something the Platinum code includes, without editing the vendored file. The directory is on the `hgss_nitro.py` include path and holds 65 files: missing ntrtwl headers, SDK stand-ins/data, ARM7 sound tables and NNS tables ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
 
 ## D
 
@@ -190,7 +190,7 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **SDK_CW and __MWERKS__.** The macros Platinum's patches use to detect MWCC. The HGSS patches use `SDK_PORT_3DS` instead ([patches/NitroSDK/0101](../../patches/NitroSDK/) message).
 
-**Shim (SDK shim).** The tree under `build/hgss-sdk` that `tools/hgss_nitro.py` creates: a `libraries/hgss` symlink to HGSS's SDK sources, a filtered include directory, and a stand-in `gen_fx_const.py`. It lets the vendored Makefiles build HGSS's SDK without being edited ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
+**Shim (SDK shim).** The tree under `build/hgss-sdk` that `tools/hgss_nitro.py` creates: a `libraries/hgss` symlink to HGSS's SDK sources, a filtered include directory, and a stand-in `gen_fx_const.py`. It lets the vendored Makefiles build HGSS's SDK without being edited ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
 
 **Survey.** A progress measure that counts how many files parse or compile, not a gate: `tools/sdk_compile_survey.py` (SDK) and `tools/port_compile_survey.py` (port layer) ([Tools-Reference](Tools-Reference.md)).
 

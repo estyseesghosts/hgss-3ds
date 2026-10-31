@@ -175,9 +175,9 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 
 This fetches the decomp at the commit in `upstream.lock` into `build/upstream/`, applies the 15 patch files from `patches/` as commits, and links `build/NitroSDK` and `build/NitroSystem` to the SDK sources. The fetch needs network access to GitHub.
 
-**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, fifteen `  applying ...` lines, and `Done: build/upstream (15 patches applied), build/NitroSDK, build/NitroSystem`.
+**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, thirty-nine `  applying ...` lines, and `Done: build/upstream (39 patches applied), build/NitroSDK, build/NitroSystem`.
 
-Running it again prints `upstream: already at 8cbb4a19ab78 with 15 patches`.
+Running it again prints `upstream: already at 8cbb4a19ab78 with 39 patches`.
 
 ## 9. Run `make test`
 
@@ -206,9 +206,9 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/hgss_nitro.py make --target host32 --out /work/out/first lib -k -j8'
 ```
 
-**You should see:** `29/46 port source files compile against the HGSS headers`, then the grouped causes. The `make` run gets further but **fails**: 44 `error:` lines in 9 objects, mostly missing compat headers (`hgss/compat/include` is still empty) and a few missing type names. That is the known state on 2026-10-31, not a setup mistake.
+**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` with no errors. `make port-tests` runs the vendored suites: every one passes except `test_arm7`, which hangs in `test_sound` (the open Phase 1 item on 2026-10-31).
 
-`hgss_nitro.py` explains the shim it builds in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today). The next work and the full error map are in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
+`hgss_nitro.py` explains the shim it builds in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired). The next work and the full error map are in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 
 ## Troubleshooting
 

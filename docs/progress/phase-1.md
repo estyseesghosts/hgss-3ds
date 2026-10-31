@@ -1,33 +1,47 @@
 # Phase 1 progress
 
-Status: **in progress.** The SDK patch stack (15 patches), the save-layout proof and the host test
-suite are done and verified. The vendored port layer is wired far enough to build through its shim
-(`tools/hgss_nitro.py`), but 17 of its 46 sources still do not compile and the host32 build stops
-with 44 errors in 9 objects; its unit tests are **not** green. Phase 2 not started.
+Status: **in progress, one hang left.** The SDK patch stack is now **39 patches**; `make test` is green,
+`libnitro.a` builds with zero errors, and the vendored suites run: `pak` 120 checks, `test_nitro` 702,
+`test_fs_pak` 120, `test_threads` 68 — all with 0 failures. The single open exit criterion is
+`test_arm7`, which passes backup/RTC/power/touch and then **hangs in `test_sound`**. The DS-side gate has
+not been rerun since the stack grew past the last passing run.
 
-> **Update 2026-10-31 (later session).** Four patches were added since this record was first
-> written: `1101` (NNS return type), `1201` (GCC-10 header/source fixes), `1301` (memory map onto
-> the port's arrays) and `1302` (two MI DMA registers that are absolute addresses). The host suite
-> now has 11 suites (added `gcc_fixes`, `memory_map`) and **`make test` is green**. Port survey is
-> 29/46 (was 26); port build is 44 errors in 9 objects (was 62 in 10). The W2 compat headers were
-> designed but never committed: `hgss/compat/include/` has only `.gitkeep`. See
-> [STATE.md](STATE.md) for the live numbers and the next actions.
+> **Update 2026-10-31 (session 4).** The compat layer, the remaining patch categories and the vendored
+> test wiring all landed. Patches added: `0302` (arena/stack symbols), `0303` (MATH_CountPopulation
+> return width), `0502` (remaining DIV/SQRT writers), `0602` (software timers), `0603` (ROM archive and
+> overlay hooks), `0604` (3D command ports, GXSTAT stack error), `NitroSystem/0302` (GXFIFO words, early
+> 3D VRAM transfers, hidden OAM), `1401` (ARM7 sound driver, static initializers), `1402` (the
+> corresponding SDK header halves), `1403` (sound NULL-tag guard), `1203` (GXFifoStat guard), `1303`
+> (2D VRAM loader literals), `1304` (RTC shared-work literal), `1305` (touch/PM/MIC literals), `1501-1508`
+> (Phase 2 game GCC fixes) and `1601` (alarm-partition header pins). The full runtime debugging log,
+> with each crash and its root cause, is [agent-notes/p1-runtime-bringup.md](agent-notes/p1-runtime-bringup.md).
+> Phase 2 has started; see [phase-2.md](phase-2.md).
+>
+> Why the port tests used to "compile and then misbehave": most failures were **DS code addressing
+> main/shared memory by literal address** (RTC/touch/PM/MIC/VRAM). Patches 1301/1302 moved those regions
+> into the port's arrays, so the literals pointed at unmapped memory. Grep for `0x02…`/`0x05…`/`0x07…`
+> pointer literals before assuming a logic bug.
+
 
 ## How to resume (fresh context)
 
 - Container: `cd /Users/terezi/hgss/pokeheartgold-3ds && devcontainer up --workspace-folder .` then
   `devcontainer exec --workspace-folder . bash -c '...'`. Repo inside = `/workspaces/pokeheartgold-3ds`.
 - Rebuild the patched tree from scratch: `python3 tools/bootstrap.py --clean` (applies `patches/**`
-  in numeric order per stack, generates `fx_const.h`). Expected: **15 patches**.
+  in numeric order per stack, generates `fx_const.h`). Expected: **39 patches**.
 - Measure: `python3 tools/sdk_compile_survey.py -j 10 --m32` (gcc-13: 270/284) and with
-  `--gcc gcc-10` (269/284). Port: `python3 tools/port_compile_survey.py` (29/46) and
-  `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` (44 errors).
-- Tests: `make test` (19 Python tests + 11 SDK suites; exit 0). Or one suite:
-  `bash tests/sdk/<name>/run.sh build/upstream`; layout: `PY=/work/venv/bin/python bash tests/layout_probe/run.sh`.
+  `--gcc gcc-10` (269/284). Port: `python3 tools/port_compile_survey.py` (46/46) and
+  `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` (0 errors).
+- Tests: `make test` (182 Python tests + 18 SDK suites; exit 0). Vendored:
+  `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` (all three subprojects)
+  or `make port-tests`. One suite: `bash tests/sdk/<name>/run.sh build/upstream`.
 - DS-side gate (hard rule 3): clone `build/upstream` to `/work/patched`,
-  `tools/install-ds-toolchain.sh /work/patched`, `make patch_mwasmarm MWCCVER=2.0/sp2p3`,
+  `tools/install-ds-toolchain.sh /work/patched`, **`make -C tools/mwasmarm_patcher`** (its binary is
+  git-ignored; the gate fails without it), `make patch_mwasmarm MWCCVER=2.0/sp2p3`,
   `tools/matching-build.sh /work/patched HEARTGOLD` (~18 min), expect ROM SHA1 `4fcded0e…`.
-  **Not rerun with `1001`/`1101`/`1201`/`1301`/`1302`.**
+  **Not passed at 39 patches.** Two build tools pin header hashes (`tools/arm7-alarm-partition`,
+  `tools/alarm-partition`); patch `1601` re-pins them, and a new patch that touches a pinned header
+  needs a new pin or the gate stops with "physical input drift" / "production closure drift".
 - Patch authoring: clone `build/upstream` to `/work/wt/<name>`, edit, commit, then
   `git format-patch -1 --relative=lib/NitroSDK --start-number N -o /workspaces/pokeheartgold-3ds/patches/NitroSDK`
   (use `--relative=lib/NitroSystem` for NitroSystem; patches touching other trees go to
@@ -120,12 +134,12 @@ Caveat: `mi_memory.c` also defines `MI_Copy32B/36B/48B/64B` that the port's `mi_
 
 | Item | Result |
 | --- | --- |
-| `bootstrap.py` applies all patches cleanly from scratch | **PASS**: 15 patches, `git am`, fails hard on a bad patch (unit-tested); also re-run in a fresh clone in the CI image |
+| `bootstrap.py` applies all patches cleanly from scratch | **PASS**: 39 patches, `git am`, fails hard on a bad patch (unit-tested); also re-run in a fresh clone in the CI image |
 | `docs/sdk-diff.md` complete | **PARTIAL**: PXI tags, OSSystemWork/SNDSharedWork field lists, G3 opcodes, card backup, `CARD_SpiWait*`, asm inventory done; RTC/TP/PM/MIC payload formats, IRQ/thread struct layouts, NitroSystem detail not compared (the port-wiring review found the PXI encodings differ) |
-| 27 + 5 patches rebased, each with a message | **NOT AS SPECIFIED, by evidence**: none of Platinum's patches applies to HGSS's different SDK tree (`git am` impossible); the triage found 4 trivial / 16 moderate / 3 rewrite / 4 N/A. Done as fresh HGSS patches by function: asm-to-C 0101, 0201, 0301, 0401, 0501, 0801, 0901 (Platinum 0003, 0006, 0008, 0012 equivalents), hooks 0601 (0009, 0017, 0026) and 0501 (0002), `u64` 1001 (0016), NNS 0301 (0001 partly), memory map 1301/1302 (0005). **Not done:** 0010/0014/0027/0011 overlay + libpak, 0013 timers, 0024/0025 3D command ports, 0018-0023 ARM7 sound (rewrite against `sub/`); NitroSystem 0003/0004/0005 equivalents. |
+| 27 + 5 patches rebased, each with a message | **NOT AS SPECIFIED, by evidence**: none of Platinum's patches applies to HGSS's different SDK tree (`git am` impossible); the triage found 4 trivial / 16 moderate / 3 rewrite / 4 N/A. Done as fresh HGSS patches by function: asm-to-C 0101, 0201, 0301, 0401, 0501, 0801, 0901 (Platinum 0003, 0006, 0008, 0012 equivalents), hooks 0601 (0009, 0017, 0026) and 0501 (0002), `u64` 1001 (0016), NNS 0301 (0001 partly), memory map 1301/1302 (0005), timers 0602 (0013), overlay + libpak 0603 (0010/0011/0014) with the header halves in 1402, 3D 0604 (0024/0025), static initializers 1401 (0027), ARM7 sound 1401/1403 (0018-0023 rewritten against `sub/`), NitroSystem 0302 (0003/0004/0005). 39 patches total. |
 | HGSS-only SDK patches added | **PASS** for `CARD_SpiWait*` (0701), the GCC-10 fixes (1201) and the absolute MI DMA registers (1302). Mic PXI not examined. |
 | Layout probe: zero differences, or each explained and fixed | **PASS**: 804 values, 45 save roots; 55 differences found and fixed by patch 1001; 0 remain for host `-m32`, `-m32 -malign-double`, devkitARM |
-| Port unit tests green on `host` (and `host32`) | **FAIL / NOT DONE**: the vendored `3ds_port` suites are not built against HGSS. Port wiring is at 29/46 sources compiling; the host32 build stops with 44 errors in 9 objects. What *is* green: 11 SDK host suites in `tests/sdk` + 19 tool tests under `make test` (new tests of the patches, not the vendored tests) |
+| Port unit tests green on `host` (and `host32`) | **PARTIAL — one hang**: the vendored suites build and run against HGSS. `pak` 120 checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68, all 0 failed; `test_arm7` passes backup/RTC/power/touch and hangs in `test_sound`; `test_nitrosystem` not reached. `make port-tests` is real and fails only on that hang. |
 | `port.yml` passing | **NOT VERIFIED on GitHub** (no remote). A dry run of its exact steps (fresh clone, same image, same `docker run`) passes locally |
 | No game code compiled yet | **PASS**: only lib/ SDK and NitroSystem sources were compiled with GCC; the layout probe includes game *headers* (and 7 save-struct `.c` files, syntax and DWARF only). No game object was linked. |
 

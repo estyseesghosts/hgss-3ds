@@ -79,11 +79,14 @@ bash tests/sdk/fx/run.sh build/upstream
 
 `nns_clz` and `small` take a patched tree path as their argument. Pass `build/upstream` there too.
 
-`make port-tests` is not part of `make test`. It always fails, on purpose, until the vendored port's tests are wired to HGSS. See [docs/port-wiring.md](../port-wiring.md).
+`make port-tests` runs the vendored `3ds_port` suites (`pak`, `nitro`, `nitrosystem`) against HGSS's
+SDK. It is its own target, not part of `make test`, because it needs a full `host32` build. Current
+state: every suite passes except `test_arm7`, which hangs in `test_sound`; see
+[../progress/STATE.md](../progress/STATE.md).
 
 ## The port layer
 
-This is the Phase 1 work in progress. The vendored `3ds_port/nitro` Makefiles expect Platinum's SDK layout; `tools/hgss_nitro.py` builds a shim and passes make overrides so the vendored tree compiles HGSS's SDK sources. The full design is in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today).
+This is the Phase 1 work in progress. The vendored `3ds_port/nitro` Makefiles expect Platinum's SDK layout; `tools/hgss_nitro.py` builds shims and passes make overrides so the vendored tree compiles HGSS's SDK sources. The full design is in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired).
 
 Fast measure (per-file syntax):
 
@@ -91,20 +94,26 @@ Fast measure (per-file syntax):
 python3 tools/port_compile_survey.py
 ```
 
-Real build (compiles and links the port's objects; today it stops with errors):
+Real build (compiles and links the port's objects, then the suites):
 
 ```
 python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> lib -k -j8
+python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> test
 ```
 
 - Always pass `--out`: objects then go to that private directory instead of the vendored `build/host32`, so two runs do not collide.
 - `-k` keeps going after a failing file; the tail of the log is not the whole story, count `error:` lines.
-- It also accepts `test`, `game` and other make goals; the vendored test suites are what Phase 1 still needs.
-- `python3 tools/hgss_nitro.py list` prints the HGSS source list and the excluded files; `shim` recreates `build/hgss-sdk` and prints the overrides.
+- `--subproject {pak,nitro,nitrosystem,all}` narrows `test`; the default for `test` is all three.
+- `python3 tools/hgss_nitro.py list` prints the HGSS source lists and the excluded files; `shim` recreates the shims and prints the overrides.
 
-Current state (2026-10-31): **44 errors in 9 objects**. The buckets are missing compat headers, `MIUnpackBitsParam`/`MIReadStreamCallbacks`, `MIi_Cpu*` and PXI prototypes, MI DMA timing names, and NVRAM spelling. The per-file map is [docs/port-wiring.md](../port-wiring.md); the next actions are [STATE.md](../progress/STATE.md#next-actions-in-order).
+Current state (2026-10-31): `libnitro.a` builds with 0 errors; `pak` 120 checks, `test_nitro` 702,
+`test_fs_pak` 120, `test_threads` 68, all 0 failed; **`test_arm7` hangs in `test_sound`**. The failure
+history, including every segfault and its root cause, is
+[../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md).
 
-`hgss/compat/include/` is on the shim's include path and is where HGSS names for Platinum headers go. It currently holds only `.gitkeep`; writing those headers is the next task. Do not edit the vendored files for HGSS-only names: add a header or a new source (`port_pm_hgss.c`), and keep edits to vendored files small enough to send upstream.
+`hgss/compat/include/` is on the shim's include path and holds HGSS names for Platinum headers. Do not
+edit the vendored files for HGSS-only names: add a header or a new source (`port_pm_hgss.c`, compat C
+files), and keep edits to vendored files small enough to send upstream.
 
 ### Memory arrays and host tests (patches 1301/1302)
 
@@ -139,6 +148,7 @@ cd /workspaces/pokeheartgold-3ds
 rm -rf /work/patched
 git clone -q /workspaces/pokeheartgold-3ds/build/upstream /work/patched
 tools/install-ds-toolchain.sh /work/patched
+(cd /work/patched && make -C tools/mwasmarm_patcher)          # (git-ignored binary; absent from a clone)
 (cd /work/patched && make patch_mwasmarm MWCCVER=2.0/sp2p3)
 /workspaces/pokeheartgold-3ds/tools/matching-build.sh /work/patched HEARTGOLD
 (cd /work/patched && echo "4fcded0e2713dc03929845de631d0932ea2b5a37  build/heartgold.us/pokeheartgold.us.nds" | sha1sum -c -)
@@ -146,7 +156,15 @@ tools/install-ds-toolchain.sh /work/patched
 
 Run these from inside the container. The repo tools are called by absolute path because the clone does not contain them. The build must finish, and the SHA1 check must print `OK`.
 
-Status: the last full pass used patches `0101`-`0901` and NitroSystem `0301` (10 patches) and produced the retail SHA1. `1001`, `1101`, `1201`, `1301` and `1302` have **not** had a full rebuild; their DS text is guarded and `gcc -E -P` without the macro is identical, but that is not the same as the byte-identical ROM check. Run the gate after touching any of them (and before closing Phase 1).
+Two decomp build tools verify header hashes before they run: `tools/arm7-alarm-partition/build.py`
+("physical input drift") and `tools/alarm-partition/build.py` ("production closure drift"). If the gate
+stops with one of those, a patch changed a header they read; update the pins in their `profile.json`
+(patch `1601` is the example) and rerun.
+
+Status: the last full pass used 10 patches and produced the retail SHA1. The stack is now **39
+patches**; the run gets past `sub/` and stops at the `tools/alarm-partition` header pins (fixed in
+`1601`), so the gate has **not passed** since. Run it after any patch change; it is the only strong
+proof that the DS build is unchanged.
 
 The phase records describe this procedure, and a local script used it. That script is not tracked in the repo (see the pitfalls below).
 
@@ -194,6 +212,13 @@ Then:
 
    For NitroSystem, use `--relative=lib/NitroSystem` and `patches/NitroSystem`. For a change to the decomp outside `lib/`, drop `--relative` and write to `patches/pokeheartgold`. Bootstrap applies each stack under the matching folder. `N` is the patch number. Use `101` for `0101`.
 
+   **The `--relative` is not optional.** A NitroSDK patch exported without it contains `lib/NitroSDK/src/...`;
+   bootstrap then applies it with `--directory=lib/NitroSDK` and `git am` fails with
+   `lib/NitroSDK/lib/NitroSDK/src/...: does not exist in index`. If the gate then reports "physical
+   input drift" / "production closure drift", the patch touched a header that
+   `tools/arm7-alarm-partition` or `tools/alarm-partition` pins; update its `profile.json`
+   (see patch `1601`).
+
 6. **Rebuild** the tree in the repo: `python3 tools/bootstrap.py --clean`. Then `make test`.
 
 7. **Run the DS-side gate** described in the section above.
@@ -235,7 +260,11 @@ These come from things the repo already recorded.
 - **Bootstrap does not see patch edits.** After you change a patch's contents, use `--clean`. Editing a patch without `--clean` leaves `build/upstream` with the old text, and the tests run against the old code.
 - **Outputs that contain game code stay local.** The matching ROM, the decomp build and any `.3dsx` or `.cia` belong in `/work` or on your own machine, never in the repo, a CI artifact or a message.
 - **Golden frames are git-ignored.** `tests/golden/` shows game art. Only the input scripts and the capture tools are committed. See [tools/golden/README.md](../../tools/golden/README.md).
-- **The vendored `3ds_port/` tests do not run for HGSS.** `make -C 3ds_port/nitro` builds against Platinum's layout. Use `tools/hgss_nitro.py`; the vendored suites are still the Phase 1 exit criterion that is open. `make port-tests` fails on purpose.
+- **The vendored `3ds_port/` tests are wired, one suite still hangs.** `make port-tests` is real and
+  runs `pak`, `nitro` and `nitrosystem` against HGSS's SDK; everything passes except `test_arm7`'s
+  `test_sound`, which spins. To debug a vendored test, see
+  [Build-Reference](Build-Reference.md#a-vendored-test-segfaults-or-hangs-at-100--cpu); never edit the
+  test to make it pass.
 - **A host test that links an SDK object needs the port's arrays.** Patch 1301 moved the registers into `NitroPort_IoReg` and friends; link `tests/sdk/port_memory.c` (the suites already do). If a register write faults at `0x04000000`, look for an absolute address in an SDK header (patch 1302 fixed two) instead of mapping the page in the test.
 - **`onCreate.sh` runs once.** Its private-file check and `wineboot` run only when the container is created. Changing the Wine version in the Dockerfile needs a new container. The private folder is a live mount, so files you add to it later are visible without a rebuild. Only the one-time checks need the new container.
 - **The matching build is not `make`.** Use `tools/matching-build.sh`, or the ROM will not match. See [Getting-Started](Getting-Started.md#the-matching-sha1-does-not-match).

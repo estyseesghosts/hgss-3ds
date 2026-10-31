@@ -70,14 +70,16 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 
 | Target | Command | Output | State |
 | --- | --- | --- | --- |
-| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, 15 patches |
-| Host test gate | `make test` | test results only | **green** |
-| SDK syntax survey | `make sdk-survey` or `python3 tools/sdk_compile_survey.py --m32 -j8` | counts | 270/284 (gcc 13) |
-| Port source survey | `python3 tools/port_compile_survey.py` | counts + first errors | 29/46 |
-| Port layer host32 | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | objects under `/work/out/x` | **fails**, 44 errors in 9 objects |
+| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **39 patches** |
+| Host test gate | `make test` | test results only | **green** (182 Python tests + 18 SDK suites) |
+| SDK syntax survey | `make sdk-survey` or `python3 tools/sdk_compile_survey.py --m32 -j8` | counts | 270/284 (gcc 13), 269/284 (gcc 10) |
+| Port source survey | `python3 tools/port_compile_survey.py` | counts + first errors | **46/46, exit 0** |
+| Port layer host32 libraries | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | `libnitro.a` under `/work/out/x` | **works, 0 errors** |
+| Vendored port suites | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` or `make port-tests` | test output | `pak` 120, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68 — 0 failed; **`test_arm7` hangs in `test_sound`** |
 | Save-layout probe | `make layout` | differences | 0/804 (last run) |
-| DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | ROM in `/work` | works; needs MWCC |
-| Game for 3DS or PC | — | — | **does not exist yet** (Phase 2+) |
+| DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | ROM in `/work` | works; needs MWCC; **not passed at 39 patches** |
+| Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
+| Game for 3DS or PC | `make game-pc` / `make game-3ds` | `build/` | **compiles; does not link yet** — 966 unresolved symbols ([phase-2.md](../progress/phase-2.md)) |
 
 There is no `make game`, `make matching` or `builder/` in this repo. See
 [Tools-Reference](Tools-Reference.md#named-in-the-docs-but-not-in-the-repo).
@@ -105,10 +107,12 @@ devcontainer exec --workspace-folder . bash -c \
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && python3 tools/port_compile_survey.py'
 
-# 4. the port layer against HGSS (currently expected to fail)
+# 4. the port layer against HGSS: libraries, then all three vendored test suites
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && python3 tools/hgss_nitro.py make \
      --target host32 --out /work/out/try lib -k -j8'
+devcontainer exec --workspace-folder . bash -c \
+  'cd /workspaces/pokeheartgold-3ds && make port-tests'
 ```
 
 ### The DS side (MWCC), separately
@@ -174,31 +178,41 @@ The port's flags are in `3ds_port/common.mk` (`PORT_CFLAGS`) and are repeated by
 `make clean` is `rm -rf build` and deletes **everything** under `build/`, including `build/upstream`
 and `build/reference`. Prefer `bootstrap.py --clean` when you only want a fresh upstream.
 
-## 7. How the vendored port build is wired (and why it fails today)
+## 7. How the vendored port build is wired
 
 The vendored Makefiles expect Platinum's layout (`libraries/<lib>/src`) and Platinum's
-`include/nitro/**`. `tools/hgss_nitro.py` builds a shim under `build/hgss-sdk`:
+`include/nitro/**`. `tools/hgss_nitro.py` builds a shim under `build/hgss-sdk` and `build/hgss-nns`:
 
-- `build/hgss-sdk/libraries/hgss` → symlink to `build/upstream/lib/NitroSDK/src`, so the source list
-  can name HGSS files;
+- `build/hgss-sdk/libraries/hgss` → `build/upstream/lib/NitroSDK/src`, so `SDK_SRCS` can name HGSS
+  files (`hgss/os/os_thread.c`); `build/hgss-sdk/libraries/hgss_sub` → `sub/lib/src` for the genuine
+  ARM7 sound driver, which the Makefile renames to `N7_*`; `build/hgss-sdk/libraries/hgss_compat` →
+  `hgss/compat/src` for the SDK stand-ins and data.
 - `build/hgss-sdk/include` → only `nitro*`, `nnsys*`, `cw*` from `lib/include` (HGSS's `stdarg.h`,
-  `stddef.h` and `string.h` there would shadow the system ones), plus `hgss/compat/include`;
-- a stand-in `gen_fx_const.py` that copies the generated `fx_const.h`;
-- make overrides: `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=` (empty).
+  `stddef.h` and `string.h` there would shadow the system ones), plus `hgss/compat/include`.
+- `build/hgss-nns` mirrors `lib/NitroSystem/src` as `hgss_nns/` and exposes the two files the nitro
+  tests compile by their Platinum paths (`g3d/src/gecom.c`, `gfd/.../gfd_VramTransferManager.c`).
+- make overrides: `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=`, `NNS=`, `NNS_SRCS=`, `OUT=`.
+- every compile also force-includes HGSS's MSL `lib/include/assert.h` and
+  `hgss/compat/include/hgss_port_math.h`. Both are needed because vendored sources call `assert` and
+  C99 math without including the headers, and the project's include path shadows the system ones.
+
+`--subproject {pak,nitro,nitrosystem,all}` selects what runs; with the goal `test` and no flag it runs
+all three, which is what `make port-tests` does.
 
 ```bash
-python3 tools/hgss_nitro.py list                                   # source list + exclusions
-python3 tools/hgss_nitro.py shim                                   # create the shim, print overrides
+python3 tools/hgss_nitro.py list                                   # source lists + exclusions
+python3 tools/hgss_nitro.py shim                                   # create the shims, print overrides
 python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8
+python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test
 ```
 
 `--out` is important for parallel work: without it, objects go to the vendored `build/host32` and two
 runs overwrite each other. `-k` keeps going after the first failing file so you see all errors.
-`tools/port_compile_survey.py` is the fast per-file syntax measure; the make build is the real thing
-(it catches link errors and missing symbols).
+`tools/port_compile_survey.py` is the fast per-file syntax measure; the make build is the real thing.
 
-The current failures and their owners are listed in [../port-wiring.md](../port-wiring.md) and
-[docs/progress/STATE.md](../progress/STATE.md).
+Current state: the libraries build with zero errors and every suite passes except `test_arm7`, which
+hangs in `test_sound`. The failure history and root causes are in
+[../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md).
 
 ## 8. Troubleshooting
 
@@ -244,6 +258,45 @@ default.
 
 It compares the number of applied commits with the number of patch files and does not notice edits
 to a patch's contents. After adding, removing or editing a patch: `python3 tools/bootstrap.py --clean`.
+
+### The DS gate stops with "physical input drift" or "production closure drift"
+
+`tools/arm7-alarm-partition/build.py` and `tools/alarm-partition/build.py` verify the SHA-256 of every
+header they read before building. A patch that edits one of those headers (all inside
+`#ifdef SDK_PORT_3DS`) makes the check fail and names the file. Update the pins in the two
+`profile.json` files — patch `1601` is the example — and rerun the gate. The pin is provenance, not ROM
+content; the ROM SHA1 is the proof.
+
+### `make patch_mwasmarm` says `tools/mwasmarm_patcher/mwasmarm_patcher: No such file or directory`
+
+The patcher binary is git-ignored, so a fresh clone does not have it. Run
+`make -C tools/mwasmarm_patcher` first; the gate recipe in
+[Daily-Workflow](Daily-Workflow.md#the-ds-side-gate) does.
+
+### A vendored test segfaults, or hangs at 100 % CPU
+
+These are almost always host-memory or protocol issues, not logic bugs:
+
+- **Literal DS addresses.** Patches 1301/1302 moved main/shared memory and the I/O registers into the
+  port's arrays. Any remaining `0x02…` (main/shared RAM), `0x05…`/`0x06…`/`0x07…` (palette/VRAM/OAM)
+  pointer in compiled code points at unmapped memory. Patches 1303-1305 fixed the classes found so far
+  (2D VRAM loaders, RTC, touch/PM/MIC). Grep before assuming anything else.
+- **A NULL shared-work pointer.** The ARM7 driver only learns `SNDi_SharedWork` from the setup command;
+  a test that calls the ARM9 API directly can push another command first (patch 1403 guards the tag).
+- **Missing `assert`/math declarations.** An implicit `assert` leaves an undefined symbol; an implicit
+  `double` function returns garbage. Both are handled by the force-includes in
+  [section 7](#7-how-the-vendored-port-build-is-wired); if a new vendored file needs more, add the
+  declaration to `hgss/compat/include/hgss_port_math.h` rather than a no-op stub.
+
+`gdb` cannot attach under the container's emulation (`PTRACE_GETREGS: Input/output error`) and cores
+are disabled (`ulimit -c` is 0). Copy the test to `/tmp`, insert
+`fprintf(stderr, "TRACE <line>\n"); fflush(stderr);` after each statement, and rebuild it against the
+same `libnitro.a`; the last line printed is the crashing statement. The vendored file is never edited.
+
+### A header that certainly exists is reported missing mid-build
+
+`bootstrap.py --clean` deletes `build/upstream`. If a build was reading it at the same time, the
+missing-header error is a race, not a real problem. Serialise bootstrap against builds.
 
 ## 9. Changing the toolchain
 

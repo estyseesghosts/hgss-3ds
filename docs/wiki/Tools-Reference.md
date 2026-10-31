@@ -28,15 +28,66 @@ Fetches the decomp at the commit in `upstream.lock` into `build/upstream/` and a
 
 ### `tools/hgss_nitro.py`
 
-Builds the vendored `3ds_port/nitro` against HGSS's SDK without editing the vendored Makefiles. It creates a shim under `build/hgss-sdk` (sources symlink, filtered include dir, stand-in `fx_const` generator) and passes `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=` and an optional `OUT=` to make.
+Builds the vendored `3ds_port` libraries and runs their tests against HGSS's SDK without editing the vendored Makefiles. It creates shims under `build/hgss-sdk` and `build/hgss-nns` (source symlinks, filtered include dirs, a stand-in `fx_const` generator) and passes `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=`, `NNS=`, `NNS_SRCS=` and an optional `OUT=` to make.
 
-- **Usage:** `python3 tools/hgss_nitro.py {shim|make|list} [--root build/upstream] [--target host32] [--out DIR] [-- make args]`
-- **Reads:** the patched tree at `--root` (default `build/upstream`), `hgss/compat/include`, and the vendored `3ds_port/nitro`.
-- **Writes:** `build/hgss-sdk/` (the shim) and objects under the `--out` directory, or the vendored `build/<target>/` without it.
-- **Output:** `make` exits with the vendored build's status. Today it fails with 44 errors in 9 objects; see [../port-wiring.md](../port-wiring.md).
+- **Usage:** `python3 tools/hgss_nitro.py {shim|make|list} [--root build/upstream] [--target host32] [--out DIR] [--subproject {pak,nitro,nitrosystem,all}] [-- make args]`
+- **Reads:** the patched tree at `--root` (default `build/upstream`), `hgss/compat/include`, `hgss/compat/src`, `sub/lib/src` and the vendored `3ds_port`.
+- **Writes:** `build/hgss-sdk/`, `build/hgss-nns/`, `build/hgss-res/` (hard links to the game files `test_nitrosystem` walks) and objects under `--out`.
+- **Goals:** `lib` builds `libnitro.a`; `test` runs the selected subprojects (default all three). `make port-tests` calls `test`.
+- **Output:** the vendored build's status. `lib` currently builds with 0 errors; `test` passes every suite except `test_arm7`'s `test_sound`.
 - **Needs:** the container, after bootstrap. gcc-10 (`CC` in the image). No MWCC, no ROM.
-- **Notes:** always pass `--out` for a private tree; `-k` shows every failing file. `list` prints the compiled source list and the excluded files.
-- **Why it exists:** the vendored Makefiles assume Platinum's `libraries/<lib>/src` layout and headers; see [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today).
+- **Notes:** always pass `--out` for a private tree; `-k` shows every failing file. `list` prints the compiled lists and the excluded files. Every compile force-includes HGSS's MSL `assert.h` and `hgss/compat/include/hgss_port_math.h` (see [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
+
+### `tools/game_sources.py`
+
+Reads HGSS's `Makefile`, `common.mk`, `filesystem.mk` and `main.lsf` and emits the game source list.
+
+- **Usage:** `python3 tools/game_sources.py [--root build/upstream] {--game-sources|--c-sources|--cpp-sources|--asm-sources|--lib-sources|--port-lib-sources|--overlay-map|--json}`
+- **Reads:** the checkout at `--root`. No ROM, no MWCC.
+- **Output:** lists, or JSON (1012 C, 56 C++, 150 ARM9 `.s`, 259 port-lib sources, 129 overlays) and the object→source→overlay map.
+- **Tested by:** `tests/test_game_sources.py` (synthetic trees; the real tree in a skip-guarded case).
+
+### `tools/game_overlays.py`
+
+Turns `main.lsf` into the overlay table and section plan the port uses.
+
+- **Usage:** `python3 tools/game_overlays.py [--root ...] [--table FILE] [--ids-output FILE] [--header FILE]`
+- **Output:** `gHeartgoldOverlays` for `NitroPort_SetOverlays`, the `SDK_OVERLAY_*` linker script, the `SDK_PORT_OVERLAY_ID_*` header, and an objcopy section plan that renames `.data`/`.bss`/`.sinit` (and GCC's `.init_array`) per overlay so C++ constructors run on overlay load, not at startup.
+- **Tested by:** `tests/test_game_overlays.py` (129 overlays, `OVY_45`'s C++ objects, ELF section renaming).
+
+### `tools/prepare_game_headers.py`
+
+Generates every build-time header the game needs, without MWCC or a ROM.
+
+- **Usage:** `python3 tools/prepare_game_headers.py [--root build/upstream] [--ids-output FILE] [--header FILE]`
+- **Output:** `lib/include/nitro/fx/fx_const.h`, `files/msgdata/msg/msg_0729.gmm`, 828 `msg_*.h`, 205 `.naix`, and optionally the overlay IDs. It is a pure-Python port of `gen_fx_consts`, `msgenc -H`, `nitroarc --index-namespace`, `o2narc` and `csv2bin --naix`.
+- **Proven by:** byte-for-byte identity against `/work/pokeheartgold`'s matching build; `tests/test_prepare_game_headers.py`.
+
+### `tools/s_to_gas.py`
+
+Converts HGSS's MWAS `.s` files to GAS and optionally assembles them.
+
+- **Usage:** `python3 tools/s_to_gas.py --root <checkout> <input.s> -o <out.s|out.o|-> [--cc CC] [--cflags ...]`
+- **Does:** recursive `.include`, `#define`/`FS_EXTERN_OVERLAY` expansion, escape-aware `;` comments, `.public`→`.global`, MWAS `.section`→GAS sections + alignment, `.word`→`.4byte` (x86 `.word` is 16-bit), and `cw.inc`'s `exception` macro.
+- **Proven by:** all 150 ARM9 `.s` assemble under `gcc-10 -m32` and `arm-none-eabi-gcc -march=armv6k` with no symbol/section/alignment difference; `tests/test_s_to_gas.py`.
+
+### `tools/make_game_wifi_stubs.py`
+
+Generates "not implemented" C for the network symbols game objects reference.
+
+- **Usage:** `python3 tools/make_game_wifi_stubs.py --nm NM --headers DIR... --sources SRCS... --output FILE OBJS...`
+- **Does:** scans undefined symbols matching `^(DWC|DWCi|PPW|VCT|WVR|SOC|SOCL|WCM|CPS|NHTTP)_`, logs once, returns the SDK's not-available code, and keeps 64-bit returns 64-bit. HGSS overrides: `WVR_StartUpAsync`/`WVR_TerminateAsync` call the callback with `result 0` and return 1, `DWC_Init` returns 0.
+- **Tested by:** `tests/test_game_stubs.py`.
+
+### `tools/hgss_game.py`
+
+Compiles the game and links a target. See [Build-Reference](Build-Reference.md#3-what-can-be-built-today) and [phase-2.md](../progress/phase-2.md).
+
+- **Usage:** `python3 tools/hgss_game.py --target {host32,3ds} [--keep-going] [--out DIR] [-- {make args}]`
+- **Does:** runs `prepare_game_headers.py`, compiles `src/**/*.c|*.cpp` plus the port-compiled `lib/` sources, assembles the `.s` files, builds `libnitro.a`/`libnitrosystem.a`, writes the overlay table and ID script, generates the Wi-Fi stubs, and links `build/pokeheartgold-pc` or a 3DS static link.
+- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1044/1094 compile, 150/150 `.s`, 966 unresolved symbols.
+- **Needs:** the container. The 3DS target needs devkitARM (present).
+- **Tested by:** `tests/test_hgss_game.py`.
 
 ### `tools/install-ds-toolchain.sh`
 
@@ -76,7 +127,7 @@ Checks how far the vendored `3ds_port/nitro/src` is from compiling against the H
 
 - **Usage:** `python3 tools/port_compile_survey.py [--root build/upstream] [--shim build/hgss-shim]`
 - **Writes:** symlinks in `build/hgss-shim/include/` that expose only `nitro`, `nnsys` and `cw` from `lib/include`.
-- **Output:** the count and the grouped first errors. Exit 0 only if every file compiles. Last run: `29/46`. The causes are listed in [docs/port-wiring.md](../port-wiring.md).
+- **Output:** the count and the grouped first errors. Exit 0 only if every file compiles. Last run: `46/46`, exit 0.
 - **Note:** the header says `[--no-pak]`. The script does not accept that flag.
 - **Needs:** the container, after bootstrap. No MWCC, no ROM.
 
@@ -201,20 +252,25 @@ From the repo `Makefile`:
 | `make tool-tests` | `python3 -I -m unittest discover -s tests` | |
 | `make sdk-tests` | every `tests/sdk/*/run.sh build/upstream` | |
 | `make sdk-survey` | `tools/sdk_compile_survey.py -j $(nproc) --m32` | Exits 1 while files fail (14 at last run). |
-| `make port-tests` | nothing; prints `NOT IMPLEMENTED` and exits 1 | Deliberate. |
+| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. Everything passes except `test_arm7`'s `test_sound` (hang). |
 | `make layout` | `bash tests/layout_probe/run.sh` | |
 | `make clean` | `rm -rf build` | Deletes everything under `build/`, including `build/upstream` and `build/reference`. |
 
-The port layer has no Makefile target yet: use `python3 tools/hgss_nitro.py make --target host32 --out DIR lib -k -j8` (see above). Its vendored tests are the open Phase 1 criterion.
+The port layer builds and tests through `make port-tests` or
+`python3 tools/hgss_nitro.py make --target host32 --out DIR test`.
 
 ## Named in the docs but not in the repo
 
-These appear in the plan or other docs, and do not exist yet. Do not look for them:
+These appear in the plan or other docs and do not exist yet. Do not look for them:
 
-- `make game`, `make game-cia`, `make matching` (the Makefile does not define them).
+- `make matching` and `make game-cia` (the Makefile has `game-pc`/`game-3ds` but no `matching`/`game-cia` target).
 - `tools/check_ci_artifacts.py`, which [CONTRIBUTING.md](../../CONTRIBUTING.md) cites.
-- `tools/golden/run.py`, `tools/boot_smoke.py`, `tools/game_sources.py`, `tools/game_overlays.py`, `tools/make_game_wifi_stubs.py`, which [gameplan.md](../../gameplan.md) lists.
-- `builder/` (the ROM-to-pak builder, Phase 3).
+- `tools/golden/run.py`, `tools/boot_smoke.py` (the golden runner and boot smoke are Phase 4 work).
+- `builder/extract_rom.py`, `builder/verify_rom.py`, `builder/pack.py`'s ROM side (Phase 3; only `builder/pack.py` exists).
 - `.github/workflows/golden.yml`.
+
+Now present (they were on this list before): `tools/game_sources.py`, `tools/game_overlays.py`,
+`tools/make_game_wifi_stubs.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py`,
+`tools/hgss_game.py`.
 
 Links: [Home](Home.md), [Getting-Started](Getting-Started.md), [Daily-Workflow](Daily-Workflow.md).

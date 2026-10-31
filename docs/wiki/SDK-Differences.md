@@ -26,7 +26,7 @@ File names also differ. For example, `CARD_backup.c` in HGSS corresponds to `car
 
 The sdk-diff record says a line-by-line diff of the two trees is not a usable method. HGSS is a reconstruction that matches the DS build; the Platinum SDK is closer to the original sources. Equivalent code looks very different in the two. So the comparison in the record is by structure and behaviour.
 
-The vendored port's Makefiles expect Platinum's layout (`libraries/<lib>/src`). They cannot drive HGSS's tree as they are. `tools/hgss_nitro.py` solves this without editing them: a shim under `build/hgss-sdk`, plus `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=` and `ARM7_SOUND_SRCS=` on the make command line ([docs/port-wiring.md](../port-wiring.md), [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
+The vendored port's Makefiles expect Platinum's layout (`libraries/<lib>/src`). They cannot drive HGSS's tree as they are. `tools/hgss_nitro.py` solves this without editing them: a shim under `build/hgss-sdk`, plus `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=` and `ARM7_SOUND_SRCS=` on the make command line ([docs/port-wiring.md](../port-wiring.md), [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
 
 ## Assembly written in MWCC's inline `asm`
 
@@ -90,7 +90,7 @@ The survey is `tools/sdk_compile_survey.py`. It runs `gcc -fsyntax-only` on ever
 The total is 284 files. That is 190 in NitroSDK plus 94 in NitroSystem, which I counted in the pinned tree.
 
 - **Baseline, before any patch:** 243 of 284 parse, at 32-bit ([docs/progress/phase-1.md](../progress/phase-1.md)).
-- **With all 15 patches:** 270 of 284 parse with gcc 13, 269 with gcc 10 ([docs/progress/STATE.md](../progress/STATE.md)). The extra gcc-10 failure is `ctrdg/CTRDG_common.c`; `SND_command.c` was fixed by patch 1201.
+- **With all 39 patches:** 270 of 284 parse with gcc 13, 269 with gcc 10 ([docs/progress/STATE.md](../progress/STATE.md)). The extra gcc-10 failure is `ctrdg/CTRDG_common.c`; `SND_command.c` was fixed by patch 1201.
 
 ### The 14 files that still do not parse
 

@@ -10,7 +10,9 @@ done, how it was verified, what is still open, and what to run next.
 2. **[phase-0.md](phase-0.md)** — the baseline: container, matching DS builds, tools.
 3. **[phase-1.md](phase-1.md)** — the SDK patch stack, layout probe, DS-side gate and port wiring.
    This is the phase in progress.
-4. **`agent-notes/`** — one note per work slice, written by the agent that did it. They are raw: the
+4. **[phase-2.md](phase-2.md)** — the game build: source list, overlays, generated headers, `.s`
+   conversion, stubs, the build harness and the unresolved-symbol work queue.
+5. **`agent-notes/`** — one note per work slice, written by the agent that did it. They are raw: the
    commands it ran, the measurements it took, and what it handed to the lead. The lead folds the
    results into `STATE.md` and the phase record.
 

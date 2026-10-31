@@ -49,7 +49,7 @@ A patch name is four digits and a short slug, for example `0701-card-CARD_SpiWai
 - **The numbers are per stack.** `NitroSDK/0301` and `NitroSystem/0301` are different patches. The first number is the stack's own counter, not a shared one.
 - **The NitroSDK numbers are grouped by area.** The phase-1 log gives the groups: `01xx` fx matrix code, `02xx` small hardware, lock and FIFO functions, `03xx` one-off GCC fixes, `04xx` os_system, `05xx` context and divider, `06xx` port hooks, `07xx` card, `08xx` qsort, `09xx` IRQ handler ([docs/decisions.md](../decisions.md), 2026-10-31).
 - **The numbers are not Platinum's.** Platinum's series runs 0001 to 0027. The plan expected to rebase those ([gameplan.md](../../gameplan.md), Phase 1, step 4). They could not be applied to HGSS's SDK, so the HGSS series is its own ([docs/progress/phase-1.md](../progress/phase-1.md), "Deviations").
-- **The `pokeheartgold` stack is grouped the same way:** `10xx` types and ABI, `11xx` NitroSystem headers, `12xx` GCC-only fixes, `13xx` memory map. It holds `1001`, `1101`, `1201`, `1301` and `1302` today. Patches that touch more than one tree (or the decomp root) go here rather than in an SDK stack.
+- **The `pokeheartgold` stack is grouped the same way:** `10xx` types and ABI, `11xx` NitroSystem headers, `12xx` GCC-only fixes, `13xx` memory map, `14xx` ARM7 sound and static initializers, `15xx` Phase 2 game GCC fixes, `16xx` decomp build metadata. It holds `1001`, `1101`, `1201`-`1203`, `1301`-`1305`, `1401`-`1403`, `1501`-`1508` and `1601` today. Patches that touch more than one tree (or the decomp root) go here rather than in an SDK stack.
 
 ## The guard
 
@@ -80,7 +80,7 @@ Two forms appear in the patch files. Both were counted from the `#if`, `#else` a
 - **Replacement with an `#else`.** A hunk replaces an MWCC `asm` function, or a declaration GCC cannot parse, with a C version. The original text stays under `#else`. Most of `0101`, `0201`, `0301`, `0701` and `0901` work this way, and so do some hunks in `0501` and `0601`.
 - **Additive guard with no `#else`.** A hunk adds a guarded block and leaves the DS text as it was. Several blocks in `0501` and `0601` are like this, and so is the whole of `1101`.
 
-Only one patch edits an existing line. In `0401` the original `#ifdef SDK_ARM9` becomes `#elif defined(SDK_ARM9)` under the new `#ifdef SDK_PORT_3DS`. Patches `0801` and `0901` wrap an existing forward declaration in `#ifndef SDK_PORT_3DS` without changing its text. Across all 15 patches, the only removed line is the one in `0401`.
+Only one patch edits an existing DS line. In `0401` the original `#ifdef SDK_ARM9` becomes `#elif defined(SDK_ARM9)` under the new `#ifdef SDK_PORT_3DS`. Patches `0801` and `0901` wrap an existing forward declaration in `#ifndef SDK_PORT_3DS` without changing its text. Across all 39 patches the only removed lines are that one in `0401` and the reformatted lines listed in each patch's message; every patch states a `gcc -E -P` identity check.
 
 The macro is `SDK_PORT_3DS` and not Platinum's `SDK_CW` or `__MWERKS__`. Patch `0101` gives the reason: the port's rule is one guard for port-only behaviour, so the MWCC build never takes a port branch ([patches/NitroSDK/0101](../../patches/NitroSDK/) message).
 
@@ -137,24 +137,61 @@ patches/pokeheartgold/
   1001-types-64-bit-integers-4-byte-aligned-as-on-the-DS-SD.patch
   1101-nnsys-give-NNS_G2dInitCellTransferStateManager-its-r.patch
   1201-gcc-fixes-for-unnamed-parameter-duplicate-CRC-header.patch
+  1202-gcc-match-SDK-header-signatures-to-the-port-sources.patch
+  1203-gx-skip-the-local-GXFifoStat-copies-when-the-port-he.patch
   1301-mmap-DS-memory-areas-become-the-port-s-arrays-SDK_PO.patch
   1302-mmap-the-two-absolute-MI-DMA-register-addresses-foll.patch
+  1303-gx-the-2D-VRAM-loaders-use-the-port-s-memory-areas-S.patch
+  1304-rtc-read-the-raw-RTC-words-through-OSSystemWork-SDK.patch
+  1305-sdk-shared-work-literals-go-through-OSSystemWork-SDK.patch
+  1401-sound-arm7-driver-and-static-initializers-SDK_PORT_3DS.patch
+  1402-sdk-headers-port-hooks-for-timers-overlays-3d-SDK_PORT_3DS.patch
+  1403-sound-do-not-write-the-finished-command-tag-before-t.patch
+  1501-nitrocrypto-plain-C-RC4-under-SDK_PORT_3DS.patch
+  1502-Drop-static-where-an-internal-header-declares-the-fu.patch
+  1503-weather_manager-type-the-snow-tables-and-copy-them.patch
+  1504-field_very_tall_grass-complete-the-extern-array-elem.patch
+  1505-MSL-new-drop-dynamic-exception-specifications-under-.patch
+  1506-ScriptRunByIndex-and-the-Frontier-GoTo-read-the-word.patch
+  1507-Safari-GetFacingSafariObject-read-the-two-halfwords-.patch
+  1508-Initialize-the-battle-locals-MWCC-left-unset.patch
+  1601-build-re-pin-the-headers-the-port-patch-stack-touche.patch
 ```
+
+NitroSDK additions in this session: `0302` (arena/stack symbols), `0303` (MATH_CountPopulation
+return width), `0502` (remaining DIV/SQRT writers), `0602` (software timers), `0603` (ROM archive and
+overlay hooks), `0604` (3D command ports and GXSTAT stack error). NitroSystem additions: `0302`
+(GXFIFO words, early 3D VRAM transfers, hidden OAM entries). See
+[Patch-Stack](#) catalog rows and [../progress/phase-1.md](../progress/phase-1.md) for the details.
 
 ## The port-side symbols the patches call
 
 Several patches call functions the port layer defines. These exist in the vendored `3ds_port/nitro`: `NitroPort_DmaStart`, `NitroPort_Gx3dSyncResults`, `NitroPort_IrqThreadSwitch`, `NitroPort_SaveContext`, `NitroPort_LoadContext`, `NitroPort_RaiseIrq`, `NitroPort_Halt`, `CPi_PortUpdateDiv` and `CPi_PortUpdateSqrt`, and the saved CPSR `OSi_PortCpsr`. The check was a text search of the vendored tree. No HGSS link has been made, so the contract is checked by reading, not by a build.
 
-## Known gaps in the stack
+## Coverage after session 4
 
-The phase-1 record lists these Platinum patches as not done for HGSS:
+All of the Platinum patch categories now have an HGSS equivalent:
 
-- `0010`, `0011`, `0014`, `0027` overlay IDs, libpak, overlay hooks and static initializers.
-- `0013` timer hooks.
-- `0024`, `0025` 3D command ports.
-- `0018` to `0023` ARM7 sound, to be rewritten against `sub/`, not rebased.
+- **Overlay IDs, libpak, overlay hooks (`0603` + `1402`), static initializers (`1401`).**
+- **Timer hooks (`0602` + `1402`).**
+- **3D command ports and GXSTAT stack error (`0604` + `1402`).**
+- **ARM7 sound (`1401`, with the driver rewritten against `sub/lib/src/sound_*.c`, not rebased) and
+  the NULL-tag guard (`1403`).**
+- **Memory map (`1301`-`1305`)** — including the four rounds of literal-address fixes that the vendored
+  tests found (2D VRAM, RTC, touch/PM/MIC; see
+  [../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md)).
+- **NitroSystem 0003/0004/0005 (`NitroSystem/0302`).**
+- **Sound and game fixes from Phase 2 (`1501`-`1508`).**
 
-The memory map (`0005`) is now done as `1301` and `1302`. The NitroSystem equivalents of Platinum 0003, 0004 and 0005 are still not done. The phase-1 record lists all 14 SDK source files that still fail to parse as port-replaced: they are excluded from the HGSS source list and not patched ([SDK-Differences](SDK-Differences.md)).
+### Pitfalls found by running the stack, not just applying it
+
+- A patch can be correct and still be the wrong *layer*: the vendored tests only caught the
+  literal-address reads (1303/1304/1305) once they actually executed the code.
+- Two decomp build tools (`tools/arm7-alarm-partition`, `tools/alarm-partition`) pin header SHA-256s
+  and stop the DS build with "physical input drift" / "production closure drift" when a patched
+  header changed. `1601` re-pins them; a future patch touching a pinned header needs the same.
+- Exporting a patch without `--relative=lib/NitroSDK` produces doubled paths under `git am`. See
+  [Daily-Workflow](Daily-Workflow.md#authoring-a-patch).
 
 ## Adding or changing a patch
 
