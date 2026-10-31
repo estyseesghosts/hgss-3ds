@@ -37,3 +37,4 @@ __pycache__/
 *.pyc
 .venv/
 tools/.*.sh
+tools/.*.py
