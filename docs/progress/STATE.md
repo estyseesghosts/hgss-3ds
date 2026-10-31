@@ -4,15 +4,14 @@ Last verified: **2026-10-31**, inside the dev container (`/workspaces/pokeheartg
 commit `0abf623`. Everything below that says "verified" was run on that tree on that date. If you change the
 patch stack, rerun the commands and update this page; do not trust it blindly.
 
-**One line:** Phase 0 is done (with open items); Phase 1 is in progress and the next unfinished exit
-criterion is the vendored port's unit tests. No game code is compiled yet. `make test` is green.
+**One line:** Phase 0 is done (with open items); Phase 1 is in progress: 46/46 port sources compile and `libnitro.a` builds cleanly on `host32`; the next unfinished exit criterion is the vendored port's unit tests. No game code is compiled yet. `make test` is green.
 
 ## Phases
 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **In progress** | 15 patches apply from scratch; SDK survey 270/284; layout probe 0/804 differences; 11 host suites green; DS gate last passed with 10 of the patches. Port unit tests are not built yet. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **In progress** | 16 patches apply from scratch; SDK survey 270/284 (gcc 13), 269/284 (gcc 10); port survey 46/46; `libnitro.a` builds on `host32` (0 errors); layout probe 0/804 differences; 11 host suites green; `docs/sdk-diff.md` complete; DS gate last passed with 10 of the patches. Port unit tests are not wired yet. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Not started** | No game object has been compiled or linked. |
 | 3 Data pipeline | **Not started** | No `builder/`. |
 | 4-11 | **Not started** | See [../wiki/Architecture.md](../wiki/Architecture.md). |
@@ -24,14 +23,14 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (15 patches applied)` |
-| Host tests | `make test` | **exit 0**; 19 Python tests; 11 SDK suites; last suite `sdk small: all ok` |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (16 patches applied)` |
+| Host tests | `make test` | **exit 0**; 19 Python tests; 11 SDK suites (`gcc_fixes` 11 groups); last suite `sdk small: all ok` |
 | SDK parses (gcc 13, default) | `make sdk-survey` | **270/284** parse, 14 fail (all port-replaced) |
 | SDK parses (gcc 10, the port's compiler) | `python3 tools/sdk_compile_survey.py --m32 --gcc gcc-10` | **269/284**; the extra failure is `ctrdg/CTRDG_common.c` |
-| Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | **29/46** compile; 17 fail for 15 distinct causes ([../port-wiring.md](../port-wiring.md)) |
-| Vendored port compiles (host32) | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/state lib -k -j8` | **fails**: 44 `error:` lines in 9 objects (below) |
+| Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | **46/46** compile (**exit 0**) |
+| Vendored port compiles (host32) | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/p1 lib -k -j8` | **exit 0**: 0 errors, builds `/work/out/p1/libnitro.a` |
 | Save layout | `make layout` | 0 differences in 804 values; needs `/work/pokeheartgold` built once. Not rerun today (no rebuild); last run in Phase 1. |
-| DS-side gate | see [wiki/Daily-Workflow.md](../wiki/Daily-Workflow.md#the-ds-side-gate) | **not rerun** with the 5 newest patches. Last pass: 10 patches, HG SHA1 `4fcded0e…`, 18m43s. |
+| DS-side gate | see [wiki/Daily-Workflow.md](../wiki/Daily-Workflow.md#the-ds-side-gate) | **not rerun** with the 6 newest patches. Last pass: 10 patches, HG SHA1 `4fcded0e…`, 18m43s. |
 
 ### The 11 host suites that pass
 
@@ -114,9 +113,16 @@ that is expected: it is a volume (`hgss-build`) inside the container.
 
 The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Reference.md).
 
-## Log
+### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-10-31 (session 3, Wave 1) — Compat headers, patch 1202, sdk-diff complete, 46/46 port compile & libnitro.a green
+
+- Wrote 20 compat headers in `hgss/compat/include/` (`card_common.h`, `nitro/spi/common/type.h`, `nitro/rtc/common/{fifo,type}.h`, `nitro/snd/common/{command,main}.h`, `nitro/dgt/dgt.h`, `nitro/ioreg.h`, `nitro/cp/{divider,sqrt}.h`, `nitro/mi/{stream,uncompress,dma}.h`, `nitro/hw/ARM9/{mmap_global,mmap}.h`, `nitro/os/common/{interrupt,interrupt_shared}.h`, `nitro/gx/g3x.h`, `nitro/ctrdg.h`, `nitro/spi/userInfo.h`) and `hgss/compat/README.md`. Updated `tools/port_compile_survey.py` include order to match `tools/hgss_nitro.py`. [agent-notes/p1-compat.md](agent-notes/p1-compat.md)
+- Added patch **1202** (`patches/pokeheartgold/1202-gcc-match-SDK-header-signatures-to-the-port-sources.patch`): `SDK_PORT_3DS`-guarded signature and layout-neutral field aliases for `MIi_Cpu*`, `PXI_*` (`PXIFifoEmtpyCallback`), `DC_StoreRange`, `NVRAMConfigOwnerInfo`/`Option` (`favoriteColor`/`favouriteColour`), `DGT_Hash*` + `DGTHash2Context` union, `CARDiCommandArg` (`dest`/`dst`), and `mi_dma_gxcommand.c` local enum guard. Extended `tests/sdk/gcc_fixes` to 11 groups. [agent-notes/p1-1202.md](agent-notes/p1-1202.md)
+- Completed `docs/sdk-diff.md` and `docs/wiki/SDK-Differences.md`: verified RTC, TP, PM, and MIC PXI command numbers, framing bits, multi-word sequences, reply words, and shared buffers, plus `OSSystemWork`, `OSContext`, `OSThread`, IRQ table layouts, ARM7 sound mapping, and NitroSystem patch counterparts. [agent-notes/p1-sdk-diff.md](agent-notes/p1-sdk-diff.md)
+- Verified in container: `python3 tools/bootstrap.py --clean` (16 patches), `make test` (exit 0), `python3 tools/port_compile_survey.py` (**46/46**, exit 0), `python3 tools/hgss_nitro.py make --target host32 --out /work/out/p1 lib -k -j8` (**exit 0**, builds `/work/out/p1/libnitro.a`).
 
 ### 2026-10-31 (later session) — W3 landed; 1302; host suites back on the port arrays; docs
 

@@ -1,6 +1,6 @@
 # SDK differences
 
-This page explains how HGSS's copy of Nintendo's system library (NitroSDK, and the NitroSystem libraries on top of it) differs from the copy the Platinum port was written for. It summarizes [docs/sdk-diff.md](../sdk-diff.md) and [docs/port-wiring.md](../port-wiring.md). Where those two files give a status, this page gives the same status. Where they say something is not yet compared, this page says so too.
+This page explains how HGSS's copy of Nintendo's system library (NitroSDK, and the NitroSystem libraries on top of it) differs from the copy the Platinum port was written for. It summarizes [docs/sdk-diff.md](../sdk-diff.md) and [docs/port-wiring.md](../port-wiring.md). Where those two files give a status, this page gives the same status. Both now report the comparison as complete; nothing below is marked "not yet compared".
 
 Related pages: [Architecture](Architecture.md), [Patch-Stack](Patch-Stack.md), [Glossary](Glossary.md).
 
@@ -49,15 +49,16 @@ Some asm does not translate directly, and the port replaces the behaviour instea
 PXI is the message channel between the ARM9 (the game) and the ARM7 (the services) ([3ds_port/nitro/src/pxi.c](../../3ds_port/nitro/src/pxi.c) header).
 
 - **Tags match.** The 17 PXI tags, from `EX` to `CTRDG_Ex`, have the same names and values in both SDKs. HGSS does not define `PXI_FIFO_TAG_CTRDG_PHI` (value 17); the port's `pxi.c` uses it, so patch 1201 adds it under `SDK_PORT_3DS` only (the DS enum is unchanged, `PXI_MAX_FIFO_TAG` stays 32) ([docs/sdk-diff.md](../sdk-diff.md), section 3).
-- **Commands do not match.** The port's virtual ARM7 decodes commands by name, such as `RTC_PXI_COMMAND_*`, `SPI_PXI_COMMAND_PM_*` and `PM_UTIL_*`. HGSS's ARM9 code uses literal numbers instead. The power commands are `0x60`, `0x62` and `0x70` to `0x74` in `pm.c`, and the touch code sends raw words such as `0x3000000` ([docs/port-wiring.md](../port-wiring.md), "PXI protocols differ").
-- **Consequence.** A header that only defines the Platinum names would compile, and then the port would answer requests wrongly. The fix is HGSS-specific decoders, in new files. That is not done.
-- **Payloads not yet compared.** The record marks the per-command payload formats for card, RTC, touch, power, sound and mic as not yet compared ([docs/sdk-diff.md](../sdk-diff.md), section 3, marked not done).
+- **Commands match by number, not by name.** The port's virtual ARM7 decodes commands by name, such as `RTC_PXI_COMMAND_*`, `SPI_PXI_COMMAND_PM_*` and `PM_UTIL_*`. HGSS's ARM9 code uses literal numbers instead. Every number was checked and matches: RTC `0x10/0x11/0x12/0x27`, touch `0/1/2/0x10`, power `0x60-0x67` and `0x70-0x74`, mic `0x40/0x41/0x42/0x51`, utility LED 1/2/3, backlights 4-9, power-off 14. The shared framing bits match too (`START 0x02000000`, `END 0x01000000`, command in bits 8-14, result in bits 0-7). So a compat header defining the Platinum names with HGSS's numbers is correct at the command layer ([docs/sdk-diff.md](../sdk-diff.md), sections 3.1-3.5).
+- **Consequence.** The names alone are not enough: the port's RTC/touch/power decoders must follow HGSS's multi-word request sequences and reply parsing word for word. That means HGSS-specific decoders in new files (not done). The mic has no decoder in the port at all; it is deferred to Phase 7 (`port_mic.c`).
+- **Payloads compared.** The per-command request words, reply words (`(cmd << 8) | status`, auto-sampling notifications without the END bit), and the shared buffers (RTC date/time at `0x027FFDE8`, touch point at `0x027FFFAA`, mic address/data at `0x027FFF90/94`) are all verified with file and line citations ([docs/sdk-diff.md](../sdk-diff.md), section 3).
 
 ## Shared memory structures
 
-- **`OSSystemWork`.** HGSS's field list has 40 entries and Platinum's has 41. The only difference is naming. HGSS has `u8 padding3[2]` where Platinum has two `u8` fields, `ctrdg_SetModuleInfoFlag` and `ctrdg_IsExisting`, which belong to the GBA slot. Both cover the same 2 bytes. The record says the offsets are not yet confirmed ([docs/sdk-diff.md](../sdk-diff.md), section 4). The layout probe covers the save-chunk types only, as `tools/layout_probe/roots.py` shows, so the repo does not yet check these offsets.
+- **`OSSystemWork`.** HGSS's field list has 40 entries and Platinum's has 41. The only difference is naming. HGSS has `u8 padding3[2]` where Platinum has two `u8` fields, `ctrdg_SetModuleInfoFlag` and `ctrdg_IsExisting`, which belong to the GBA slot. Both cover the same 2 bytes. The offsets are now verified by running summation over the HGSS header: `real_time_clock` at `0x1E8`, `mic_last_address` at `0x390`, `mic_sampling_data` at `0x394`, `touch_panel` at `0x3AA`, `command_area` at `0x3FE`, `0x400` bytes total ([docs/sdk-diff.md](../sdk-diff.md), section 4).
 - **Sound shared work.** `SNDSharedWork` is 0x280 bytes in HGSS, and its members match Platinum's `work.h`. Both have a 0x14-byte padding block at offset 0xC, with no named members ([docs/sdk-diff.md](../sdk-diff.md), section 5).
-- **ARM7 sound driver.** HGSS has no ARM7 sound source in `lib/NitroSDK`. Its driver is in `sub/lib/src`. Platinum's virtual ARM7 sound patches (0018 to 0023) were written against the Platinum driver, so they have to be rewritten against `sub/`, not rebased ([docs/sdk-diff.md](../sdk-diff.md), section 5).
+- **ARM7 sound driver.** HGSS has no ARM7 sound source in `lib/NitroSDK`. Its driver is in `sub/lib/src`. Platinum's virtual ARM7 sound patches (0018 to 0023) were written against the Platinum driver, so they have to be rewritten against `sub/`, not rebased. The entry-point mapping is verified: the port's seven `N7_SND_*` names correspond one-to-one to `SND_Init`, `SND_CommandProc`, `SND_UpdateExChannel`, `SND_SeqMain`, `SND_ExChannelMain`, `SND_UpdateSharedWork` and `SND_CalcRandom` in `sub/lib/src` ([docs/sdk-diff.md](../sdk-diff.md), section 5).
+- **Threads and interrupts.** `OSContext` (68 bytes to `SP_SVC`, 72 to `CPContext`, 100 total), `OSThread` (INFINITY field order), `OSThreadInfo` (16 bytes) and `OSIrqCallbackInfo` (DMA0-3 = 0-3, TIMER0-3 = 4-7, table max 22) are identical on both sides ([docs/sdk-diff.md](../sdk-diff.md), section 9.1).
 
 ## Graphics commands
 
@@ -66,7 +67,7 @@ The G3 command table has 77 opcodes, and every value matches between the two SDK
 ## The save backup API and the IR card calls
 
 - **A new backup type.** HGSS adds `CARD_BACKUP_TYPE_FLASH_4MBITS_EX`, defined as the 4 Mbit flash type with vendor 255 (`lib/include/nitro/card/common.h`, line 54). The game tries it first and falls back to `FLASH_4MBITS` (`src/save.c`, lines 1093 to 1096).
-- **Open question.** The record says that for a 4 Mbit chip both types give the same parameters in HGSS's identify code. Whether the port's card service runs that code, or answers identification itself, is not yet checked ([docs/sdk-diff.md](../sdk-diff.md), section 7).
+- **Resolved.** HGSS's identify core fills identical parameters for both 4 Mbit types (the vendor bits only matter for 8 Mbit chips), but the decision lives in the PXI reply: `CARD_IdentifyBackup` sends `CARD_REQ_IDENTIFY` and succeeds only on a success reply. The port answers that request itself and accepts only the plain 4 Mbit type (`port_card.c`, lines 260-267). So the `_EX` probe fails and the game falls back to the plain type, which succeeds with identical parameters. No change needed ([docs/sdk-diff.md](../sdk-diff.md), section 7).
 - **The IR card calls.** `CARD_SpiWait*` exists only in HGSS. It is the bus used by the Pokéwalker infrared code and by a presence probe in the field code. Patch `0701` stubs it for now, so it reports no peer ([docs/sdk-diff.md](../sdk-diff.md), section 8).
 
 ## Compiler-level fixes
@@ -120,11 +121,13 @@ Separately from the SDK survey, the record checks the port's own sources, which 
 - **The source list is not fixed.** About 30 Platinum SDK sources have no HGSS counterpart. About 60 map only in part, because HGSS's SDK contains only what HGSS uses ([docs/port-wiring.md](../port-wiring.md), "Source list").
 - **The suggested design now exists:** `tools/hgss_nitro.py` builds the out-of-tree shim under `build/` and passes command-line overrides (`SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=`), leaving the vendored Makefiles unchanged.
 
-## What is not compared yet
+## What the comparison settled, and what work it leaves
 
-The sdk-diff record marks these as not compared. Nothing on this page should be read as settled for them:
+The sdk-diff record is now complete. What it settled:
 
-- `OSThread` and `OSContext` layouts, the IRQ table, and the interrupt handler assembly (section 9).
-- The payload formats of the RTC, touch, power and mic PXI requests (section 3).
-- NitroSystem differences that matter to Platinum's five NitroSystem patches (section 9). Of those, only the CLZ patch exists in the HGSS stack.
-- The `OSSystemWork` offsets (section 4).
+- `OSThread` and `OSContext` layouts, the IRQ table, and the interrupt handler offsets (section 9.1). The handler C replacements (patches 0401/0501/0901) apply to confirmed-identical offsets.
+- The payload formats of the RTC, touch, power and mic PXI requests (sections 3.2-3.5).
+- NitroSystem differences for Platinum's five NitroSystem patches (section 9.2): the GCC-build fixes are covered where they apply (NNS 0301 for CLZ, pokeheartgold 1101 for the return type); the sound-capture division has no HGSS counterpart; the GXFIFO-forwarding, queued-3D-transfer and OAM-disable-bit equivalents are located but not yet written.
+- The `OSSystemWork` offsets (section 4) and the ARM7 sound entry-point mapping (section 5).
+
+What is still work, not comparison: writing the compat headers, the HGSS PXI decoders, the three owed NitroSystem equivalents, and the ARM7-sound rewrite. Those are tracked in [docs/progress/STATE.md](../progress/STATE.md) under "Next actions".
