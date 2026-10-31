@@ -3,7 +3,7 @@
 **Status: PARTIAL (Phase 1 in progress).** Sections marked ✅ were checked
 against source (file cited). Sections marked ⏳ are not done; do not rely on
 them. Struct comparisons so far are by field list; the offset/size comparison
-is the job of the layout probe (`tools/layout_probe/`, not yet written).
+is the job of the layout probe (`tools/layout_probe/`, written; it covers the save-chunk types, not `OSSystemWork`).
 
 Compared trees:
 

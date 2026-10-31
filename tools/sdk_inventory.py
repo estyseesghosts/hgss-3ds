@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inventory and diff the HGSS in-tree SDK against the Platinum SDK sources.
 
-Usage: sdk_inventory.py HGSS_DECOMP_DIR PLATINUM_NITROSDK_DIR [--sys NITROSYSTEM_DIR]
+Usage: sdk_inventory.py HGSS_DECOMP_DIR PLATINUM_NITROSDK_DIR
 
 Files are matched by normalized basename (lower case, only [a-z0-9]), because
 the two trees name and place files differently (HGSS: lib/NitroSDK/src/os/

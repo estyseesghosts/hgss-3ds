@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Syntax-check the vendored 3ds_port/nitro/src sources against the patched HGSS SDK headers.
 
-Usage: port_compile_survey.py [--root build/upstream] [--shim build/hgss-shim] [--no-pak]
+Usage: port_compile_survey.py [--root build/upstream] [--shim build/hgss-shim]
 
 Measures how far the vendored port layer (written for pokeplatinum's ntrtwl SDK) is from compiling against
 HGSS's SDK, without editing it. Headers: a shim include dir that exposes ONLY nitro*, nnsys*, cw* from the

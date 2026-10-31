@@ -56,7 +56,7 @@ copy "$SPEC/ARM7-TS.lcf.template" sub/ARM7-TS.lcf.template
 copy "$SPEC/ARM9-TS.lcf.template" ARM9-TS.lcf.template
 copy "$SPEC/mwldarm.response.template" mwldarm.response.template
 
-# The SDK 4.2-jp templates carry Shift-JIS (cp932) comments in their revision
+# (Only needed for the SDK 4.2-jp templates, which are not the canonical SDK; 3.2 is ASCII.) They carry Shift-JIS (cp932) comments in their revision
 # history; the decomp's scripts (tools/nitro-section-renames/*.py) read the
 # generated .lcf as UTF-8 and crash on them. Transcode the installed copies
 # only; /private is never modified and no non-comment content changes.

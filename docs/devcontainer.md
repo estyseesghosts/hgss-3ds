@@ -59,7 +59,8 @@ proprietary files**. Then:
 
 ```
 tools/install-ds-toolchain.sh /work/pokeheartgold
-cd /work/pokeheartgold && make -j$(nproc) && make GAME_VERSION=SOULSILVER -j$(nproc)
+tools/matching-build.sh /work/pokeheartgold HEARTGOLD    # plain `make` does not match here: it keeps five
+tools/matching-build.sh /work/pokeheartgold SOULSILVER   # sections the linker strips (docs/progress/phase-0.md)
 ```
 
 ## Deploying to a 3DS

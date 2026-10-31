@@ -17,9 +17,14 @@ Builds the **pinned, unpatched** decomp with MWCC and checks both SHA1s
 - It triggers on changes to `upstream.lock`, the installer script, or the
   workflow itself, and manually (`workflow_dispatch`).
 
-Steps: clone `upstream.lock` -> `tools/install-ds-toolchain.sh` -> `make` ->
-`sha1sum -c` for HeartGold -> `make GAME_VERSION=SOULSILVER` -> `sha1sum -c`.
+Steps: clone `upstream.lock` -> `tools/install-ds-toolchain.sh` ->
+`tools/matching-build.sh <dir> HEARTGOLD` (plain `make` does not match in the container: the script
+keeps five sections the linker strips, see `docs/progress/phase-0.md`) -> `sha1sum -c` ->
+the same for `SOULSILVER`.
 
 ## `port.yml` (Phase 1)
 
-Public, GitHub-hosted, synthetic data only. See the file when present.
+Public, GitHub-hosted, synthetic data only. `.github/workflows/port.yml` builds the dev container image,
+then runs `python3 tools/bootstrap.py && make test` (tool tests + the `tests/sdk` host suites). It has not run on
+GitHub yet (no remote); a local dry run of the same steps in a fresh clone passes. The layout probe needs MWCC
+and is not part of it.

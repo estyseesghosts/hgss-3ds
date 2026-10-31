@@ -9,7 +9,7 @@ every commit. If a `.nds`, `.sav`, `.narc`, `.exe`, `.dll` or a game image shows
 up, stop.
 
 Builds that contain game code (`.3dsx`, `.cia`, PC binaries linked with game
-code) stay local. CI uploads only what `tools/check_ci_artifacts.py` allows.
+code) stay local. CI workflows have no artifact-upload steps at all.
 No Docker image layer may contain proprietary files; they enter only through
 the read-only `/private` mount.
 

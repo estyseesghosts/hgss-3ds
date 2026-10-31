@@ -6,7 +6,8 @@
 #   make sdk-survey  syntax-check lib/NitroSDK and lib/NitroSystem with GCC under SDK_PORT_3DS (progress count)
 #   make port-tests  the vendored 3ds_port unit tests against the HGSS SDK. NOT IMPLEMENTED: always fails until
 #                    the wiring in docs/port-wiring.md exists. Deliberately not part of `make test`.
-#   make layout      MWCC-vs-GCC save-layout probe (needs MWCC + the decomp's generated headers; local only)
+#   make layout      MWCC-vs-GCC save-layout probe: compares GCC against the committed MWCC numbers; needs the
+#                    decomp's generated .naix headers (run the decomp's make once), MWCC only with --update-mwcc
 #   make clean
 # ---------------------------------------------------------------------------
 
