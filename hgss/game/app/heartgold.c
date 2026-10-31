@@ -13,6 +13,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_fs.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern const NitroPortOverlay gHeartgoldOverlays[];   /* gen/overlay_table.c */
@@ -72,6 +73,117 @@ const char *Heartgold_OpenPak(const char *pakPath, const char *manifestPath)
     default:
         return "couldn't open the data pack";
     }
+}
+
+int Heartgold_CheckOverlays(void)
+{
+    static const u8 sDataFill[2] = { 0xA5, 0x3C };
+    static const u8 sBssFill[2] = { 0x5A, 0xC3 };
+    int failures = 0;
+    int withInit = 0;
+    u32 id;
+    NitroPortOverlay *quiet;
+
+    NitroPort_SetOverlays(gHeartgoldOverlays, gHeartgoldOverlayCount);
+    FS_Init(FS_DMA_NOT_USE);
+
+    /* Every overlay's static initializers are handed to the SDK by
+     * NitroPort_OverlayInfo. Count them (some games use one per application
+     * overlay) and verify FS_LoadOverlayInfo sees the same table. */
+    for (id = 0; id < gHeartgoldOverlayCount; id++) {
+        const NitroPortOverlay *o = &gHeartgoldOverlays[id];
+        void (**f)(void);
+        FSOverlayInfo info;
+        BOOL any = FALSE;
+
+        for (f = o->sinitStart; f < o->sinitEnd; f++) {
+            any = any || *f != NULL;
+        }
+        withInit += any;
+        if (!FS_LoadOverlayInfo(&info, MI_PROCESSOR_ARM9, id)
+            || (any && (info.header.sinit_init != o->sinitStart
+                        || info.header.sinit_init_end != o->sinitEnd))) {
+            NitroPort_Log("[check] overlay %lu (%s): static initializers not passed on",
+                          (unsigned long)id, o->name);
+            failures++;
+        }
+    }
+
+    /* The load checks run without the initializers: they expect the game to
+     * be running (an application overlay's may reach into game state). */
+    quiet = malloc(gHeartgoldOverlayCount * sizeof(*quiet));
+    if (quiet == NULL) {
+        NitroPort_Log("[check] out of memory");
+        return 1;
+    }
+    memcpy(quiet, gHeartgoldOverlays, gHeartgoldOverlayCount * sizeof(*quiet));
+    for (id = 0; id < gHeartgoldOverlayCount; id++) {
+        quiet[id].sinitStart = quiet[id].sinitEnd = NULL;
+    }
+    NitroPort_SetOverlays(quiet, gHeartgoldOverlayCount);
+
+    for (id = 0; id < gHeartgoldOverlayCount; id++) {
+        const NitroPortOverlay *o = &gHeartgoldOverlays[id];
+        u32 dataSize = (u32)(o->dataEnd - o->dataStart);
+        u32 bssSize = (u32)(o->bssEnd - o->bssStart);
+        u8 *initial = malloc(dataSize ? dataSize : 1);
+        BOOL ok = TRUE;
+        int pass;
+
+        if (initial == NULL) {
+            NitroPort_Log("[check] out of memory for overlay %s", o->name);
+            failures++;
+            continue;
+        }
+        if (dataSize != 0) {
+            memcpy(initial, o->dataStart, dataSize);
+        }
+
+        /* Load it twice, with different garbage in its memory each time:
+         * every load must restore .data and clear .bss. */
+        for (pass = 0; pass < 2; pass++) {
+            if (dataSize != 0) {
+                memset(o->dataStart, sDataFill[pass], dataSize);
+            }
+            if (bssSize != 0) {
+                memset(o->bssStart, sBssFill[pass], bssSize);
+            }
+            if (!FS_LoadOverlay(MI_PROCESSOR_ARM9, id)) {
+                NitroPort_Log("[check] overlay %lu (%s): didn't load (pass %d)",
+                              (unsigned long)id, o->name, pass + 1);
+                failures++;
+                ok = FALSE;
+                continue;
+            }
+            if (dataSize != 0 && memcmp(o->dataStart, initial, dataSize) != 0) {
+                ok = FALSE;
+            }
+            for (u32 i = 0; i < bssSize; i++) {
+                if (o->bssStart[i] != 0) {
+                    ok = FALSE;
+                    break;
+                }
+            }
+            if (!NitroPort_IsOverlayLoaded(id)) {
+                ok = FALSE;
+            }
+            if (!FS_UnloadOverlay(MI_PROCESSOR_ARM9, id)
+                || NitroPort_IsOverlayLoaded(id)) {
+                ok = FALSE;
+            }
+        }
+        if (!ok) {
+            NitroPort_Log("[check] overlay %lu (%s): data not reset on loading",
+                          (unsigned long)id, o->name);
+            failures++;
+        }
+        free(initial);
+    }
+    free(quiet);
+
+    NitroPort_Log("[check] %lu overlays (%d with static initializers), %d failed",
+                  (unsigned long)gHeartgoldOverlayCount, withInit, failures);
+    return failures;
 }
 
 void Heartgold_Run(const HeartgoldSettings *settings)

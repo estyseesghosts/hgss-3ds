@@ -4,11 +4,16 @@
  *
  *   pokeheartgold-pc [heartgold3ds.pak] [manifest.json] [--save FILE]
  *                   [--frames N]
+ *   pokeheartgold-pc --check-overlays
  *
  * Runs the same game code as the future 3DS program, with the same data
  * pack. The save is a raw 512 KB file, as emulators keep them: --save FILE,
  * or heartgold.sav (made if missing). Everything the port logs goes to
  * stderr. With --frames N the runner stops after N frames.
+ *
+ * --check-overlays loads every overlay twice through the SDK and verifies
+ * that each load restores its initial data and clears its bss; it needs no
+ * data pack. Exit status is 0 only if every overlay passes.
  *
  * This is deliberately smaller than 3ds_port/game/app/main_pc.c (the
  * Platinum runner): it exists to give the link a main and the port its
@@ -68,6 +73,10 @@ int main(int argc, char **argv)
     const char *manifest = NULL;
     const char *save = NULL;
     int i;
+
+    if (argc == 2 && strcmp(argv[1], "--check-overlays") == 0) {
+        return Heartgold_CheckOverlays() == 0 ? 0 : 1;
+    }
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--save") == 0 && i + 1 < argc) {

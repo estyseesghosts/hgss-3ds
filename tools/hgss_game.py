@@ -8,8 +8,9 @@ Usage (inside the dev container, after tools/bootstrap.py):
 
 This is the Phase 2 harness: it compiles the game as the port compiles the
 SDK, builds the port's libnitro/libnitrosystem, generates the overlay table
-and the Wi-Fi stand-ins, and links pokeheartgold-pc (host32) or attempts a
-static link of the 3DS objects (there is no 3DS shell yet).
+and the Wi-Fi stand-ins, and links pokeheartgold-pc (host32) or
+pokeheartgold-3ds.elf (3ds, through the libctru/citro3d shell in
+hgss/game/app/main_3ds.c).
 
 The source lists come from tools/game_sources.py (game src/ C/C++ and the
 ARM9 .s data), the overlay ids and table from tools/game_overlays.py, the
@@ -22,9 +23,9 @@ Not every source compiles under GCC yet; --keep-going compiles what it can,
 prints the error count per file, then links the objects that were produced
 and prints the unresolved symbols. That list is the work queue for the next
 slice. The link targets are deliberately named -pc/-3ds.elf, not .3dsx:
-packaging needs the port's 3DS shell (main_3ds.c), which this slice does not
-add. Exit status is 0 only when every object compiled and the link succeeded;
-1 means the run reached the link but there were errors (the useful case).
+packaging (3dsxtool, the SMDH) is Phase 5. Exit status is 0 only when every
+object compiled and the link succeeded; 1 means the run reached the link but
+there were errors (the useful case).
 """
 
 from __future__ import annotations
@@ -84,6 +85,11 @@ ERROR_RE = re.compile(r"(?:^|:\s)(?:fatal )?error:")
 
 
 # --------------------------------------------------------------- target setup
+
+def devkitpro() -> Path:
+    """devkitPro's root (DEVKITPRO, with the container default)."""
+    return Path(os.environ.get("DEVKITPRO", "/opt/devkitpro"))
+
 
 def devkitarm_bin() -> Path:
     """devkitARM's bin/ directory (DEVKITARM, with the container default)."""
@@ -173,6 +179,18 @@ def select_sources(data: dict) -> dict[str, list[str]]:
                 c.append(rel)
     return {"c": sorted(set(c)), "cpp": sorted(set(cpp)),
             "asm": sorted(set(data["asm_sources"]))}
+
+
+def app_sources(target: str) -> list[Path]:
+    """The program's own objects: the shared start and stubs, plus the
+    target's main (main_pc.c on host32, main_3ds.c on 3ds)."""
+    if target not in ("host32", "3ds"):
+        raise ValueError(f"unknown target {target!r}")
+    main = "main_pc.c" if target == "host32" else "main_3ds.c"
+    return [REPO / "hgss" / "game" / "app" / main,
+            REPO / "hgss" / "game" / "app" / "heartgold.c",
+            REPO / "hgss" / "game" / "stubs" / "wm_stubs.c",
+            REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c"]
 
 
 def object_path(out: Path, rel: str) -> Path:
@@ -293,9 +311,14 @@ def link_command(cc: str, target: str, app_objects: list[Path],
         flags = [*HOST_FLAGS, "-no-pie", "-pthread"]
         extra = ["-lm", "-pthread"]
     else:
-        flags = [*ARM_FLAGS, "-nostartfiles",
+        # devkitARM's crt0 (3dsx.specs) provides _start and calls main; the
+        # program is a normal libctru/citro3d one.
+        pro = devkitpro()
+        flags = [*ARM_FLAGS, "-specs=3dsx.specs",
+                 f"-L{pro / 'libctru' / 'lib'}",
+                 f"-L{pro / 'portlibs' / '3ds' / 'lib'}",
                  "-Wl,--undefined=Heartgold_Run", "-Wl,--undefined=NitroMain"]
-        extra = ["-lm"]
+        extra = ["-lcitro3d", "-lctru", "-lm"]
     cmd = [cc, *flags, "-Wl,--gc-sections",
            "-Wl,--wrap=ErrorHandling_AssertFail", f"@{rsp_path}",
            str(overlay_table), "-Wl,--start-group"]
@@ -582,17 +605,18 @@ def main(argv: list[str] | None = None) -> int:
     if proc.returncode != 0:
         print(proc.stderr.rstrip(), file=sys.stderr)
 
-    app_sources = [REPO / "hgss" / "game" / "app" / "heartgold.c",
-                   REPO / "hgss" / "game" / "stubs" / "wm_stubs.c",
-                   REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c"]
-    if args.target == "host32":
-        app_sources.insert(0, REPO / "hgss" / "game" / "app" / "main_pc.c")
-    app_jobs = [(src, out / "app" / (src.stem + ".o"), "c") for src in app_sources]
+    app_jobs = [(src, out / "app" / (src.stem + ".o"), "c")
+                for src in app_sources(args.target)]
     if wifi_c.is_file():
         app_jobs.append((wifi_c, out / "gen" / "wifi_stubs.o", "c"))
     print(f"== compiling the app ({len(app_jobs)} files)", flush=True)
+    app_cflags = list(cflags)
+    if args.target == "3ds":
+        # main_3ds.c is the only file here that includes libctru's headers;
+        # the game and the port keep NitroSDK's.
+        app_cflags.append(f"-I{devkitpro() / 'libctru' / 'include'}")
     app_objects, app_failed = compile_objects(
-        tools["cc"], cflags, app_jobs, args.jobs, log_dir, args.keep_going)
+        tools["cc"], app_cflags, app_jobs, args.jobs, log_dir, args.keep_going)
     for src, errors, log in app_failed:
         print(f"     {errors:4d}  {src}  ({log})")
 

@@ -56,4 +56,11 @@ const char *Heartgold_OpenPak(const char *pakPath, const char *manifestPath);
  * returns). The data pack must be open. */
 void Heartgold_Run(const HeartgoldSettings *settings) __attribute__((noreturn));
 
+/* A self-check of the overlay table (no data pack needed): register the
+ * table, then load every overlay twice through the SDK's FS_LoadOverlay,
+ * corrupting its .data and .bss between loads, and verify that each load
+ * restores the initial .data and clears .bss. Returns the number of
+ * failures; the summary and the failing overlays go to NitroPort_Log. */
+int Heartgold_CheckOverlays(void);
+
 #endif

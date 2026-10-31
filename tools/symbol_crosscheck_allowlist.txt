@@ -1,0 +1,53 @@
+# Symbols the DS reference defines that the PC program is allowed not to.
+#
+# Format:  PATTERN  # reason
+#
+# PATTERN is matched with fnmatch (`*` and `?`), against the symbol name in
+# the DS reference ELF. The first matching row wins. Every row needs a
+# reason; a row without one is an error (tools/symbol_crosscheck.py).
+#
+# This is the replaced/stubbed table, not a place to hide a source file that
+# was left out of the build. Add a row only when the PC program deliberately
+# provides the behaviour another way (a stub, a port implementation, another
+# runtime), and say which.
+
+# Metrowerks' C runtime (MSL). The PC program links glibc/newlib instead:
+# the same standard functions exist under the same names where both agree,
+# but MSL's private formatter, locale, scanf and floating-point helpers do
+# not. lib/MSL_C's data objects are built for the conversion check and kept
+# out of the link (tools/hgss_game.py).
+__*                # MSL private runtime (formatter, locale, atexit, ...)
+printf_*           # MSL's printf conversion tables and formatter helpers
+_d?*               # MWCC software double-precision runtime
+_f?*               # MWCC software single-precision runtime; also MSL _fseek/_ftell
+_ll_*              # MWCC 64-bit integer runtime
+_ull_*             # MWCC unsigned 64-bit integer runtime
+_s32_div_f         # MWCC integer division helper
+_u32_div_*         # MWCC unsigned division helpers
+_u32_getDigitN     # MSL decimal helper
+_current_locale    # MSL locale state
+_loc_*             # MSL locale tables
+_version_*         # MSL/library version strings
+_start*            # devkitARM/libctru startup, not MWCC's crt0
+_secure            # syscall helpers replaced by libctru/newlib
+_ExitProcess       # MSL process exit (the program provides its own teardown)
+_strlwr            # MSL string helper
+
+# Nintendo Wi-Fi Connection, DWC and the voice-chat / SSL / multiboot
+# libraries. The port replaces these with hgss/game/stubs/wm_stubs.c and
+# dsprot_stubs.c; the real sources are compiled for the conversion check but
+# kept out of the link (tools/hgss_game.py LINK_EXCLUDED_PREFIXES), and the
+# game's own build excludes their directories in tools/hgss_nitro.py.
+WM_*               # wireless manager: stubbed (hgss/game/stubs/wm_stubs.c)
+WMi_*              # wireless manager internals: stubbed
+DWC_*              # Nintendo Wi-Fi Connection: stubbed
+DWCi_*             # DWC internals: stubbed
+VCT_*              # voice chat: stubbed
+VCTi_*             # voice chat internals: stubbed
+CPS_*              # SSL library: stubbed
+CPSi_*             # SSL internals: stubbed
+CTRDG_*            # GBA cartridge: no GBA slot, replaced by the port
+MB_*               # multiboot: no DS download play, replaced by the port
+MBi_*              # multiboot internals
+DSProt_*           # anti-piracy checks: dsprot_stubs.c answers "genuine cart"
+DSProtInternal_*   # anti-piracy check internals

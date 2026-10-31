@@ -143,6 +143,25 @@ class LinkSelectionTests(unittest.TestCase):
                                "lib/NitroSDK/src/os/os_thread.o"])
 
 
+class AppSourceTests(unittest.TestCase):
+    def test_host_program_uses_the_pc_main(self):
+        names = [p.name for p in hg.app_sources("host32")]
+        self.assertEqual(names[0], "main_pc.c")
+        self.assertNotIn("main_3ds.c", names)
+        self.assertIn("heartgold.c", names)
+
+    def test_3ds_program_uses_the_libctru_main(self):
+        sources = hg.app_sources("3ds")
+        names = [p.name for p in sources]
+        self.assertEqual(names[0], "main_3ds.c")
+        self.assertNotIn("main_pc.c", names)
+        self.assertIn("heartgold.c", names)
+
+    def test_unknown_target(self):
+        with self.assertRaises(ValueError):
+            hg.app_sources("arm7")
+
+
 class CommandTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -243,13 +262,44 @@ class LinkTests(unittest.TestCase):
         # The overlay table is an input after the response file, not in it.
         self.assertLess(cmd.index(f"@{rsp}"), cmd.index(str(self.out / "gen" / "overlay_table.o")))
 
-    def test_3ds_link_is_static_and_has_no_shell(self):
+    def test_3ds_link_uses_the_libctru_program(self):
         cmd, _ = self.make_link("3ds")
         self.assertIn("-march=armv6k", cmd)
         self.assertNotIn("-m32", cmd)
-        self.assertIn("-nostartfiles", cmd)
+        self.assertIn("-specs=3dsx.specs", cmd)
+        self.assertNotIn("-nostartfiles", cmd)
+        self.assertIn("-lcitro3d", cmd)
+        self.assertIn("-lctru", cmd)
         self.assertIn("-Wl,--undefined=Heartgold_Run", cmd)
         self.assertNotIn("-pthread", cmd)
+        self.assertTrue(any(arg.endswith("libctru/lib") for arg in cmd))
+
+
+class OverlayCheckTests(unittest.TestCase):
+    """The --check-overlays code path: the flag, the double load and the
+    summary. The binary itself cannot link until the game-symbol queue is
+    empty, so these check the wiring in the program's sources."""
+
+    APP = REPO / "hgss" / "game" / "app"
+
+    def test_pc_has_the_flag_before_the_runner(self):
+        text = (self.APP / "main_pc.c").read_text()
+        self.assertIn('"--check-overlays"', text)
+        self.assertIn("Heartgold_CheckOverlays()", text)
+        self.assertLess(text.index("--check-overlays"),
+                        text.index("Heartgold_Run(&settings)"))
+
+    def test_check_loads_each_overlay_twice_and_reports_the_table(self):
+        text = (self.APP / "heartgold.c").read_text()
+        self.assertIn("for (pass = 0; pass < 2; pass++)", text)
+        self.assertIn("FS_LoadOverlay(", text)
+        self.assertIn("FS_UnloadOverlay(", text)
+        self.assertIn("NitroPort_IsOverlayLoaded", text)
+        self.assertIn("overlays (%d with static initializers), %d failed", text)
+
+    def test_check_is_declared_for_the_program(self):
+        text = (self.APP / "heartgold.h").read_text()
+        self.assertIn("int Heartgold_CheckOverlays(void);", text)
 
 
 class OutputParsingTests(unittest.TestCase):
