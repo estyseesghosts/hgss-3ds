@@ -340,7 +340,22 @@ cannot pass by construction.
 - With `main_3ds.c` present, the 3DS static link no longer misses `main`/libctru symbols; the earlier
   1556-unresolved count was measured without the shell and without the 3DS port archive.
 
-## 10. Facts worth remembering
+## 10. Small follow-ups noticed but not done
+
+- `hgss/compat/src/arm7_sound_compat.c` contains an older, unused `sVolumeTable`; it is not compiled
+  into any target. Do not copy it back into `ds_sound_tables.c` (that file now has the real table).
+  Consider deleting the file if nothing references it.
+- `gx_load3d.c`'s **clear-image** loaders still use raw LCDC addresses; the tested texture and
+  texture-palette paths are mapped (1406). Fix if the game uses clear images.
+- The two duplicate globals the harness weakens (`FrontierScript_ReadByte`, `sListMenuTemplate`) are
+  still there; the overlay check can pass for the wrong reason until they get a real per-overlay/local
+  fix.
+- The MSL runtime, C++ runtime, MB stubs and `object_aliases.py` step are the remaining 34 symbols;
+  the decisions and the exact grouping are in [phase-2.md](phase-2.md).
+- The SDK compile survey was last run at 39 patches (270/284 gcc 13, 269/284 gcc 10); rerun it after
+  the `14xx`/`15xx` patches to keep the number current.
+
+## 11. Facts worth remembering
 
 - `test_arm7`'s pass count is 676; `test_nitrosystem` is 17,122; `make port-tests` is the only target
   that runs all three subprojects.
