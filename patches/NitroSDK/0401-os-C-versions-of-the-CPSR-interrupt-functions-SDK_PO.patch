@@ -1,0 +1,132 @@
+From cd15903f8b8496e60064ad19b2a82fa85008ff24 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 02:39:59 +0000
+Subject: [PATCH] os: C versions of the CPSR interrupt functions (SDK_PORT_3DS)
+
+lib/NitroSDK/src/os/os_system.c has seven MWCC `asm` functions that read and
+write the CPSR interrupt-disable bits: OS_EnableInterrupts,
+OS_DisableInterrupts, OS_RestoreInterrupts, OS_DisableInterrupts_IrqAndFiq,
+OS_RestoreInterrupts_IrqAndFiq, OS_GetCpsrIrq, OS_GetProcMode. GCC cannot
+parse them, and the host CPU's CPSR is not the emulated DS one.
+
+Under SDK_PORT_3DS they operate on the port's OSi_PortCpsr
+(3ds_port/nitro/include/nitro_port.h:40; saved and restored per thread in
+port_thread.c:175,205,227). Each returns the previous value of exactly the
+bits the asm returns: `and r0, r0, #HW_PSR_IRQ_DISABLE` (I bit),
+`#HW_PSR_IRQ_DISABLE | HW_PSR_FIQ_DISABLE` (I and F bits) or the mode mask.
+Restore replaces only the masked bits with `prev`, as the asm does with
+`bic`/`orr`. HGSS has no OS_EnableInterrupts_IrqAndFiq, so none is added.
+
+DS behavior reproduced: an interrupt that arrived while IRQs were masked
+fires the moment the CPU unmasks them. The port can only raise it at that
+point, so whenever the I bit goes from set to clear (Enable, Restore,
+Restore_IrqAndFiq) the functions call NitroPort_RaiseIrq(0) to take pending
+IRQs. This is the same rule as pokeplatinum-3ds NitroSDK patches 0006+0008,
+re-derived from the HGSS asm rather than copied; the function set and
+register effects match.
+
+OS_SpinWait is a DS cycle delay (`subs r0,r0,#4; bhs`); under SDK_PORT_3DS
+it returns immediately, as in Platinum 0006, since nothing on the port needs
+the delay. The ARM7 variant (`SVC_WaitByLoop`) is untouched.
+
+The DS build is unchanged: every original line stays under #else except
+`#ifdef SDK_ARM9` before OS_SpinWait, which becomes `#elif defined(SDK_ARM9)`
+behind the new `#ifdef SDK_PORT_3DS`; `gcc -E -P` output of the file without
+SDK_PORT_3DS is identical to the unpatched file for both SDK_ARM9 and
+SDK_ARM7 (checked).
+
+Test: tests/sdk/os_system/run.sh (29 checks on return values, bit
+preservation and the raise-on-unmask rule).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/os/os_system.c | 66 +++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/src/os/os_system.c b/src/os/os_system.c
+index 040f50b..c059344 100644
+--- a/src/os/os_system.c
++++ b/src/os/os_system.c
+@@ -1,5 +1,63 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++/*
++ * C versions for the port: the CPSR interrupt-disable bits live in OSi_PortCpsr (nitro_port.h),
++ * not in the host CPU. Each function returns the previous state of the same bits as the asm.
++ * On the DS an interrupt that arrived while IRQs were masked fires the moment the CPU unmasks
++ * them; the port can only raise it then, so a masked-to-unmasked change takes pending IRQs
++ * (NitroPort_RaiseIrq(0) runs them, lowest first).
++ */
++extern u32 OSi_PortCpsr;
++extern void NitroPort_RaiseIrq(u32 mask);
++
++static void PortTakePendingIrqs(u32 oldCpsr) {
++    if ((oldCpsr & HW_PSR_IRQ_DISABLE) && !(OSi_PortCpsr & HW_PSR_IRQ_DISABLE)) {
++        NitroPort_RaiseIrq(0);
++    }
++}
++
++OSIntrMode OS_EnableInterrupts(void) {
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old & ~HW_PSR_IRQ_DISABLE;
++    PortTakePendingIrqs(old);
++    return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
++}
++
++OSIntrMode OS_DisableInterrupts(void) {
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old | HW_PSR_IRQ_DISABLE;
++    return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
++}
++
++OSIntrMode OS_RestoreInterrupts(OSIntrMode prev) {
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = (old & ~HW_PSR_IRQ_DISABLE) | (u32)prev;
++    PortTakePendingIrqs(old);
++    return (OSIntrMode)(old & HW_PSR_IRQ_DISABLE);
++}
++
++OSIntrMode OS_DisableInterrupts_IrqAndFiq(void) {
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = old | (HW_PSR_IRQ_DISABLE | HW_PSR_FIQ_DISABLE);
++    return (OSIntrMode)(old & (HW_PSR_IRQ_DISABLE | HW_PSR_FIQ_DISABLE));
++}
++
++OSIntrMode OS_RestoreInterrupts_IrqAndFiq(OSIntrMode prev) {
++    u32 old = OSi_PortCpsr;
++    OSi_PortCpsr = (old & ~(HW_PSR_IRQ_DISABLE | HW_PSR_FIQ_DISABLE)) | (u32)prev;
++    PortTakePendingIrqs(old);
++    return (OSIntrMode)(old & (HW_PSR_IRQ_DISABLE | HW_PSR_FIQ_DISABLE));
++}
++
++OSIntrMode_Irq OS_GetCpsrIrq(void) {
++    return (OSIntrMode_Irq)(OSi_PortCpsr & HW_PSR_IRQ_DISABLE);
++}
++
++OSProcMode OS_GetProcMode(void) {
++    return (OSProcMode)(OSi_PortCpsr & HW_PSR_CPU_MODE_MASK);
++}
++#else
+ asm OSIntrMode OS_EnableInterrupts(void) {
+     mrs r0, cpsr
+     bic r1, r0, #HW_PSR_IRQ_DISABLE
+@@ -53,8 +111,14 @@ asm OSProcMode OS_GetProcMode(void) {
+     and r0, r0, #HW_PSR_CPU_MODE_MASK
+     bx lr
+ }
++#endif
+ 
+-#ifdef SDK_ARM9
++#ifdef SDK_PORT_3DS
++// A timing delay for DS hardware; nothing on the port needs it.
++void OS_SpinWait(u32 cycles) {
++    (void)cycles;
++}
++#elif defined(SDK_ARM9)
+ #include <nitro/code32.h>
+ asm void OS_SpinWait(register u32 cycles) {
+     @loop:
+-- 
+2.43.0
+
