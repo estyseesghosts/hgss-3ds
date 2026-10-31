@@ -551,6 +551,40 @@ def prepared_alias_map(obj: Path, alias_map: Path, out: Path,
     return target
 
 
+VERSION_SECTION = ".version"
+VERSION_SECTION_PORT = ".rodata.version"
+
+
+def object_section_names(readelf: str, obj: Path) -> list[str]:
+    """The section names of one ELF object (empty if readelf fails)."""
+    proc = run([readelf, "-SW", str(obj)])
+    names = []
+    for line in proc.stdout.splitlines():
+        match = re.match(r"\s*\[\s*\d+\]\s+(\S+)", line)
+        if match:
+            names.append(match.group(1))
+    return names
+
+
+def align_version_section(obj: Path, readelf: str, objcopy: str) -> str:
+    """Merge an input `.version` section into `.rodata` before the link.
+
+    asm/middleware.s holds the middleware version strings in `.version`
+    (0xdd bytes in HG). The linker's default script places that orphan last
+    in the read-only LOAD segment, whose memory size must be 4-aligned for
+    3dsxtool. Renaming the input section to `.rodata.version` makes the
+    script's `*(.rodata.*)` own it, so the `.rodata` output section's own
+    trailing ALIGN(4) pads the segment. The DS build keeps MWAS's section;
+    this runs on the port's assembled object only.
+    """
+    if VERSION_SECTION not in object_section_names(readelf, obj):
+        return ""
+    proc = run([objcopy,
+                f"--rename-section={VERSION_SECTION}={VERSION_SECTION_PORT}",
+                str(obj)])
+    return proc.stdout + proc.stderr
+
+
 def apply_object_aliases(root: Path, src: Path, obj: Path,
                          env: dict[str, str] | None, nm: str | None = None,
                          readelf: str | None = None,
@@ -749,7 +783,8 @@ def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
                      keep_going: bool,
                      alias_env: dict[str, str] | None = None,
                      nm: str | None = None, readelf: str | None = None,
-                     overlay_ids: Path | None = None
+                     overlay_ids: Path | None = None,
+                     objcopy: str | None = None
                      ) -> tuple[list[Path], list[tuple[str, int, str]]]:
     """Assemble every .s through tools/s_to_gas.py, then apply any sibling
     .alias-map.json (an .s can own a FUNC alias map too)."""
@@ -765,6 +800,11 @@ def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
         if proc.returncode != 0 and errors == 0:
             errors = 1
         ok = proc.returncode == 0
+        if ok and readelf is not None:
+            align_text = align_version_section(obj, readelf, objcopy)
+            if align_text:
+                text += align_text
+                ok = "error" not in align_text.lower()
         if ok:
             ok, alias_text = apply_object_aliases(root, root / rel, obj,
                                                   alias_env, nm, readelf, out)
@@ -944,7 +984,7 @@ def main(argv: list[str] | None = None) -> int:
     asm_objects, asm_failed = assemble_objects(
         root, tools["cc"], aflags, out, sources["asm"], args.jobs, log_dir,
         args.keep_going, alias_env, tools["nm"], tools["readelf"],
-        gen / "overlay_ids.ld")
+        gen / "overlay_ids.ld", tools["objcopy"])
     print(f"   {len(asm_objects)} assembled, {len(asm_failed)} failed")
     if asm_failed:
         print(f"   {sum(e for _, e, _ in asm_failed)} errors in "

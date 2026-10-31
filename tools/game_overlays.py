@@ -358,6 +358,11 @@ def render_ids_header(names: list[str]) -> str:
         "#ifndef PORT_GAME_OVERLAY_IDS_H",
         "#define PORT_GAME_OVERLAY_IDS_H",
         "",
+        "/* The name lib/include/nitro/fs/overlay.h checks: with it, FS_OVERLAY_ID",
+        "   is the enum constant below, not the address of a linker symbol. The",
+        "   address form leaves absolute relocations 3dsxtool cannot package. */",
+        "#define SDK_PORT_OVERLAY_IDS_H 1",
+        "",
         "enum {",
     ]
     lines += [f"    SDK_PORT_OVERLAY_ID_{name} = {index}," for index, name in enumerate(names)]
