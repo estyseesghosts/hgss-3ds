@@ -33,9 +33,15 @@ def main():
         link = shim / n
         if not link.is_symlink():
             link.symlink_to(root / "lib" / "include" / n)
-    flags = (s.DEFINES + [f for f in s.CFLAGS if f != "-fgnu89-inline"] + [f"-I{shim}"]
+    # Same include order as tools/hgss_nitro.py overrides(): the port's own
+    # headers, hgss/compat/include (ntrtwl names for things HGSS spells
+    # differently or lacks), the shimmed SDK headers, the game's include
+    # dirs, then HGSS's flat SDK include dirs.
+    flags = (s.DEFINES + [f for f in s.CFLAGS if f != "-fgnu89-inline"]
+             + ["-I3ds_port/nitro/include", "-Ihgss/compat/include", f"-I{shim}",
+                f"-I{root}/include", f"-I{root}/include/library"]
              + [f"-I{root}/lib/NitroSDK/{d}" for d in ("include", "include-mw", "include-pokediamond")]
-             + ["-I3ds_port/nitro/include", "-I3ds_port/pak/include", "-I3ds_port/nitro/src"])
+             + ["-I3ds_port/pak/include", "-I3ds_port/nitro/src"])
     groups, example, results = collections.Counter(), {}, []
     for p in sorted(Path("3ds_port/nitro/src").glob("*.c")):
         r = subprocess.run(["gcc", "-fsyntax-only", "-m32", "-malign-double", *flags, str(p)],
