@@ -44,7 +44,7 @@ The idea is to leave the SDK and game code as they are, and to make each piece o
 7. **A sound chip model.** The original ARM7 sound driver runs and writes the DS sound registers. `port_sound_chip.c` mixes the 16 channels into PCM. On the 3DS that PCM goes to NDSP, and on the PC it goes to a WAV file or a null device. The plan uses HGSS's own ARM7 sources under `sub/` for the driver. That is not wired yet.
 8. **The save.** `port_card.c` answers the cart's flash commands against an in-memory 512 KiB image and writes it to a raw `.sav` file. The format is the cart's own. See [Save-Compatibility](Save-Compatibility.md).
 
-Two shells sit on top. `game/app/main_3ds.c` is the 3DS program (libctru, citro3d, NDSP, file system). `game/app/main_pc.c` is the headless PC program with scripted input and screenshots. Both come from Platinum. HGSS's own shells are planned in Phase 4 and Phase 5.
+Two shells sit on top. `game/app/main_3ds.c` is the 3DS program (libctru, citro3d, NDSP, file system). `game/app/main_pc.c` is the headless PC program with scripted input and screenshots. Both come from Platinum. HGSS's own counterparts are `hgss/game/app/main_3ds.c` and `main_pc.c` (bring-up shells: the 3DS link and the PC link plus `--check-overlays`; rendering/sound hooks come later).
 
 ## How HGSS reuses it
 
@@ -52,7 +52,7 @@ Two shells sit on top. `game/app/main_3ds.c` is the 3DS program (libctru, citro3
 - HGSS has its own NitroSDK and NitroSystem in-tree, under `lib/`. The SDK patches change them, and every change is behind the `SDK_PORT_3DS` macro, so the MWCC build is unchanged.
 - Game code under `src/` changes only through `patches/pokeheartgold/`.
 - `3ds_port/` is vendored byte-identical from Platinum. HGSS-only work goes into new files, or into patches meant for upstream.
-- The wiring between the vendored port and the HGSS SDK is done: all 46 port sources compile, `libnitro.a` builds with zero errors, and the vendored suites run (`pak` 120 checks, `test_nitro` 702, `test_fs_pak` 120, `test_threads` 68, all 0 failed). One suite still hangs (`test_arm7`'s `test_sound`) and `test_nitrosystem` is not reached. See [docs/port-wiring.md](../port-wiring.md), [docs/progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md) and [docs/progress/STATE.md](../progress/STATE.md).
+- The wiring between the vendored port and the HGSS SDK is done: all 46 port sources compile, `libnitro.a` and `libnitrosystem.a` build with zero errors, and **every** vendored suite passes (`make port-tests` exit 0; nitrosystem 17,122 checks). See [docs/port-wiring.md](../port-wiring.md), [docs/progress/agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md) and [docs/progress/STATE.md](../progress/STATE.md).
 
 ## Layers
 
@@ -106,11 +106,11 @@ pokeheartgold-3ds/
 | 0 Baseline | Matching DS build in CI; reference captures and save fixtures exist | **Partial** | The phase record says "complete except items marked NOT DONE". Both matching SHA1s are verified inside the dev container ([docs/progress/phase-0.md](../progress/phase-0.md), "Matching build: resolved"). Marked NOT DONE: golden captures (BizHawk could not run on the macOS host) and the input scripts' calibration. The record also has no save fixtures ("no saves yet") and does not report the determinism check. `matching.yml` is disabled. |
 | 1 Port scaffold, SDK rebase | HGSS NitroSDK and NitroSystem compile with GCC under `SDK_PORT_3DS`; port unit tests pass | **Code complete; gate owed** | <br>61 patches. Survey: 270 of 284 SDK files parse (gcc 13; 269 with the port's gcc 10), up from 243. Layout probe: 0 differences across 804 values. `make test` green (204 Python tests + 18 host suites). `make port-tests` **exit 0**: pak 120, the whole nitro sequence (arm7 676, sound_sequence 12, render 2071, gx3d 326+228, vram 24, shadow 375, …) and nitrosystem 17,122 — all 0 failed. The DS gate last passed with 10 patches; five build-tool input pins were fixed in 1601/1602, and one debug-info shape pin remains ([docs/progress/STATE.md](../progress/STATE.md)). |
 | 2 Game under GCC, link | `pokeheartgold-pc` and `pokeheartgold.3dsx` link with no unresolved symbols | **Partial** | 1092/1092 game files compile, 150/150 `.s`; both port archives build. Host link: **34 unresolved** (MSL runtime, C++ runtime, MB stubs, five pokéwalker aliases); no binary yet. The 3DS link is blocked by `std_sprintf`, the ARM7 rule and ~45 devkitARM-only compile errors. `--check-overlays` and `symbol_crosscheck.py` exist but need the real binary ([docs/progress/phase-2.md](../progress/phase-2.md)). |
-| 3 Data pipeline | Builder makes `heartgold3ds.pak` and `manifest.json` | **Not started** | No `builder/` directory. |
-| 4 PC build reaches Oak | Scripted run from boot to the end of Oak's speech matches melonDS | **Not started** | No HGSS PC build. |
-| 5 3DS build reaches Oak | Same run on a New 3DS | **Not started** | No HGSS `.3dsx`. |
+| 3 Data pipeline | Builder makes `heartgold3ds.pak` and `manifest.json` | **Partial** | `builder/pack.py` exists and the pak tests use it; the ROM extractor and the game manifest generation are not written. |
+| 4 PC build reaches Oak | Scripted run from boot to the end of Oak's speech matches melonDS | **Not started** | The game compiles 1092/1092 on host32 and the shell exists; the PC link still has 34 unresolved symbols (no binary). |
+| 5 3DS build reaches Oak | Same run on a New 3DS | **Not started** | The 3DS shell exists; the 3DS link is blocked by `std_sprintf`, the ARM7 rule and ~45 devkitARM-only compile errors. |
 | 6 Graphics gaps | Display capture, mosaic, HBlank effects, missing 3D features | **Not started** | `docs/gfx-features.md` and `port_capture.c` are absent. The port's README lists mosaic and display capture as not drawn. |
-| 7 Sound | Music, effects, cries, streams, mic | **Not started** | Platinum's ARM7 sound patches (0018 to 0023) are not rebased. The mic service is not written. |
+| 7 Sound | Music, effects, cries, streams, mic | **Partial** | The genuine ARM7 driver runs in the port (1401-1406) and every vendored sound suite passes (`arm7` 676, `sound_sequence` 12, `sound_chip` 51); the game-level streams/mic and the full mixer path are not done. |
 | 8 Gameplay | Scripted run to Falkner's badge | **Not started** | Depends on 2 to 7. |
 | 9 Infrared | Pokéwalker send and receive on real hardware | **Not started** | Only the stub exists: `CARD_SpiWait*` reports "no IR peer" (NitroSDK patch 0701). No `backend/ir_3ds.c`, no `docs/ir.md`. |
 | 10 Wireless | 3DS to 3DS trade and battle over UDS | **Not started** | No stub coverage test and no `docs/wireless.md`. |
