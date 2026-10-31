@@ -26,7 +26,7 @@ File names also differ. For example, `CARD_backup.c` in HGSS corresponds to `car
 
 The sdk-diff record says a line-by-line diff of the two trees is not a usable method. HGSS is a reconstruction that matches the DS build; the Platinum SDK is closer to the original sources. Equivalent code looks very different in the two. So the comparison in the record is by structure and behaviour.
 
-The vendored port's Makefiles expect Platinum's layout (`libraries/<lib>/src`). They cannot drive HGSS's tree as they are. The record leaves the fix open: either a make fragment passed on the command line, or a patch to the vendored Makefiles that goes upstream ([docs/sdk-diff.md](../sdk-diff.md), section 1; [docs/port-wiring.md](../port-wiring.md)).
+The vendored port's Makefiles expect Platinum's layout (`libraries/<lib>/src`). They cannot drive HGSS's tree as they are. `tools/hgss_nitro.py` solves this without editing them: a shim under `build/hgss-sdk`, plus `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=` and `ARM7_SOUND_SRCS=` on the make command line ([docs/port-wiring.md](../port-wiring.md), [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
 
 ## Assembly written in MWCC's inline `asm`
 
@@ -48,7 +48,7 @@ Some asm does not translate directly, and the port replaces the behaviour instea
 
 PXI is the message channel between the ARM9 (the game) and the ARM7 (the services) ([3ds_port/nitro/src/pxi.c](../../3ds_port/nitro/src/pxi.c) header).
 
-- **Tags match.** The 17 PXI tags, from `EX` to `CTRDG_Ex`, have the same names and values in both SDKs. HGSS does not define `PXI_FIFO_TAG_CTRDG_PHI` (value 17), and the port does not use it ([docs/sdk-diff.md](../sdk-diff.md), section 3).
+- **Tags match.** The 17 PXI tags, from `EX` to `CTRDG_Ex`, have the same names and values in both SDKs. HGSS does not define `PXI_FIFO_TAG_CTRDG_PHI` (value 17); the port's `pxi.c` uses it, so patch 1201 adds it under `SDK_PORT_3DS` only (the DS enum is unchanged, `PXI_MAX_FIFO_TAG` stays 32) ([docs/sdk-diff.md](../sdk-diff.md), section 3).
 - **Commands do not match.** The port's virtual ARM7 decodes commands by name, such as `RTC_PXI_COMMAND_*`, `SPI_PXI_COMMAND_PM_*` and `PM_UTIL_*`. HGSS's ARM9 code uses literal numbers instead. The power commands are `0x60`, `0x62` and `0x70` to `0x74` in `pm.c`, and the touch code sends raw words such as `0x3000000` ([docs/port-wiring.md](../port-wiring.md), "PXI protocols differ").
 - **Consequence.** A header that only defines the Platinum names would compile, and then the port would answer requests wrongly. The fix is HGSS-specific decoders, in new files. That is not done.
 - **Payloads not yet compared.** The record marks the per-command payload formats for card, RTC, touch, power, sound and mic as not yet compared ([docs/sdk-diff.md](../sdk-diff.md), section 3, marked not done).
@@ -74,6 +74,10 @@ The G3 command table has 77 opcodes, and every value matches between the two SDK
 Some differences are not in the SDK's design. They come from how GCC and MWCC read the same C. The patch files record these kinds of fix:
 
 - A prototype with no return type, which MWCC accepts as `int`. GCC 14 and later reject it. Patch `1101` adds the `int` on the port only.
+- An unnamed parameter in a function definition. MWCC accepts it; GCC 10 rejects it. Patch `1201` names it on the port branch.
+- A header that repeats the CRC structs and typedefs the public header defines. MWCC accepts the repeat; GCC rejects it. Patch `1201` takes them from the public header under the macro.
+- `OS_IrqHandler`'s `OSIrqMask` parameter is only an alias for `r0` in the DS asm and the C body never reads it; the port calls it with no argument. Patch `1201` makes the port prototype and definition `(void)`.
+- Two MI DMA registers are spelled as absolute DS addresses instead of `HW_REG_BASE + offset`, so the memory-map override misses them. Patch `1302` derives both from `HW_REG_BASE` on the port.
 - A function that the header declares with external linkage, but that the source defines `static`. MWCC keeps the definition local. GCC refuses the mismatch. Patch `0301` drops `static` on the GCC branch.
 - `__declspec(noinline)`, which GCC does not know. Patch `0301` uses `__attribute__((noinline))` on the GCC branch.
 - `u64` alignment, which changes struct layouts. Patch `1001` fixes it. See [Save-Compatibility](Save-Compatibility.md).
@@ -85,8 +89,7 @@ The survey is `tools/sdk_compile_survey.py`. It runs `gcc -fsyntax-only` on ever
 The total is 284 files. That is 190 in NitroSDK plus 94 in NitroSystem, which I counted in the pinned tree.
 
 - **Baseline, before any patch:** 243 of 284 parse, at 32-bit ([docs/progress/phase-1.md](../progress/phase-1.md)).
-- **With all 11 patches the phase-1 record was written against:** 270 of 284 parse ([docs/progress/phase-1.md](../progress/phase-1.md)).
-- **With patch `1101`:** not measured in the repo. The record does not say whether `1101` changes the count.
+- **With all 15 patches:** 270 of 284 parse with gcc 13, 269 with gcc 10 ([docs/progress/STATE.md](../progress/STATE.md)). The extra gcc-10 failure is `ctrdg/CTRDG_common.c`; `SND_command.c` was fixed by patch 1201.
 
 ### The 14 files that still do not parse
 
@@ -106,16 +109,16 @@ The repo gives a reason for some of them, and this page keeps to those:
 
 The record does not check each file against the port file that replaces it. Treat "port-replaced" as the record's claim, not a verified mapping.
 
-## The port layer against HGSS: 26 of 46
+## The port layer against HGSS: 29 of 46
 
 Separately from the SDK survey, the record checks the port's own sources, which were written for the Platinum SDK. The check uses a shim that exposes only `nitro*`, `nnsys*` and `cw*` from `lib/include`. The shim is needed because HGSS's `stdarg.h`, `stddef.h` and `string.h` would hide the system versions the port needs ([docs/port-wiring.md](../port-wiring.md), "Measured state").
 
-- **26 of 46 port sources compile.**
-- **20 fail for 17 named reasons.** The causes include header names that differ or are missing (for example `nitro/spi/common/type.h` is not in HGSS, whose nearest file is `spi/common/pm_common.h`), a `card_common.h` include where HGSS has `CARD_common.h`, a `MIi_CpuClear16` signature mismatch, and `OS_IrqHandler()` called with no argument where HGSS's prototype takes one. The full table is in [docs/port-wiring.md](../port-wiring.md).
-- **The vendored unit tests are not built.** `make port-tests` says it is not implemented and fails on purpose. The record counts the 9 SDK host suites and the tool tests as green. Those are new tests for the patches, not the vendored suites ([docs/progress/phase-1.md](../progress/phase-1.md), exit checklist).
+- **29 of 46 port sources compile** (it was 26 before patches 1201, 1301 and 1302).
+- **17 fail for 15 named causes.** The causes include header names that differ or are missing (for example `nitro/spi/common/type.h` is not in HGSS, whose nearest file is `spi/common/pm_common.h`), a `card_common.h` include where HGSS has `CARD_common.h`, `MIi_Cpu*` signature mismatches, and missing MI DMA timing names. The full table is in [docs/port-wiring.md](../port-wiring.md); the live state is [docs/progress/STATE.md](../progress/STATE.md).
+- **The real build:** `tools/hgss_nitro.py` drives the vendored Makefiles and reaches 9 objects before errors — 44 `error:` lines. That is the number to drive down.
+- **The vendored unit tests are not built.** `make port-tests` says it is not implemented and fails on purpose. The 11 SDK host suites and the tool tests are green; those are tests of the patches, not the vendored suites ([docs/progress/STATE.md](../progress/STATE.md)).
 - **The source list is not fixed.** About 30 Platinum SDK sources have no HGSS counterpart. About 60 map only in part, because HGSS's SDK contains only what HGSS uses ([docs/port-wiring.md](../port-wiring.md), "Source list").
-
-The design the record suggests is an out-of-tree shim under `build/`, with symlinks from Platinum's names to HGSS's files, plus command-line overrides such as `SDK=` and `SDK_SRCS=`. That keeps the vendored Makefiles unchanged. It is a suggestion, not built ([docs/port-wiring.md](../port-wiring.md), "Suggested design").
+- **The suggested design now exists:** `tools/hgss_nitro.py` builds the out-of-tree shim under `build/` and passes command-line overrides (`SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=`), leaving the vendored Makefiles unchanged.
 
 ## What is not compared yet
 

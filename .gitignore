@@ -39,3 +39,6 @@ __pycache__/
 tools/.*.sh
 tools/.*.py
 tools/.*
+
+# ---- macOS ----
+.DS_Store

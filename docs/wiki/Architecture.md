@@ -35,7 +35,7 @@ These are the parts the port has to reproduce. Each bullet names the repo file t
 
 The idea is to leave the SDK and game code as they are, and to make each piece of hardware ordinary memory or a software model. The vendored port does this in these parts. The file names are in `3ds_port/nitro/src/` unless noted.
 
-1. **Hardware as RAM.** The DS memory areas and I/O registers are plain arrays (`port_memory.c`, `port_ioreg.c`). The SDK's address macros are meant to point at those arrays, so ordinary loads and stores reach them. For HGSS this remap is not done yet (see the status table below).
+1. **Hardware as RAM.** The DS memory areas and I/O registers are plain arrays (`port_memory.c`, `port_ioreg.c`). The SDK's address macros point at those arrays (patches 1301/1302), so ordinary loads and stores reach them.
 2. **A virtual ARM7.** `pxi.c` implements the PXI message channel. Each tag can have a port handler, and the handlers answer card, RTC, power, touch and sound requests in-process (`port_arm7.c` registers them). Answers come back through a receive queue that raises the same FIFO interrupt the DS raises.
 3. **Threads.** NitroSDK keeps its own thread scheduler. Each SDK thread runs on a real thread (a 3DS thread, or a POSIX thread on the PC), and only one of them runs game code at a time. A context switch is a hand-over between those threads (`port_thread.c`).
 4. **Interrupts, timers and DMA in software.** The port raises interrupts at the points the DS would, counts the four timers from a clock, and runs DMA at once or at V-blank (`port_os.c`, `port_timer.c`, `port_dma.c`). `OS_Halt`, which waits for an interrupt on the DS, advances one frame here.
@@ -52,7 +52,7 @@ Two shells sit on top. `game/app/main_3ds.c` is the 3DS program (libctru, citro3
 - HGSS has its own NitroSDK and NitroSystem in-tree, under `lib/`. The SDK patches change them, and every change is behind the `SDK_PORT_3DS` macro, so the MWCC build is unchanged.
 - Game code under `src/` changes only through `patches/pokeheartgold/`.
 - `3ds_port/` is vendored byte-identical from Platinum. HGSS-only work goes into new files, or into patches meant for upstream.
-- The wiring between the vendored port and the HGSS SDK is not finished. Of the 46 port source files, 26 compile against the HGSS headers. The rest fail for 17 named reasons, and the port's unit tests have not been built against HGSS. See [SDK-Differences](SDK-Differences.md) and [docs/port-wiring.md](../port-wiring.md).
+- The wiring between the vendored port and the HGSS SDK is not finished. Of the 46 port source files, 29 compile against the HGSS headers; the host32 build still stops with 44 errors in 9 objects, and the port's unit tests have not been built against HGSS. See [SDK-Differences](SDK-Differences.md), [docs/port-wiring.md](../port-wiring.md) and [docs/progress/STATE.md](../progress/STATE.md).
 
 ## Layers
 
@@ -84,13 +84,14 @@ pokeheartgold-3ds/
   patches/
     NitroSDK/            9 patches (numbered 0101 to 0901)
     NitroSystem/         1 patch  (0301)
-    pokeheartgold/       2 patches (1001, 1101)
+    pokeheartgold/       5 patches (1001, 1101, 1201, 1301, 1302)
   3ds_port/              vendored from Platinum: nitro/, nitrosystem/, pak/, game/
-  tools/                 bootstrap.py, savetool.py, layout_probe/, sdk_compile_survey.py, ...
-  tests/                 unit tests for tools, layout probe, sdk/ (9 host suites), inputs/
+  hgss/compat/include/   HGSS names for headers the port includes (currently only .gitkeep)
+  tools/                 bootstrap.py, hgss_nitro.py, savetool.py, layout_probe/, surveys, ...
+  tests/                 unit tests for tools, layout probe, sdk/ (11 host suites), inputs/
   docs/                  BASE.md, sdk-diff.md, port-wiring.md, decisions.md, progress/, wiki/
   .github/workflows/     matching.yml (disabled), port.yml (make test)
-  build/                 generated: build/upstream, build/NitroSDK, build/NitroSystem (git-ignored)
+  build/                 generated: build/upstream, build/hgss-sdk, outputs (git-ignored volume)
 ```
 
 `builder/` and the HGSS-specific files in the plan's port table (`port_capture.c`, `port_cardspi.c`, `backend/ir_3ds.c` and the rest) do not exist yet.
@@ -99,8 +100,8 @@ pokeheartgold-3ds/
 
 | Phase | Plan exit criterion | Status | What the record shows |
 | --- | --- | --- | --- |
-| 0 Baseline | Matching DS build in CI; reference captures and save fixtures exist | **Partial** | Both matching SHA1s verified inside the dev container ([docs/progress/phase-0.md](../progress/phase-0.md), "Matching build: resolved"). Not done: golden captures (BizHawk could not run on the macOS host), uncalibrated input scripts, the determinism check, a fixture save set. `matching.yml` is disabled. |
-| 1 Port scaffold, SDK rebase | HGSS NitroSDK and NitroSystem compile with GCC under `SDK_PORT_3DS`; port unit tests pass | **Partial** | 12 patches in `patches/` (the phase record counts 11; see the note below). Survey: 270 of 284 SDK files parse, up from 243. Layout probe: 0 differences across 804 values. The DS gate passed with 10 of the patches. The vendored port's unit tests are not built against HGSS, and `make port-tests` fails on purpose. ([docs/progress/phase-1.md](../progress/phase-1.md).) |
+| 0 Baseline | Matching DS build in CI; reference captures and save fixtures exist | **Partial** | The phase record says "complete except items marked NOT DONE". Both matching SHA1s are verified inside the dev container ([docs/progress/phase-0.md](../progress/phase-0.md), "Matching build: resolved"). Marked NOT DONE: golden captures (BizHawk could not run on the macOS host) and the input scripts' calibration. The record also has no save fixtures ("no saves yet") and does not report the determinism check. `matching.yml` is disabled. |
+| 1 Port scaffold, SDK rebase | HGSS NitroSDK and NitroSystem compile with GCC under `SDK_PORT_3DS`; port unit tests pass | **Partial** | 15 patches in `patches/`. Survey: 270 of 284 SDK files parse (gcc 13; 269 with the port's gcc 10), up from 243. Layout probe: 0 differences across 804 values. `make test` is green (11 host suites). The DS gate passed with 10 of the patches; the five newest are guarded but not in a full rebuild. The vendored port's unit tests are not built against HGSS, and `make port-tests` fails on purpose. Port wiring: 29/46 sources compile; the host32 port build has 44 errors in 9 objects. ([docs/progress/STATE.md](../progress/STATE.md).) |
 | 2 Game under GCC, link | `pokeheartgold-pc` and `pokeheartgold.3dsx` link with no unresolved symbols | **Not started** | No game object has been compiled or linked ([docs/progress/phase-1.md](../progress/phase-1.md), exit checklist). |
 | 3 Data pipeline | Builder makes `heartgold3ds.pak` and `manifest.json` | **Not started** | No `builder/` directory. |
 | 4 PC build reaches Oak | Scripted run from boot to the end of Oak's speech matches melonDS | **Not started** | No HGSS PC build. |
@@ -118,15 +119,16 @@ The gameplan's Phase 1 deliverables list 27 NitroSDK and 5 NitroSystem patches t
 
 These are the items the phase-1 record names as not done. Each one is a reason the port cannot yet run the game.
 
-- The memory-map remap (Platinum patch 0005). `HW_IOREG` is still `0x04000000` in HGSS's headers, so the SDK's register addresses do not point at the port's registers yet.
 - The header-level patches in `lib/include`: timer hooks (Platinum 0013) and overlay ID symbols as bytes (0010).
 - The overlay patches (Platinum 0011, 0014, 0027): the libpak hook and the overlay hooks, including static initializers.
 - The 3D command ports (Platinum 0024 and 0025). `g3imm.c` still stores directly to the FIFO, so matrix sends do not reach the port's 3D translator.
 - The ARM7 sound driver, which has to be rebuilt from `sub/` rather than rebased (Platinum 0018 to 0023).
 - The PXI decoders for RTC, touch and power. HGSS sends literal command words where the port decodes named constants ([docs/port-wiring.md](../port-wiring.md), "PXI protocols differ").
-- The port-layer call `OS_IrqHandler()` takes no argument, but HGSS's prototype takes one. The fix is to pass 0 in the port's own code. It is not in any patch yet (see the message of NitroSDK patch 0901 and [docs/port-wiring.md](../port-wiring.md)).
+- The vendored port's own unit tests are not wired to the HGSS source list. This is the open Phase 1 exit criterion.
 
 ## Notes on the record
 
-- The phase-1 record says 11 patches. A twelfth, `patches/pokeheartgold/1101`, has since been added. This page follows the directory as it is now.
+- The phase-1 record was written when there were 11 patches; `1101`, `1201`, `1301` and `1302` were
+  added later. The [STATE](../progress/STATE.md) page and the directory are current; the phase record
+  carries a dated update at the top.
 - The vendored port's README and header comments describe Platinum's status. They are not a claim about HGSS.

@@ -44,7 +44,7 @@ A second example is the decision that `savetool` discovers slot sizes from the f
 
 `3ds_port/` is copied from Platinum at the commit in `platinum.lock`, and it stays identical to that commit. HGSS-only code goes in new files, or in patches meant for upstream ([CONTRIBUTING.md](../../CONTRIBUTING.md); [NOTICE.md](../../NOTICE.md)).
 
-Example: the wiring between the vendored port and HGSS's SDK is not done by editing the vendored Makefiles. The record suggests a shim under `build/` and command-line overrides, which keeps the vendored Makefiles unchanged ([docs/port-wiring.md](../port-wiring.md), "Suggested design").
+Example: the wiring between the vendored port and HGSS's SDK is not done by editing the vendored Makefiles. `tools/hgss_nitro.py` builds a shim under `build/` and passes command-line overrides, which keeps the vendored Makefiles unchanged ([docs/port-wiring.md](../port-wiring.md), [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
 
 Another example is the rule for tests: never change a test just to make it pass ([gameplan.md](../../gameplan.md), Phase 1, step 8). The phase-1 record gives one case. The `cp_context` test expected GCC's 8-byte-aligned struct sizes. It was corrected to the DS layout that the asm implies, an overrun guard was added, and the record says this is not a weakened assertion ([docs/progress/phase-1.md](../progress/phase-1.md), "Deviations").
 

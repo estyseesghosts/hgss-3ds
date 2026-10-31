@@ -173,11 +173,11 @@ If the first `make patch_mwasmarm` step fails, see [Troubleshooting](#the-mwasma
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/bootstrap.py'
 ```
 
-This fetches the decomp at the commit in `upstream.lock` into `build/upstream/`, applies the 11 patch files from `patches/` as commits, and links `build/NitroSDK` and `build/NitroSystem` to the SDK sources. The fetch needs network access to GitHub.
+This fetches the decomp at the commit in `upstream.lock` into `build/upstream/`, applies the 15 patch files from `patches/` as commits, and links `build/NitroSDK` and `build/NitroSystem` to the SDK sources. The fetch needs network access to GitHub.
 
-**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, eleven `  applying ...` lines, and `Done: build/upstream (11 patches applied), build/NitroSDK, build/NitroSystem`.
+**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, fifteen `  applying ...` lines, and `Done: build/upstream (15 patches applied), build/NitroSDK, build/NitroSystem`.
 
-Running it again prints `upstream: already at 8cbb4a19ab78 with 11 patches`.
+Running it again prints `upstream: already at 8cbb4a19ab78 with 15 patches`.
 
 ## 9. Run `make test`
 
@@ -185,17 +185,30 @@ Running it again prints `upstream: already at 8cbb4a19ab78 with 11 patches`.
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && make test'
 ```
 
-This runs the 19 Python tests and then the nine SDK host suites. It is the same command CI runs on the synthetic-data image.
+This runs the 19 Python tests and then the eleven SDK host suites. It is the same command CI runs on the synthetic-data image.
 
 **You should see:**
 
 - `Ran 19 tests`, then `OK`.
-- One `== tests/sdk/<name>` header for each of: `card_spi_wait`, `cp_context`, `fx`, `irq_handler`, `math_qsort`, `nns_clz`, `os_system`, `port_hooks`, `small`.
+- One `== tests/sdk/<name>` header for each of: `card_spi_wait`, `cp_context`, `fx`, `gcc_fixes`, `irq_handler`, `math_qsort`, `memory_map`, `nns_clz`, `os_system`, `port_hooks`, `small`.
 - `428 passed, 0 failed` from the `fx` suite.
 - `sdk small: all ok` at the end.
 - Exit status 0. It took about 30 seconds in the last run.
 
 You are green. Next, see [Daily-Workflow](Daily-Workflow.md) for the loop, and the layout probe with `make layout` (it needs the decomp checkout from step 5 to have been built once, so run it after step 7).
+
+## 10. Build the port layer (in progress)
+
+The vendored hardware layer (`3ds_port/`) is not wired to HGSS yet; this step is the current work, not a gate. It shows the measured state:
+
+```
+devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/port_compile_survey.py'
+devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/hgss_nitro.py make --target host32 --out /work/out/first lib -k -j8'
+```
+
+**You should see:** `29/46 port source files compile against the HGSS headers`, then the grouped causes. The `make` run gets further but **fails**: 44 `error:` lines in 9 objects, mostly missing compat headers (`hgss/compat/include` is still empty) and a few missing type names. That is the known state on 2026-10-31, not a setup mistake.
+
+`hgss_nitro.py` explains the shim it builds in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today). The next work and the full error map are in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 
 ## Troubleshooting
 
@@ -258,6 +271,8 @@ Bootstrap prints `<name>.patch does not apply cleanly`, with the `git am` output
 ## Links
 
 - [Home](Home.md): the wiki index.
+- [Build-Reference](Build-Reference.md): toolchains, every build target, flags and cleanup.
 - [Daily-Workflow](Daily-Workflow.md): the loop once you are set up.
 - [Tools-Reference](Tools-Reference.md): every script and test runner.
 - [README](../../README.md): what the project is and its current status.
+- [docs/progress/STATE.md](../progress/STATE.md): what is green today.

@@ -26,6 +26,18 @@ Fetches the decomp at the commit in `upstream.lock` into `build/upstream/` and a
   - `--clean` deletes `build/upstream/` and the two SDK symlinks, then fetches again.
   - Any patch that does not apply stops the run and prints the `git am` output.
 
+### `tools/hgss_nitro.py`
+
+Builds the vendored `3ds_port/nitro` against HGSS's SDK without editing the vendored Makefiles. It creates a shim under `build/hgss-sdk` (sources symlink, filtered include dir, stand-in `fx_const` generator) and passes `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=` and an optional `OUT=` to make.
+
+- **Usage:** `python3 tools/hgss_nitro.py {shim|make|list} [--root build/upstream] [--target host32] [--out DIR] [-- make args]`
+- **Reads:** the patched tree at `--root` (default `build/upstream`), `hgss/compat/include`, and the vendored `3ds_port/nitro`.
+- **Writes:** `build/hgss-sdk/` (the shim) and objects under the `--out` directory, or the vendored `build/<target>/` without it.
+- **Output:** `make` exits with the vendored build's status. Today it fails with 44 errors in 9 objects; see [../port-wiring.md](../port-wiring.md).
+- **Needs:** the container, after bootstrap. gcc-10 (`CC` in the image). No MWCC, no ROM.
+- **Notes:** always pass `--out` for a private tree; `-k` shows every failing file. `list` prints the compiled source list and the excluded files.
+- **Why it exists:** the vendored Makefiles assume Platinum's `libraries/<lib>/src` layout and headers; see [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today).
+
 ### `tools/install-ds-toolchain.sh`
 
 Copies your MWCC and Nitro SDK files into the decomp checkout, at paths that git ignores.
@@ -54,7 +66,7 @@ Syntax-checks every `lib/NitroSDK/src` and `lib/NitroSystem/src` source with GCC
 - **Usage:** `python3 tools/sdk_compile_survey.py [--root build/upstream] [--lib NitroSDK|NitroSystem|all] [--m32] [-j N] [--json OUT] [-v]`
 - **Reads:** the patched tree in `build/upstream`, which must contain the generated `fx_const.h` (bootstrap makes it).
 - **Writes:** nothing, except the file named by `--json`.
-- **Output:** a summary line such as `270/284 files parse; 14 fail; N warnings`. `-v` shows the first errors. Exit status is 1 while any file fails.
+- **Output:** a summary line such as `270/284 files parse; 14 fail; N warnings` with the default gcc 13, or `269/284; 15 fail` with `--gcc gcc-10`. `-v` shows the first errors. Exit status is 1 while any file fails.
 - **Needs:** the container. No MWCC, no ROM.
 - **Also run as:** `make sdk-survey`.
 
@@ -64,7 +76,7 @@ Checks how far the vendored `3ds_port/nitro/src` is from compiling against the H
 
 - **Usage:** `python3 tools/port_compile_survey.py [--root build/upstream] [--shim build/hgss-shim]`
 - **Writes:** symlinks in `build/hgss-shim/include/` that expose only `nitro`, `nnsys` and `cw` from `lib/include`.
-- **Output:** the count and the grouped first errors. Exit 0 only if every file compiles. Last run: `26/46`. The causes are listed in [docs/port-wiring.md](../port-wiring.md).
+- **Output:** the count and the grouped first errors. Exit 0 only if every file compiles. Last run: `29/46`. The causes are listed in [docs/port-wiring.md](../port-wiring.md).
 - **Note:** the header says `[--no-pak]`. The script does not accept that flag.
 - **Needs:** the container, after bootstrap. No MWCC, no ROM.
 
@@ -164,6 +176,8 @@ Run from the repo root. `make test` runs the first two groups and nothing else. 
 | `tests/sdk/card_spi_wait/run.sh` | The `CARD_SpiWait*` stub: status `0xAA`, no peer. | NitroSDK 0701 | `[ROOT]` |
 | `tests/sdk/math_qsort/run.sh` | The C version of `MATH_QSort`, with a driver built against the system headers. | NitroSDK 0801 | `[ROOT]` |
 | `tests/sdk/irq_handler/run.sh` | The C version of `OS_IrqHandler`. | NitroSDK 0901 | `[ROOT]` |
+| `tests/sdk/gcc_fixes/run.sh` | The four GCC-10 fixes: `SND_command.c` compiles, both CRC headers in one TU, PXI PHI tag value, PHI absent without the macro. | pokeheartgold 1201 | `[ROOT]` |
+| `tests/sdk/memory_map/run.sh` | Every `HW_*` area, VRAM/PLTT/OAM view, main-memory offset and register macro lands in the port's arrays; includes the two absolute MI DMA registers. 35 checks. | pokeheartgold 1301, 1302 | `[ROOT]` |
 | `tests/layout_probe/run.sh` | The save-layout probe above, for all three GCC variants. Exit 1 on any difference. | pokeheartgold 1001 (types) | none; env vars below |
 | `tests/test_savetool.py` | `savetool` normalize, validate and diff, on synthetic images. 15 tests. | n/a | run by `make tool-tests` |
 | `tests/test_bootstrap.py` | `bootstrap.py` on a synthetic upstream repo. 4 tests. | n/a | run by `make tool-tests` |
@@ -171,10 +185,11 @@ Run from the repo root. `make test` runs the first two groups and nothing else. 
 Notes:
 
 - The SDK runners take `[ROOT]`, which defaults to `build/upstream`, or a patched tree. `make test` passes `build/upstream`. Most runners compile with `-m32 -malign-double` and the flags of `tools/sdk_compile_survey.py`. `nns_clz` and `small` keep their own flag lists in the script. Each runner prints its own pass or fail lines and exits non-zero on failure.
-- `make test` runs `tool-tests` (the two Python files, 19 tests in all) and then each `tests/sdk/*/run.sh`. Last run: exit 0, about 30 seconds.
+- `make test` runs `tool-tests` (the two Python files, 19 tests in all) and then each `tests/sdk/*/run.sh` (11 suites). Last run: exit 0, about 30 seconds.
+- `tests/sdk/port_memory.c` is a helper, not a suite: it defines the eleven port memory arrays for the suites whose SDK objects touch registers or main memory (patches 1301/1302). A test that needs them links it from its `run.sh`.
 - `tests/layout_probe/run.sh` reads `PY` (Python with pyelftools; default `python3`), `DECOMP` (default `/work/pokeheartgold`) and `FILES` (default `$DECOMP/files`). Extra arguments are passed to `run_probe.py`.
 - `tests/inputs/*.txt` are the four frame-indexed input scripts (`boot-title`, `main-menu-nosave`, `newgame-buttons`, `newgame-touch`) for `capture.lua`. They are not runners, and they are uncalibrated.
-- The vendored `3ds_port/` has its own Makefiles and test suites. They are not wired to the HGSS tree yet, so `make -C 3ds_port/nitro` does not work for HGSS. `make port-tests` exists and always fails on purpose. See [docs/port-wiring.md](../port-wiring.md).
+- The vendored `3ds_port/` has its own Makefiles and test suites. They are not wired to the HGSS tree yet, so `make -C 3ds_port/nitro` does not work for HGSS. Use `tools/hgss_nitro.py`; `make port-tests` exists and always fails on purpose. See [docs/port-wiring.md](../port-wiring.md).
 
 ## Make targets
 
@@ -189,6 +204,8 @@ From the repo `Makefile`:
 | `make port-tests` | nothing; prints `NOT IMPLEMENTED` and exits 1 | Deliberate. |
 | `make layout` | `bash tests/layout_probe/run.sh` | |
 | `make clean` | `rm -rf build` | Deletes everything under `build/`, including `build/upstream` and `build/reference`. |
+
+The port layer has no Makefile target yet: use `python3 tools/hgss_nitro.py make --target host32 --out DIR lib -k -j8` (see above). Its vendored tests are the open Phase 1 criterion.
 
 ## Named in the docs but not in the repo
 

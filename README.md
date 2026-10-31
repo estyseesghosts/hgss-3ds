@@ -9,10 +9,10 @@ The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 ## Current status
 
 - **Phase 0 (baseline): complete, with open items.** Both US versions of the decomp build byte-identically inside the dev container, checked against their SHA1s and (for HeartGold) against a retail dump. In the container this needs `tools/matching-build.sh`, not plain `make`: the linker there strips five sections the original keeps, and the script restores them in the generated linker file. Still open: the golden reference captures (never run), the fixture saves, and the CI matching job, which is disabled. Details: [docs/progress/phase-0.md](docs/progress/phase-0.md).
-- **Phase 1 (SDK patch stack): partly done.** Numbered patches (the list is in [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)), recorded as applying cleanly from scratch. Of the 284 NitroSDK and NitroSystem source files, 270 pass a GCC syntax check under `SDK_PORT_3DS`; the other 14 are files the port replaces. Each patch has a host test, or the layout probe. The save-struct layout matches MWCC for 804 values. The vendored port layer's own unit tests are not wired to HGSS yet, and `make port-tests` fails on purpose. Details: [docs/progress/phase-1.md](docs/progress/phase-1.md).
+- **Phase 1 (SDK patch stack): partly done.** 15 numbered patches apply cleanly from scratch (the list is in [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). Of the 284 NitroSDK and NitroSystem source files, 270 pass a GCC-13 syntax check under `SDK_PORT_3DS` (269 with the port's GCC 10); the 14 that fail are files the port replaces. `make test` is green: 19 Python tests and 11 SDK host suites. The save-struct layout matches MWCC for 804 values (0 differences). The vendored port layer is not wired to HGSS yet: 29 of its 46 sources compile and the host32 build stops with 44 errors in 9 objects, so its unit tests are not built and `make port-tests` fails on purpose. Details: [docs/progress/STATE.md](docs/progress/STATE.md) and [docs/progress/phase-1.md](docs/progress/phase-1.md).
 - **Phases 2 to 11: not started.** No game code is compiled or linked. There is no ROM builder (`builder/` does not exist), no 3DS shell for HGSS, and no golden frames. None of the sound, IR, wireless or GPU 2D phases has started.
 
-What you can run today: `make test` (19 Python tests and nine SDK host suites), `make layout` (the save-layout probe, 0 differences), and the matching builds for HeartGold and SoulSilver, if you have the toolchain.
+What you can run today: `make test` (19 Python tests and 11 SDK host suites), `make layout` (the save-layout probe, 0 differences), both surveys (`make sdk-survey`, `tools/port_compile_survey.py`), the port build via `tools/hgss_nitro.py` (not green yet), and the matching builds for HeartGold and SoulSilver, if you have the toolchain.
 
 ## Content rules
 
@@ -66,9 +66,11 @@ pokeheartgold-3ds/
 ## Where to read next
 
 - [docs/wiki/Home.md](docs/wiki/Home.md): the wiki index.
+- [docs/wiki/Build-Reference.md](docs/wiki/Build-Reference.md): the toolchain, every build target and its exact command.
 - [docs/wiki/Getting-Started.md](docs/wiki/Getting-Started.md): setup, step by step, with troubleshooting.
 - [docs/wiki/Daily-Workflow.md](docs/wiki/Daily-Workflow.md): the loop for working on the port.
 - [docs/wiki/Tools-Reference.md](docs/wiki/Tools-Reference.md): every script and test runner.
+- [docs/progress/STATE.md](docs/progress/STATE.md): the living status page: what is green today, what is next.
 - [gameplan.md](gameplan.md): the plan.
 - [docs/decisions.md](docs/decisions.md): what was decided, and why.
 

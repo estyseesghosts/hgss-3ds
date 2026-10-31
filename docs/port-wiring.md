@@ -10,7 +10,8 @@ container, after `bootstrap.py`).
 
 Port sources syntax-checked against the patched HGSS headers, using a shim include directory that exposes only
 `nitro*`, `nnsys*`, `cw*` from `lib/include` (HGSS's `stdarg.h`/`stddef.h`/`string.h` there shadow the system ones the
-port code needs; without the shim only 11/46 compile): **26/46 compile.** The other 20 fail for these 17 reasons:
+port code needs; without the shim only 11/46 compile): **29/46 compile** (2026-10-31; it was 26/46 before patches
+1201, 1301 and 1302). The other 17 fail for these causes:
 
 | Cause | Files | Kind |
 | --- | --- | --- |
@@ -19,8 +20,14 @@ port code needs; without the shim only 11/46 compile): **26/46 compile.** The ot
 | `MIUnpackBitsParam`, `CTRDGBackupType`, `HW_ROM_HEADER_BUF_END`, `MI_DMA_TIMING_IMM`, `GX_FIFOINTR_COND_UNDERHALF`, `PXI_FIFO_TAG_CTRDG_PHI` undeclared (HGSS has no or different names) | mi_uncompress, ctrdg, port_boot, port_dma, port_gx, pxi | define in a compat header |
 | `struct MATHCRC8Table` redefined (HGSS has two copies of the header: `lib/include/nitro/math/crc.h` and `lib/NitroSDK/include/MATH_crc.h`) | port_gx3d* | include order / header guard |
 | `MIi_CpuClear16` prototype differs from the port's definition | mi_memory | port or SDK signature |
-| `OS_IrqHandler()` called with no argument (HGSS takes an `OSIrqMask`) | port_os | port-layer fix: pass 0 |
+| `OS_IrqHandler()` called with no argument (HGSS takes an `OSIrqMask`) | port_os | **fixed** by patch 1201: the port prototype and C definition are `(void)` |
 | `NitroPort_LcdcVram` undeclared | port_render2d | port-internal header, probably a missing generated header |
+| `REG_ADDR_DMA0CNT` / `REG_ADDR_DMA0_CLR_DATA` are absolute addresses, outside the 1301 remap | mi_dma (via port_hooks) | **fixed** by patch 1302 |
+
+The fast survey is `python3 tools/port_compile_survey.py`. The real build is
+`python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> lib -k -j8`; on 2026-10-31 it
+stops with **44 errors in 9 objects** (svc, pxi, port_dma, mi_memory, port_boot, port_gx, ctrdg,
+port_os, mi_uncompress). `docs/progress/STATE.md` has the grouped list and the next actions.
 
 ## Not just compile errors
 
@@ -41,9 +48,17 @@ port code needs; without the shim only 11/46 compile): **26/46 compile.** The ot
   Platinum script; the shim must supply the generated header instead.
 - **I/O mapping.** `HW_IOREG` is still `0x04000000` in HGSS's `lib/include`; Platinum 0005 / `port_ioreg.c` remap it.
 
-## Suggested design (from the build-wiring review, not yet built)
+## The shim and overrides (built)
 
-An out-of-tree shim under the git-ignored `build/` (symlinks mapping Platinum names to HGSS files, the generated
-header, and the compat headers kept in a new tracked directory) plus command-line overrides (`SDK=`, `SDK_SRCS=`,
-`SDK_INCLUDES=`, `ARM7_SOUND_SRCS=`, `PORT_DEFINES=`) so the vendored Makefiles stay unchanged. The first gate is a
-link of `libnitro` for `TARGET=host32`, then the vendored tests one by one.
+`tools/hgss_nitro.py` implements the design below and keeps the vendored Makefiles unchanged:
+
+- a shim tree under the git-ignored `build/hgss-sdk` (a `libraries/hgss` symlink to
+  `build/upstream/lib/NitroSDK/src`, a filtered include directory with only `nitro*`/`nnsys*`/`cw*`
+  from `lib/include`, and a stand-in `gen_fx_const.py` that copies the generated header);
+- command-line overrides `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, `ARM7_SOUND_SRCS=` (empty) and an
+  optional private `OUT=`;
+- `hgss/compat/include` is on the include path for HGSS names of Platinum headers. It is empty today
+  (only `.gitkeep`); writing it is the next task.
+
+The first gate is a link of `libnitro` for `TARGET=host32`, then the vendored tests one by one. The
+current error map is above and in [docs/progress/STATE.md](progress/STATE.md).

@@ -42,6 +42,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **Co-Authored-By.** The commit trailer that [CONTRIBUTING.md](../../CONTRIBUTING.md) asks for on commits written with AI help. See [Contributing](Contributing.md).
 
+**Compat header.** A small header in `hgss/compat/include/` that gives the port layer the name HGSS uses (or lacks) for something the Platinum code includes, without editing the vendored file. The directory is on the `hgss_nitro.py` include path; it is still empty ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
+
 ## D
 
 **Data pack.** The file the port reads instead of the ROM. The builder makes it from the user's own `.nds`, and it is never committed. See **pak**.
@@ -90,9 +92,13 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **HBlank.** The horizontal blanking event, which fires once per scanline. The game uses it for per-line effects such as wavy screens and window wipes ([gameplan.md](../../gameplan.md), Phase 6d).
 
+**host32.** The 32-bit host build target (`-m32 -malign-double`). It keeps pointers 4 bytes and, with patch 1001, makes struct layouts match the DS. The 64-bit `host` target is not supported by the memory-map design ([Build-Reference](Build-Reference.md#5-compiler-flags-and-abi-why-they-matter)).
+
+**hgss_nitro.py.** `tools/hgss_nitro.py`, which builds the vendored port layer against HGSS's SDK through a shim and make overrides ([Tools-Reference](Tools-Reference.md)).
+
 **HeartGold (HG) and SoulSilver (SS).** The two versions of the game. The US ROMs are the matching targets: HG `4fcded0e…`, SS `f8dc38ea…` ([docs/BASE.md](../BASE.md)).
 
-**HW_ addresses.** The SDK's macros for hardware register and memory addresses. For example, `HW_IOREG` is `0x04000000` in HGSS's headers. The port's remap of these is not done yet ([docs/port-wiring.md](../port-wiring.md)).
+**HW_ addresses.** The SDK's macros for hardware register and memory addresses. In HGSS's headers `HW_IOREG` is `0x04000000`, and the port's patches 1301/1302 redefine those macros to point at the port's arrays (an expression, `(u32)array + offset`), at the DS sizes and offsets ([docs/port-wiring.md](../port-wiring.md); [Patch-Stack](Patch-Stack.md)).
 
 ## I
 
@@ -183,6 +189,10 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **SDK_PORT_3DS.** The macro that selects port-only code in the SDK patches and the game patches. The DS build never defines it, so the MWCC build compiles the original text ([Patch-Stack](Patch-Stack.md)).
 
 **SDK_CW and __MWERKS__.** The macros Platinum's patches use to detect MWCC. The HGSS patches use `SDK_PORT_3DS` instead ([patches/NitroSDK/0101](../../patches/NitroSDK/) message).
+
+**Shim (SDK shim).** The tree under `build/hgss-sdk` that `tools/hgss_nitro.py` creates: a `libraries/hgss` symlink to HGSS's SDK sources, a filtered include directory, and a stand-in `gen_fx_const.py`. It lets the vendored Makefiles build HGSS's SDK without being edited ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired-and-why-it-fails-today)).
+
+**Survey.** A progress measure that counts how many files parse or compile, not a gate: `tools/sdk_compile_survey.py` (SDK) and `tools/port_compile_survey.py` (port layer) ([Tools-Reference](Tools-Reference.md)).
 
 **Save mirror.** One of the two `0x40000` halves of the 524,288-byte save image. The game writes each chunk into both mirrors ([Save-Compatibility](Save-Compatibility.md)).
 
