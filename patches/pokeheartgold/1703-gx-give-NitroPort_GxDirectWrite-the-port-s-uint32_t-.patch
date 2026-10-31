@@ -1,0 +1,72 @@
+From bf2cf9c81e8809cbf86afff5f13a2b392bef1990 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 21:56:28 +0000
+Subject: [PATCH 1703/1703] gx: give NitroPort_GxDirectWrite the port's
+ uint32_t parameter type (SDK_PORT_3DS)
+
+Patch 1402 declared NitroPort_GxDirectWrite(int, unsigned int) in
+lib/include/nitro/gx/g3imm.h and patch 0604 repeated it in
+lib/NitroSDK/src/gx/g3imm.c. 3ds_port/nitro/include/nitro_port_gx3d.h (which
+must stay byte-identical to platinum.lock) declares it as uint32_t.
+
+That is the same type on a 32-bit x86 host, but on devkitARM's newlib
+uint32_t is unsigned long, so every file that includes both headers fails
+with "conflicting types for NitroPort_GxDirectWrite; have void(int,
+uint32_t) {aka void(int, long unsigned int)}" and the 3DS library cannot
+build (mi_memory.c, port_gx3d_raster.c, ...).
+
+Under SDK_PORT_3DS both declarations now use uint32_t, the port's own type.
+The header/c source blocks are already inside #ifdef SDK_PORT_3DS, so
+without the macro the preprocessed output is byte-identical:
+
+  gcc-10 -E -P -DSDK_ARM9 -DSDK_CODE_ARM -DSDK_FINALROM -DNNS_FINALROM \
+      <includes> lib/NitroSDK/src/gx/g3imm.c   -> 119955 bytes, empty diff
+      <includes> lib/include/nitro/gx/g3imm.h  ->  15044 bytes, empty diff
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/gx/g3imm.c  |  6 ++++--
+ lib/include/nitro/gx/g3imm.h | 10 ++++++----
+ 2 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/lib/NitroSDK/src/gx/g3imm.c b/lib/NitroSDK/src/gx/g3imm.c
+index 26aaefc..af4d919 100644
+--- a/lib/NitroSDK/src/gx/g3imm.c
++++ b/lib/NitroSDK/src/gx/g3imm.c
+@@ -2,8 +2,10 @@
+ #include <nitro/code32.h>
+ #ifdef SDK_PORT_3DS
+ /* The 3DS has no DS geometry command FIFO. Send matrix words to the port geometry
+- * engine one at a time (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0024). */
+-void NitroPort_GxDirectWrite(int opcode, unsigned int parameter);
++ * engine one at a time (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0024).
++ * uint32_t matches the header and the port declaration (unsigned long on ARM). */
++#include <stdint.h>
++void NitroPort_GxDirectWrite(int opcode, uint32_t parameter);
+ #endif
+ 
+ 
+diff --git a/lib/include/nitro/gx/g3imm.h b/lib/include/nitro/gx/g3imm.h
+index c471f80..65d0dde 100644
+--- a/lib/include/nitro/gx/g3imm.h
++++ b/lib/include/nitro/gx/g3imm.h
+@@ -6,10 +6,12 @@
+ #include <nitro/gx/g3.h>
+ #ifdef SDK_PORT_3DS
+ /* The 3DS has no DS geometry command ports. Model their write side effects
+- * (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0024). unsigned int is
+- * uint32_t on every target here, matching the port declaration exactly (u32 is
+- * unsigned long under these headers and would conflict where both show). */
+-void NitroPort_GxDirectWrite(int opcode, unsigned int parameter);
++ * (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0024). uint32_t is the
++ * type the port header declares: unsigned long on devkitARM's newlib and
++ * unsigned int on a 32-bit x86 host, so plain `unsigned int` conflicts on the
++ * 3DS, where 3ds_port/nitro/include/nitro_port_gx3d.h says uint32_t. */
++#include <stdint.h>
++void NitroPort_GxDirectWrite(int opcode, uint32_t parameter);
+ #endif
+ 
+ 
+-- 
+2.43.0
+
