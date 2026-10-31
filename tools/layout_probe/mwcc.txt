@@ -1,0 +1,804 @@
+SysInfo 92
+SysInfo.rtc_offset 0
+SysInfo.mac_address 8
+SysInfo.birth_month 14
+SysInfo.birth_day 15
+SysInfo.rtc_info 16
+SysInfo_RTC 56
+SysInfo_RTC.initialized 0
+SysInfo_RTC.date 4
+RTCDate 16
+RTCDate.year 0
+RTCDate.month 4
+RTCDate.day 8
+RTCDate.week 12
+SysInfo_RTC.time 20
+RTCTime 12
+RTCTime.hour 0
+RTCTime.minute 4
+RTCTime.second 8
+SysInfo_RTC.days_since_nitro_epoch 32
+SysInfo_RTC.seconds_since_nitro_epoch 36
+SysInfo_RTC.seconds_at_game_clear 44
+SysInfo_RTC.penaltyInMinutes 52
+SysInfo.mysteryGiftActive 72
+SysInfo.dwcProfileId 76
+SysInfo.padding_50 80
+PLAYERDATA 44
+PLAYERDATA.options 0
+Options 2
+PLAYERDATA.profile 4
+PlayerProfile 32
+PlayerProfile.name 0
+PlayerProfile.id 16
+PlayerProfile.money 20
+PlayerProfile.gender 24
+PlayerProfile.language 25
+PlayerProfile.johtoBadges 26
+PlayerProfile.avatar 27
+PlayerProfile.version 28
+PlayerProfile.dummy 30
+PlayerProfile.kantoBadges 31
+PLAYERDATA.coins 36
+PLAYERDATA.igt 38
+IGT 4
+IGT.hours 0
+IGT.minutes 2
+IGT.seconds 3
+Party 1456
+Party.core 0
+PartyCore 1424
+PartyCore.maxCount 0
+PartyCore.curCount 4
+PartyCore.mons 8
+Party.extra 1424
+PartyExtra 30
+PartyExtra.aprijuiceModifiers 0
+struct PartyExtraSub 5
+struct PartyExtraSub.stats 0
+Bag 1948
+Bag.items 0
+struct ItemSlot 4
+struct ItemSlot.id 0
+struct ItemSlot.quantity 2
+Bag.keyItems 660
+Bag.TMsHMs 860
+Bag.mail 1264
+Bag.medicine 1312
+Bag.berries 1472
+Bag.balls 1728
+Bag.battleItems 1824
+Bag.registeredItems 1944
+SaveVarsFlags 1100
+SaveVarsFlags.vars 0
+SaveVarsFlags.flags 736
+Pokedex 832
+Pokedex.magic 0
+Pokedex.caughtSpecies 4
+Pokedex.seenSpecies 68
+Pokedex.seenGenders 132
+Pokedex.spindaPersonality 260
+Pokedex.shellosFormOrder 264
+Pokedex.gastrodonFormOrder 265
+Pokedex.burmyFormOrder 266
+Pokedex.wormadamFormOrder 267
+Pokedex.unownSeenOrder 268
+Pokedex.unownCaughtOrder 296
+Pokedex.caughtLanguages 324
+Pokedex.canDetectForms 820
+Pokedex.enabledInternational 821
+Pokedex.dexEnabled 822
+Pokedex.nationalDex 823
+Pokedex.rotomFormOrder 824
+Pokedex.shayminFormOrder 828
+Pokedex.giratinaFormOrder 829
+Pokedex.pichuFormOrder 830
+Pokedex.dummy 831
+Daycare 480
+Daycare.mons 0
+struct DaycareMon 236
+struct DaycareMon.mon 0
+BoxPokemon 136
+BoxPokemon.personality 0
+BoxPokemon.checksum 6
+BoxPokemon.dataBlocks 8
+struct DaycareMon.mail 136
+DaycareMail 96
+DaycareMail.mail 0
+Mail 56
+Mail.author_otId 0
+Mail.author_gender 4
+Mail.author_language 5
+Mail.author_version 6
+Mail.mail_type 7
+Mail.author_name 8
+Mail.mon_icons 24
+union MailPatternData 2
+union MailPatternData.raw 0
+Mail.form_flags 30
+Mail.messages 32
+struct MailMessage 8
+struct MailMessage.msg_bank 0
+struct MailMessage.msg_no 2
+struct MailMessage.fields 4
+DaycareMail.ot_name 56
+DaycareMail.nickname 72
+DaycareMail.padding_5E 94
+struct DaycareMon.steps 232
+Daycare.egg_pid 472
+Daycare.egg_cycles 476
+Daycare.padding_1DD 477
+SavePalPad 136
+SavePalPad.name 0
+SavePalPad.otid 16
+SavePalPad.language 20
+SavePalPad.version 21
+SavePalPad.gender 22
+SavePalPad.padding_17 23
+SavePalPad.friendOtIds 24
+SavePalPad.friendVersions 88
+SavePalPad.friendLanguages 104
+SavePalPad.friendGenders 120
+SAVE_MISC_DATA 736
+SAVE_MISC_DATA.apricorn_trees 0
+struct APRICORN_TREE 4
+struct APRICORN_TREE.hasApricorn 0
+struct APRICORN_TREE.unk_1 1
+struct APRICORN_TREE.unk_2 2
+SAVE_MISC_DATA.berry_pots 512
+struct BerryPot 12
+struct BerryPot.berryId 0
+struct BerryPot.growthStage 1
+struct BerryPot.minutesToNextStage 2
+struct BerryPot.drainMinutes 4
+struct BerryPot.yield 6
+struct BerryPot.regrowthCount 8
+struct BerryPot.moisture 9
+struct BerryPot.health 10
+struct BerryPot.mulch 11
+SAVE_MISC_DATA.berry_datetime 560
+struct GF_RTC_DateTime 28
+struct GF_RTC_DateTime.date 0
+struct GF_RTC_DateTime.time 16
+SAVE_MISC_DATA.gymmick 588
+Gymmick 36
+Gymmick.type 0
+Gymmick.data 4
+GymmickUnion 32
+GymmickUnion.raw 0
+GymmickUnion.ecruteak 0
+GymmickUnion.cianwood 0
+GymmickUnion.vermilion 0
+GymmickUnion.violet 0
+GymmickUnion.azalea 0
+GymmickUnion.blackthorn 0
+GymmickUnion.fuchsia 0
+GymmickUnion.viridian 0
+GymmickUnion.sinjoh 0
+SAVE_MISC_DATA.rivalName 624
+SAVE_MISC_DATA.phoneRecentCallers 640
+SAVE_MISC_DATA.filler_0288 648
+SAVE_MISC_DATA.favoriteMonSpecies 664
+SAVE_MISC_DATA.filer_029C 668
+SAVE_MISC_DATA.battleGreetingEC 672
+SAVE_MISC_DATA.extraChunkKeys 680
+SAVE_MISC_DATA.extraChunkLastSlots 720
+SAVE_MISC_DATA.dummy_02D5 725
+SAVE_MISC_DATA.togepiEggPersonality 728
+SAVE_MISC_DATA.togepiEggGender 732
+SAVE_MISC_DATA.dummy_02DD 733
+Save_LinkBattleRuleset 32
+Save_LinkBattleRuleset.rules 0
+struct LinkBattleRuleset 32
+struct LinkBattleRuleset.name 0
+struct LinkBattleRuleset.totalLevel 24
+struct LinkBattleRuleset.partyCount 26
+struct LinkBattleRuleset.maxLevel 27
+struct LinkBattleRuleset.heightLimit 28
+struct LinkBattleRuleset.weightLimit 29
+SaveFashionData 2100
+SaveFashionData.entries 0
+struct SaveFashionDataSub 116
+struct SaveFashionDataSub.magic 0
+struct SaveFashionDataSub.personality 4
+struct SaveFashionDataSub.otId 8
+struct SaveFashionDataSub.species 12
+struct SaveFashionDataSub.nickname 14
+struct SaveFashionDataSub.secondText 36
+struct SaveFashionDataSub.z 52
+struct SaveFashionDataSub.x 53
+struct SaveFashionDataSub.y 54
+struct SaveFashionDataSub.form 55
+struct SaveFashionDataSub.secondTextGender 56
+struct SaveFashionDataSub.padding_39 57
+struct SaveFashionDataSub.itemMask 60
+struct SaveFashionDataSub.mailMessage 64
+struct SaveFashionDataSub.items 72
+struct SaveFashionDataSub.backdrop 112
+struct SaveFashionDataSub.language 113
+struct SaveFashionDataSub.padding_72 114
+SaveFashionData.largeEntries 1276
+struct SaveFashionDataSub3FC 152
+struct SaveFashionDataSub3FC.filler_00 0
+SaveFashionData.fashionCase 2036
+FashionCase 64
+FashionCase.accessories 0
+FashionCase.wallpaperOrder 40
+FashionCase.padding_3C 60
+Mailbox 1120
+Mailbox.msgs 0
+SAV_FRIEND_GRP 264
+SAV_FRIEND_GRP.groups 0
+struct FriendGroup 44
+struct FriendGroup.groupName 0
+struct FriendGroup.leaderName 16
+struct FriendGroup.leaderGender 32
+struct FriendGroup.language 33
+struct FriendGroup.id 36
+struct FriendGroup.seed 40
+struct SaveTrainerCard 1568
+struct SaveTrainerCard.badgeShininess 0
+struct SaveTrainerCard.signaturePointData 32
+SealCase 368
+SealCase.capsules 0
+struct CAPSULE 24
+struct CAPSULE.seals 0
+struct SEAL 3
+struct SEAL.kind 0
+struct SEAL.x 1
+struct SEAL.y 2
+SealCase.inventory 288
+SEALBAG 80
+SEALBAG.seals 0
+SOUND_CHATOT 1004
+SOUND_CHATOT.exists 0
+SOUND_CHATOT.data 4
+FrontierSave 5672
+FrontierSave.stats 0
+FrontierSave.rowStats 224
+FrontierSave.filler_8E0 2272
+SaveSpecialRibbons 14
+SaveSpecialRibbons.ribbons 0
+RoamerSaveData 104
+RoamerSaveData.rand 0
+RoamerSaveData.playerLocationHistory 8
+RoamerSaveData.data 16
+struct Roamer 20
+struct Roamer.met_location 0
+struct Roamer.ivs 4
+struct Roamer.personality 8
+struct Roamer.species 12
+struct Roamer.hp 14
+struct Roamer.level 16
+struct Roamer.status 17
+struct Roamer.active 18
+struct Roamer.dummy 19
+RoamerSaveData.locations 96
+RoamerSaveData.outbreak 100
+RoamerSaveData.repelSteps 101
+RoamerSaveData.unk_66 102
+RoamerSaveData.flutePlayed 103
+GtsSave 248
+GtsSave.storedMon 0
+GtsSave.hasStoredMon 236
+GtsSave.storedMonBox 238
+GtsSave.depositDate 240
+GtsSave.tradeDate 244
+SaveBlock23 3016
+SaveBlock23.filler_000 0
+SaveBlock23.list0 12
+SaveBlock23.list1 204
+SaveBlock23.list2 396
+SaveBlock23.filler_24C 588
+MysteryGiftSave 5760
+MysteryGiftSave.receivedFlags 0
+MysteryGiftSave.gifts 256
+MysteryGiftSave.cards 2336
+MysteryGiftSave.specialWonderCard 4904
+WonderCard 856
+WonderCard.tag 0
+WonderCard.flag 2
+WonderCard.data 4
+MysteryGiftData 256
+MysteryGiftData.pokemon 0
+MysteryGiftPokemonTag 252
+MysteryGiftPokemonTag.fixedOT 0
+MysteryGiftPokemonTag.mon 4
+Pokemon 236
+Pokemon.box 0
+Pokemon.party 136
+PartyPokemon 100
+PartyPokemon.status 0
+PartyPokemon.level 4
+PartyPokemon.ballCapsuleID 5
+PartyPokemon.hp 6
+PartyPokemon.maxHP 8
+PartyPokemon.atk 10
+PartyPokemon.def 12
+PartyPokemon.speed 14
+PartyPokemon.spatk 16
+PartyPokemon.spdef 18
+PartyPokemon.mail 20
+PartyPokemon.sealCoords 76
+MysteryGiftPokemonTag.ribbons 240
+MysteryGiftData.egg 0
+MysteryGiftData.item 0
+MysteryGiftData.ruleset 0
+MysteryGiftData.baseDecoration 0
+MysteryGiftData.monDecoration 0
+MysteryGiftMonDecorationTag 8
+MysteryGiftMonDecorationTag.kind 0
+MysteryGiftMonDecorationTag.id 4
+MysteryGiftData.pokewalkerCourse 0
+MysteryGiftData.photo 0
+Photo 132
+Photo.filler_0 0
+Photo.filler_5 5
+Photo.numMons 7
+Photo.playerName 8
+Photo.leadMonNick 24
+Photo.avatarStateBak 48
+Photo.mapId 50
+Photo.x 52
+Photo.y 54
+Photo.date 56
+Photo.hour 60
+Photo.min 62
+Photo.hiddenPropModels 64
+Photo.subjectSpriteId 68
+Photo.unk_46 70
+Photo.cameraParam 72
+PhotoCameraParam 36
+PhotoCameraParam.distance 0
+PhotoCameraParam.angle 4
+CameraAngle 8
+CameraAngle.x 0
+CameraAngle.y 2
+CameraAngle.z 4
+CameraAngle.unused 6
+PhotoCameraParam.perspectiveType 12
+PhotoCameraParam.perspective 14
+PhotoCameraParam.unk_10 16
+PhotoCameraParam.lookAt 24
+VecFx32 12
+VecFx32.x 0
+VecFx32.y 4
+VecFx32.z 8
+Photo.party 108
+struct PhotoMon 4
+struct PhotoMon.species 0
+struct PhotoMon.form 2
+MysteryGiftData.raw 0
+WonderCard.info 260
+WonderCardInfo 80
+WonderCardInfo.name 0
+WonderCardInfo.version 72
+WonderCardInfo.id 76
+WonderCard.text 340
+WonderCard.shareMax 840
+WonderCard.monIcon 842
+WonderCard.shareCount 848
+WonderCard.receiveDate 852
+MigratedPokemon 1672
+MigratedPokemon.pokemon 0
+MigratedPokemon.migrationIds 1416
+MigratedPokemon.migrationTimes 1496
+MigratedPokemon.rtcOffsetLow 1656
+MigratedPokemon.rtcOffsetHigh 1660
+MigratedPokemon.macAddress 1664
+PokeathlonSave_FriendshipRecords 40
+PokeathlonSave_FriendshipRecords.friendshipRoomStatues 0
+struct PokeathlonFriendshipRoomStatueData 4
+struct PokeathlonFriendshipRoomStatueData.species 0
+struct PokeathlonFriendshipRoomStatueData.gender 2
+struct PokeathlonFriendshipRoomStatueData.form 3
+PokeathlonSave_FriendshipRecords.unk 12
+SaveEasyChat 8
+SaveEasyChat.greetings 0
+SaveEasyChat.trendy 4
+WiiMessageSave 64
+WiiMessageSave.wiiAddress 0
+WiiMessageSave.unk33 51
+WiiMessageSave.notificationsEnabled 52
+WiiMessageSave.registrationCodePrefix 56
+WiiMessageSave.registrationCode 58
+WiiMessageSave.password 60
+SaveFollowMon 8
+SaveFollowMon.mapNo 0
+SavePokegear 1624
+SavePokegear.lastUsedApp 0
+SavePokegear.mapZoomed 1
+SavePokegear.radioCursorX 2
+SavePokegear.radioCursorY 3
+SavePokegear.mapMarkings 8
+MapMarkingsSaveArray 1200
+MapMarkingsSaveArray.list 0
+struct MapMarkingsSave 12
+struct MapMarkingsSave.mapID 0
+struct MapMarkingsSave.words 4
+SavePokegear.callPersistentState 1208
+PhoneCallPersistentState 340
+PhoneCallPersistentState.rematches 0
+struct PhoneRematch 4
+struct PhoneRematch.giftItem 2
+PhoneCallPersistentState.momGiftQueue 300
+PhoneCallPersistentState.bankBalance 320
+PhoneCallPersistentState.momNormalGiftsGiven 324
+PhoneCallPersistentState.numSafariAreas 327
+PhoneCallPersistentState.safariAreas 328
+PhoneCallPersistentState.callTriggerFlags 334
+PhoneCallPersistentState.filler_150 336
+SavePokegear.phoneContacts 1548
+struct PhoneContact 1
+struct PhoneContact.id 0
+SafariZone 1532
+SafariZone.area_sets 0
+struct SafariZoneAreaSet 744
+struct SafariZoneAreaSet.areas 0
+struct SAFARIZONE_AREA 122
+struct SAFARIZONE_AREA.area_no 0
+struct SAFARIZONE_AREA.active_object_count 1
+struct SAFARIZONE_AREA.objects 2
+struct SAFARIZONE_OBJECT 4
+struct SAFARIZONE_OBJECT.id 0
+struct SAFARIZONE_OBJECT.x 1
+struct SAFARIZONE_OBJECT.y 2
+struct SAFARIZONE_OBJECT.z 3
+struct SafariZoneAreaSet.areaLevels 732
+SafariZone.link_leader 1488
+SAFARIZONE_LINKLEADER 40
+SAFARIZONE_LINKLEADER.received_timestamp 0
+SAFARIZONE_LINKLEADER.rtc_offset 8
+SAFARIZONE_LINKLEADER.linked 16
+SAFARIZONE_LINKLEADER.gender 17
+SAFARIZONE_LINKLEADER.language 18
+SAFARIZONE_LINKLEADER.version 19
+SAFARIZONE_LINKLEADER.id 20
+SAFARIZONE_LINKLEADER.name 24
+SafariZone.level 1528
+SafariZone.unlockTime 1530
+PhotoAlbum 4756
+PhotoAlbum.unk_00 0
+PhotoAlbum.photos 4
+PokeathlonSave 2944
+PokeathlonSave.prefix 0
+PokeathlonSavePrefix 716
+PokeathlonSavePrefix.legacy 0
+PokeathlonSavePrefix.nativeHalfwords 0
+PokeathlonSave.recordsSolo 716
+struct Pokeathlon_RecordsSolo 44
+struct Pokeathlon_RecordsSolo.entries 0
+struct Pokeathlon_CourseEntry 8
+struct Pokeathlon_CourseEntry.score 0
+struct Pokeathlon_CourseEntry.mons 2
+struct Pokeathlon_RecordsSolo.timesPlayed 40
+PokeathlonSave.recordsLink 1156
+struct Pokeathlon_RecordsLink 164
+struct Pokeathlon_RecordsLink.entries 0
+struct Pokeathlon_RecordsLink.unk_28 40
+PokeathlonSave.soloEventBestPoints 2796
+PokeathlonSave.statistics 2816
+PokeathlonStatistics 116
+PokeathlonStatistics.playTime 0
+PokeathlonStatistics.coursesJoined 4
+PokeathlonStatistics.courseFirstPlaces 8
+PokeathlonStatistics.courseLastPlaces 12
+PokeathlonStatistics.bonusesEarned 16
+PokeathlonStatistics.monInstructions 20
+PokeathlonStatistics.monFailures 24
+PokeathlonStatistics.monJumps 28
+PokeathlonStatistics.monPointsEarned 32
+PokeathlonStatistics.monTackles 36
+PokeathlonStatistics.monFalls 40
+PokeathlonStatistics.monDashes 44
+PokeathlonStatistics.monSwitches 48
+PokeathlonStatistics.monSelfImpedes 52
+PokeathlonStatistics.linkCoursesJoined 56
+PokeathlonStatistics.linkCourseFirstPlaces 60
+PokeathlonStatistics.linkCourseLastPlaces 64
+PokeathlonStatistics.eventFirstPlaces 68
+PokeathlonStatistics.eventLastPlaces 108
+PokeathlonStatistics.fanCount 112
+PokeathlonSave.athletePoints 2932
+PokeathlonSave.dataCardsBought 2936
+PokeathlonSave.dailyItemsBought 2940
+PokeathlonSave.unk_B7E 2942
+SaveApricornBox 128
+SaveApricornBox.apricorns 0
+SaveApricornBox.kurtQuantity 7
+SaveApricornBox.kurtApricorn 8
+SaveApricornBox.juiceServings 9
+SaveApricornBox.juice 12
+ApricornJuice 8
+ApricornJuice.fanCount 0
+ApricornJuice.mildness 2
+ApricornJuice.flavors 3
+SaveApricornBox.mixStartSteps 20
+SaveApricornBox.juiceAgingSteps 24
+SaveApricornBox.juiceRecords 32
+struct ApricornRecord 32
+struct ApricornRecord.trainerId 0
+struct ApricornRecord.gender 4
+struct ApricornRecord.language 5
+struct ApricornRecord.version 6
+struct ApricornRecord.padding 7
+struct ApricornRecord.name 8
+struct ApricornRecord.data 24
+POKEWALKER 308
+POKEWALKER.strollState 0
+POKEWALKER.unk_002 2
+POKEWALKER.pokemon 4
+POKEWALKER.filler_08C 140
+POKEWALKER.course 248
+POKEWALKER.receivedStarfBerry 250
+POKEWALKER.irClock 252
+POKEWALKER.linkCount 292
+POKEWALKER.filler_126 294
+POKEWALKER.steps 296
+POKEWALKER.watts 300
+POKEWALKER.unlockedCourses 304
+TrainerHouse 3840
+TrainerHouse.sets 0
+struct TrainerHouseSet 384
+struct TrainerHouseSet.trainer 0
+TrainerHouseTrainer 48
+TrainerHouseTrainer.id 0
+TrainerHouseTrainer.sprite 4
+TrainerHouseTrainer.language 5
+TrainerHouseTrainer.version 6
+TrainerHouseTrainer.gender 7
+TrainerHouseTrainer.otName 8
+TrainerHouseTrainer.introMessage 24
+TrainerHouseTrainer.winMessage 32
+TrainerHouseTrainer.loseMessage 40
+struct TrainerHouseSet.party 48
+struct TrainerHouseMon 56
+struct TrainerHouseMon.item 2
+struct TrainerHouseMon.moves 4
+struct TrainerHouseMon.otid 12
+struct TrainerHouseMon.pid 16
+struct TrainerHouseMon.hpEv 24
+struct TrainerHouseMon.atkEv 25
+struct TrainerHouseMon.defEv 26
+struct TrainerHouseMon.spdEv 27
+struct TrainerHouseMon.spAtkEv 28
+struct TrainerHouseMon.spDefEv 29
+struct TrainerHouseMon.ppUp 30
+struct TrainerHouseMon.language 31
+struct TrainerHouseMon.ability 32
+struct TrainerHouseMon.friendship 33
+struct TrainerHouseMon.level 34
+struct TrainerHouseMon.nickname 36
+PCStorage 74492
+PCStorage.boxes 0
+struct PC_Box 4096
+struct PC_Box.mons 0
+struct PC_Box.unk_FF0 4080
+PCStorage.curBox 73728
+PCStorage.boxModifiedFlag 73732
+PCStorage.box_names 73736
+PCStorage.wallpapers 74456
+PCStorage.unlockedWallpapers 74474
+PCStorage.filler_122EB 74475
+HallOfFame 10928
+HallOfFame.parties 0
+struct HOFParty 364
+struct HOFParty.party 0
+struct HOFMon 60
+struct HOFMon.species 0
+struct HOFMon.level 2
+struct HOFMon.form 3
+struct HOFMon.personality 4
+struct HOFMon.otid 8
+struct HOFMon.nickname 12
+struct HOFMon.otname 34
+struct HOFMon.moves 50
+struct HOFMon.padding 58
+struct HOFParty.year 360
+struct HOFParty.month 362
+struct HOFParty.day 363
+HallOfFame.next_record 10920
+HallOfFame.num_total 10924
+struct FrontierSpeciesRecords 2976
+struct FrontierSpeciesRecords.saveKey 0
+struct FrontierSpeciesRecords.stats 4
+struct FrontierSpeciesRecords.padding 2974
+BattleRecord 7504
+BattleRecord.unk_0000 0
+BattleRecord.profile 4
+BattleRecord.header 132
+BattleRecordHeader 100
+BattleRecordHeader.species 0
+BattleRecordHeader.forms 24
+BattleRecordHeader.arg 36
+BattleRecordHeader.type 38
+BattleRecordHeader.sealed 39
+BattleRecordHeader.rules 40
+BattleRecordHeader.magic 72
+BattleRecordHeader.unk_4A 74
+BattleRecordHeader.videoNumber 88
+BattleRecordHeader.crc 96
+BattleRecordHeader.padding 98
+BattleRecord.data 232
+BattleRecordData 7272
+BattleRecordData.flags 0
+BattleRecordData.winFlag 4
+BattleRecordData.trainerId 8
+BattleRecordData.trainer 24
+struct Trainer 52
+struct Trainer.data 0
+struct TrainerData 20
+struct TrainerData.trainerType 0
+struct TrainerData.trainerClass 1
+struct TrainerData.unk_2 2
+struct TrainerData.npoke 3
+struct TrainerData.items 4
+struct TrainerData.aiFlags 12
+struct TrainerData.doubleBattle 16
+struct Trainer.name 20
+struct Trainer.winMessage 36
+struct Trainer.loseMessage 44
+BattleRecordData.battleBg 232
+BattleRecordData.terrain 236
+BattleRecordData.mapSection 240
+BattleRecordData.mapNumber 244
+BattleRecordData.timeOfDay 248
+BattleRecordData.evolutionLocation 252
+BattleRecordData.unk_100 256
+BattleRecordData.metBill 260
+BattleRecordData.caughtBattlerId 264
+BattleRecordData.weatherType 268
+BattleRecordData.levelUpFlag 272
+BattleRecordData.aiFlags 276
+BattleRecordData.battleSpecial 292
+BattleRecordData.safariBalls 296
+BattleRecordData.fixedDamageMovesBanned 300
+BattleRecordData.randSeed 304
+BattleRecordData.positions 308
+BattleRecordData.player 324
+BattleRecordData.unk_146 326
+BattleRecordData.totalTurns 328
+BattleRecordData.chatot 332
+BattleRecordData.commands 336
+BattleRecordData.parties 4432
+struct BattleRecordParty 676
+struct BattleRecordParty.capacity 0
+struct BattleRecordParty.count 2
+struct BattleRecordParty.mons 4
+struct BattleRecordMon 112
+struct BattleRecordMon.personality 0
+struct BattleRecordMon.species 6
+struct BattleRecordMon.heldItem 8
+struct BattleRecordMon.otID 12
+struct BattleRecordMon.exp 16
+struct BattleRecordMon.friendship 20
+struct BattleRecordMon.ability 21
+struct BattleRecordMon.hpEV 22
+struct BattleRecordMon.atkEV 23
+struct BattleRecordMon.defEV 24
+struct BattleRecordMon.speedEV 25
+struct BattleRecordMon.spAtkEV 26
+struct BattleRecordMon.spDefEV 27
+struct BattleRecordMon.moves 28
+struct BattleRecordMon.moveCurrentPPs 36
+struct BattleRecordMon.movePPUps 40
+struct BattleRecordMon.nickname 50
+struct BattleRecordMon.otName 72
+struct BattleRecordMon.pokeball 88
+struct BattleRecordMon.originLanguage 89
+struct BattleRecordMon.status 92
+struct BattleRecordMon.level 96
+struct BattleRecordMon.ballCapsuleID 97
+struct BattleRecordMon.hp 98
+struct BattleRecordMon.maxHP 100
+struct BattleRecordMon.atk 102
+struct BattleRecordMon.def 104
+struct BattleRecordMon.speed 106
+struct BattleRecordMon.spatk 108
+struct BattleRecordMon.spdef 110
+BattleRecordData.profiles 7136
+BattleRecordData.options 7264
+BattleRecordData.magic 7266
+BattleRecordData.crc 7268
+LocalFieldData 128
+LocalFieldData.currentPosition 0
+Location 20
+Location.mapId 0
+Location.warpId 4
+Location.x 8
+Location.y 12
+Location.direction 16
+LocalFieldData.entrancePosition 20
+LocalFieldData.previousPosition 40
+LocalFieldData.dynamicWarp 60
+LocalFieldData.specialSpawn 80
+LocalFieldData.musicId 100
+LocalFieldData.weather 102
+LocalFieldData.lastSpawn 104
+LocalFieldData.cameraType 106
+LocalFieldData.player 108
+struct PlayerSaveData 8
+struct PlayerSaveData.hasRunningShoes 0
+struct PlayerSaveData.runningShoesLock 2
+struct PlayerSaveData.state 4
+LocalFieldData.poisonStepCounter 116
+LocalFieldData.safariStepCounter 118
+LocalFieldData.safariBallCounter 120
+LocalFieldData.filler7A 122
+struct SavedMapObjectList 5120
+struct SavedMapObjectList.subs 0
+struct SavedMapObject 80
+struct SavedMapObject.flags 0
+struct SavedMapObject.flags2 4
+struct SavedMapObject.objId 8
+struct SavedMapObject.movement 9
+struct SavedMapObject.xRange 10
+struct SavedMapObject.yRange 11
+struct SavedMapObject.initialFacing 12
+struct SavedMapObject.currentFacing 13
+struct SavedMapObject.nextFacing 14
+struct SavedMapObject.mapId 16
+struct SavedMapObject.spriteId 18
+struct SavedMapObject.type 20
+struct SavedMapObject.eventFlag 22
+struct SavedMapObject.script 24
+struct SavedMapObject.param 26
+struct SavedMapObject.initialX 32
+struct SavedMapObject.initialY 34
+struct SavedMapObject.initialZ 36
+struct SavedMapObject.currentX 38
+struct SavedMapObject.currentY 40
+struct SavedMapObject.currentZ 42
+struct SavedMapObject.vecY 44
+struct SavedMapObject.movementData 48
+struct SavedMapObject.behaviorData 64
+GameStats 448
+GameStats.statsWords 0
+GameStats.statsHalf 288
+GameStats.dummy 442
+GameStats.checksum 444
+GameStats.encryptionKey 446
+SaveRankings 3744
+SaveRankings.array 0
+struct SaveRankingsEntry 24
+struct SaveRankingsEntry.groupId 0
+struct SaveRankingsEntry.stat 4
+struct SaveRankingsEntry.playerName 8
+FriendRoster 2240
+FriendRoster.header 0
+W41287Account 64
+W41287Account.bytes 0
+W41287Account.fields 0
+FriendRoster.friendData 64
+struct DwcAccData 12
+struct DwcAccData.flags 0
+struct DwcAccData.low 4
+struct DwcAccData.high 8
+FriendRoster.roster 448
+FriendEntryArray 1792
+FriendEntryArray.entries 0
+struct FriendEntry 56
+struct FriendEntry.groupName 0
+struct FriendEntry.playerName 16
+struct FriendEntry.trainerId 32
+struct FriendEntry.wins 36
+struct FriendEntry.losses 38
+struct FriendEntry.trades 40
+struct FriendEntry.year 42
+struct FriendEntry.month 44
+struct FriendEntry.day 45
+struct FriendEntry.gender 46
+struct FriendEntry.avatar 47
+struct FriendEntry.poffinSessions 48
+struct FriendEntry.plazaGame0Plays 50
+struct FriendEntry.plazaGame1Plays 52
+struct FriendEntry.plazaGame2Plays 54
+SaveWiFiHistory 4088
+SaveWiFiHistory.unk_000 0
+SaveWiFiHistory.seenNotJapanese 4
+SaveWiFiHistory.country 5
+SaveWiFiHistory.region 6
+SaveWiFiHistory.seenLocations 7
+PlazaSurveySave 8
+PlazaSurveySave.surveyId 0
+PlazaSurveySave.answer 4

@@ -1,0 +1,53 @@
+From 91cf01549a89b1ca74cc58526a55913a9368a19b Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 03:40:29 +0000
+Subject: [PATCH] types: 64-bit integers 4-byte aligned, as on the DS
+ (SDK_PORT_3DS)
+
+MWCC lays out u64/s64 inside structs with 4-byte alignment (the old ARM ABI).
+GCC's ARM EABI, and GCC with -malign-double, align them to 8, which moves the
+fields after one and pads every struct that holds one.
+
+Measured with tools/layout_probe (the same 702 sizeof/offsetof values, compiled
+by MWCC 2.0/sp2p2 under Wine and by GCC) on the save-chunk root types of the
+pinned decomp: GCC -m32 with 4-byte u64 matches MWCC in all 702 values; devkitARM
+GCC and GCC -m32 -malign-double differ in 55, in POKEWALKER (irClock 252 vs 256,
+linkCount, steps, watts, unlockedCourses), PCStorage (74492 vs 74496) and
+BattleRecord (7504 vs 7512; header, data). Those structs are in the save, so the
+unpatched build would read and write a different save layout.
+
+u64 and s64 are declared aligned(4) under SDK_PORT_3DS, as in
+pokeplatinum-3ds NitroSDK 0016. The DS build never defines SDK_PORT_3DS, so its
+text is unchanged. lib/include/nitro/types.h is the only definition site in
+lib/include; vu64/vs64/REGType64 are typedefs of these and follow.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/include/nitro/types.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/lib/include/nitro/types.h b/lib/include/nitro/types.h
+index a821147..5e7136b 100644
+--- a/lib/include/nitro/types.h
++++ b/lib/include/nitro/types.h
+@@ -10,8 +10,17 @@ typedef signed char s8;
+ typedef signed short int s16;
+ typedef signed long s32;
+ 
++#ifdef SDK_PORT_3DS
++// 4-byte aligned, as the DS's compiler laid them out (the old ARM ABI, with MWCC). GCC's ARM EABI and
++// -malign-double align 64-bit integers to 8, which moves the fields after one and pads every struct that
++// holds one; for the save data that changes sizes and offsets (POKEWALKER, PCStorage, BattleRecord;
++// tools/layout_probe). A smaller alignment on a typedef is what GCC allows for this.
++typedef unsigned long long int u64 __attribute__((aligned(4)));
++typedef signed long long int s64 __attribute__((aligned(4)));
++#else
+ typedef unsigned long long int u64;
+ typedef signed long long int s64;
++#endif
+ 
+ typedef volatile u8 vu8;
+ typedef volatile u16 vu16;
+-- 
+2.43.0
+

@@ -94,6 +94,7 @@ def cmd_probe(obj, out, names_out):
             by_tag[("struct " if d.tag == "DW_TAG_structure_type" else "union ") + n] = d
 
     spelled = {}
+    skipped = []
     entries = []  # (label, c_expr)
 
     def visit(die, spelling):
@@ -134,8 +135,12 @@ def cmd_probe(obj, out, names_out):
             tgt, _ = strip(die, dies)
         else:
             tgt = by_tag.get(root)
-        if tgt is None or tgt.tag not in ("DW_TAG_structure_type", "DW_TAG_union_type"):
-            sys.exit(f"root type {root!r} is not a struct/union in {obj}")
+        if tgt is None or tgt.tag not in ("DW_TAG_structure_type", "DW_TAG_union_type") \
+                or "DW_AT_declaration" in tgt.attributes:
+            # Defined only inside its own .c file (or not a struct): a header-only translation
+            # unit cannot see its members. Reported, never silently dropped.
+            skipped.append(root)
+            continue
         visit(tgt, root)
 
     hdr = Path(obj).with_suffix(".c")
@@ -145,7 +150,8 @@ def cmd_probe(obj, out, names_out):
     Path(out).write_text("#include <stddef.h>\n" + "\n".join(includes) + "\n\n"
                          "const unsigned int probe[] = {\n    " + body + "\n};\n")
     Path(names_out).write_text("\n".join(l for l, _ in entries) + "\n")
-    print(f"{len(entries)} probe values")
+    Path(names_out).with_suffix(".skipped").write_text("\n".join(skipped) + ("\n" if skipped else ""))
+    print(f"{len(entries)} probe values; {len(skipped)} root type(s) not visible from headers: {skipped}")
 
 
 if __name__ == "__main__":
