@@ -1,0 +1,118 @@
+From de8deb3da90dc92af31e081c891574b828517871 Mon Sep 17 00:00:00 2001
+From: impl <impl@invalid>
+Date: Sat, 31 Oct 2026 02:30:39 +0000
+Subject: [PATCH] sdk: GCC fixes for os_thread, os_valarm and OSi_AlarmHandler
+ (SDK_PORT_3DS)
+
+Three GCC failures in lib/NitroSDK/src/os, each fixed under SDK_PORT_3DS.
+The MWCC text stays unchanged under #else in every hunk.
+
+1. os_thread.c:69, OSi_InsertLinkToQueue. GCC reports "static declaration
+   of OSi_InsertLinkToQueue follows non-static declaration". The cause is
+   lib/include/nitro/os/thread.h:39, which declares it external. MWCC
+   accepts the mismatch and keeps the definition local: in the DS build
+   os_thread.o has the symbol as a local (t), and main.elf.xMAP lists it as
+   "found in local os_thread.o". Nothing else references it. The GCC branch
+   drops static so the definition matches the header. Only GCC's linkage
+   differs from the DS build.
+
+2. os_valarm.c:142, __declspec(noinline) before OSi_SetNextVAlarm. GCC does
+   not know __declspec. That gives the first error at 143:48, "expected '='
+   ... before '{'", and the other seven parse errors cascade from it. The
+   GCC branch uses __attribute__((noinline)). Same effect, MWCC text
+   unchanged.
+
+3. OSi_AlarmHandler. Two files define it as MWCC asm, "asm void
+   OSi_AlarmHandler(void *arg)": os_alarm.c:151 and
+   os_alarm_irq_handler.c:11. Only os_alarm_irq_handler.c is in the DS ROM:
+   - main.lsf:624 lists lib/NitroSDK/src/os/os_alarm_irq_handler.o. There
+     is no os_alarm.o entry in main.lsf.
+   - tools/alarm-partition/alarm.mk:22 filters os_alarm.o out of ALL_OBJS
+     ("Retire the original mixed producer"). The alarm handler path is
+     os_alarm_before_handler.c and os_alarm_after_handler.c instead.
+   - The heartgold.us link response, build/heartgold.us/main.response:608-610,
+     lists the before, irq and after handler objects and not os_alarm.o.
+     main.elf.xMAP:1247 places OSi_AlarmHandler in os_alarm_irq_handler.o,
+     and main.elf exports it as a global T symbol.
+   The stale os_alarm.o in that build directory is from before the
+   partition; it is not linked. The older build-hg logs compile os_alarm.c,
+   so they predate alarm.mk.
+
+   os_alarm_irq_handler.c gets the C version. It keeps the MWCC asm under
+   #else. The C body is "(void)arg; OSi_ArrangeTimer();". The asm saves
+   r0 and lr, calls OSi_ArrangeTimer and restores them, and the arg is
+   unused, so the two are equivalent. The C body matches the os_alarm.c
+   hunk in pokeplatinum-3ds patches/NitroSDK/0006, which guards with
+   SDK_CW; this patch guards with SDK_PORT_3DS.
+
+   os_alarm.c is not in the DS build, so its asm handler is not changed
+   here. That file still fails to parse under GCC, at os_alarm.c:151.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/os/os_alarm_irq_handler.c | 9 +++++++++
+ src/os/os_thread.c            | 6 ++++++
+ src/os/os_valarm.c            | 4 ++++
+ 3 files changed, 19 insertions(+)
+
+diff --git a/src/os/os_alarm_irq_handler.c b/src/os/os_alarm_irq_handler.c
+index 76de00f..66c989e 100644
+--- a/src/os/os_alarm_irq_handler.c
++++ b/src/os/os_alarm_irq_handler.c
+@@ -8,10 +8,19 @@ void OSi_AlarmHandler(void *arg);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++// Same behaviour as the MWCC asm: r0 and lr are saved, OSi_ArrangeTimer is called, then they are
++// restored and the handler returns. The arg is not used.
++void OSi_AlarmHandler(void *arg) {
++    (void)arg;
++    OSi_ArrangeTimer();
++}
++#else
+ asm void OSi_AlarmHandler(void *arg) {
+     stmfd sp!, {r0, lr}
+     bl OSi_ArrangeTimer
+     ldmfd sp!, {r0, lr}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/os/os_thread.c b/src/os/os_thread.c
+index 5a2f5dd..ffd6ed9 100644
+--- a/src/os/os_thread.c
++++ b/src/os/os_thread.c
+@@ -66,7 +66,13 @@ s32 OSi_GetUnusedThreadId(void) {
+     return OSi_ThreadIdCount;
+ }
+ 
++#ifdef SDK_PORT_3DS
++// lib/include/nitro/os/thread.h declares this with external linkage, and GCC rejects a static
++// definition that follows it. MWCC keeps the definition local, so only the GCC build differs.
++void OSi_InsertLinkToQueue(OSThreadQueue *queue, OSThread *thread) {
++#else
+ static void OSi_InsertLinkToQueue(OSThreadQueue *queue, OSThread *thread) {
++#endif
+     OSThread *next = queue->head;
+     while (next && next->priority <= thread->priority) {
+         if (next == thread) {
+diff --git a/src/os/os_valarm.c b/src/os/os_valarm.c
+index 855dd31..051c8d2 100644
+--- a/src/os/os_valarm.c
++++ b/src/os/os_valarm.c
+@@ -139,7 +139,11 @@ void OS_SetPeriodicVAlarm(OSVAlarm *alarm, s16 count, s16 delay, OSVAlarmHandler
+     OS_RestoreInterrupts(enabled);
+ }
+ 
++#ifdef SDK_PORT_3DS
++__attribute__((noinline))
++#else
+ __declspec(noinline)
++#endif
+ static void OSi_SetNextVAlarm(OSVAlarm *alarm) {
+     OS_SetIrqFunction(OS_IE_V_COUNT, (void(*)())OSi_VAlarmHandler);
+     GX_SetVCountEqVal(alarm->fire);
+-- 
+2.43.0
+
