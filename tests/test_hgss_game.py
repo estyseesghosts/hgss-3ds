@@ -344,6 +344,16 @@ class CommandTests(unittest.TestCase):
         self.assertIn("--cflags", cmd)
         self.assertIn("-Iup/include", cmd)
 
+    def test_asm_command_resolves_overlay_ids_before_cflags(self):
+        cmd = hg.asm_command(Path("/up"), Path("/up/asm/x.s"),
+                             Path("/out/x.o"), "cc", ["-m32"],
+                             Path("/out/gen/overlay_ids.ld"))
+        self.assertEqual(cmd[cmd.index("--overlay-ids") + 1],
+                         "/out/gen/overlay_ids.ld")
+        # s_to_gas' --cflags is an argparse REMAINDER, so the option has to
+        # come before it or it would be passed to the assembler.
+        self.assertLess(cmd.index("--overlay-ids"), cmd.index("--cflags"))
+
     def test_asm_flags_have_no_c_standard(self):
         # include_flags() calls make_shim(), which creates symlinks under
         # hgss_nitro.BUILD; keep them in a temp tree so a test run never

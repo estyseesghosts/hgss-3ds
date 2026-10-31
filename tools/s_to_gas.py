@@ -127,6 +127,16 @@ LINEMARK_RE = re.compile(r'^#\s+\d+\s+"([^"]+)"')
 PUBLIC_RE = re.compile(r"^(\s*)\.public\b")
 TYPE_RE = re.compile(r"^(\s*\.type\s+\S+\s*,\s*)@(\w+)")
 WORD_RE = re.compile(r"^(\s*)\.word\b")
+# `FS_EXTERN_OVERLAY(name)` expands to `.public SDK_OVERLAY_<name>_ID` in the
+# DS build's link script. The port gives each of those a numeric value at
+# assembly time instead (see --overlay-ids): a link-script absolute symbol
+# leaves `R_ARM_ABS32` relocations with a value below the image base, which
+# 3dsxtool rejects ("Relocation to invalid address") because the 3dsx loader
+# would add the load address to an overlay number.
+OVERLAY_DEF_RE = re.compile(r"^\s*SDK_OVERLAY_(\w+)_ID\s*=\s*(\d+)\s*;")
+OVERLAY_REF_RE = re.compile(r"\bSDK_OVERLAY_(\w+)_ID\b")
+OVERLAY_DIRECTIVE_RE = re.compile(
+    r"^\s*\.(?:public|global)\s+SDK_OVERLAY_(\w+)_ID\s*$")
 RODATA_RE = re.compile(r"^\s*\.rodata\s*$")
 MWAS_SECTION_RE = re.compile(
     r"^(\s*)\.section\s+(\S+?)\s*,\s*(\d+)\s*(?:,\s*(\d+)\s*,\s*(\d+))?\s*$"
@@ -268,9 +278,32 @@ def map_section(indent, name, align, stype, flags):
     ]
 
 
-def gas_translate_line(line):
+def load_overlay_ids(path):
+    """Read `SDK_OVERLAY_<name>_ID = <n>;` lines into {name: n}.
+
+    The file is the ld script tools/game_overlays.py writes from main.lsf, so
+    the numbers come from the same source of truth as the DS link order.
+    """
+    ids = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        m = OVERLAY_DEF_RE.match(line)
+        if m:
+            ids[m.group(1)] = int(m.group(2))
+    return ids
+
+
+def gas_translate_line(line, overlay_ids=None):
     """Translate one post-cpp line; return a list of output lines."""
     line = strip_semicolon(line)
+    if overlay_ids:
+        m = OVERLAY_DIRECTIVE_RE.match(line)
+        if m and m.group(1) in overlay_ids:
+            # Drop the declaration: the reference below becomes a number, so
+            # the linker script's absolute symbol is not used at all.
+            return []
+        line = OVERLAY_REF_RE.sub(
+            lambda hit: str(overlay_ids[hit.group(1)])
+            if hit.group(1) in overlay_ids else hit.group(0), line)
     m = PUBLIC_RE.match(line)
     if m:
         line = f"{m.group(1)}.global{line[m.end():]}"
@@ -290,7 +323,7 @@ def gas_translate_line(line):
     return [line.rstrip()]
 
 
-def translate_cpp_output(text):
+def translate_cpp_output(text, overlay_ids=None):
     """Drop C-header lines via cpp linemarkers, then GAS-map the rest."""
     asm_lines = []
     keep = True
@@ -307,7 +340,7 @@ def translate_cpp_output(text):
             asm_lines.append(line)
     out = []
     for line in asm_lines:
-        out.extend(gas_translate_line(line))
+        out.extend(gas_translate_line(line, overlay_ids))
     return "\n".join(out) + "\n"
 
 
@@ -327,7 +360,8 @@ def blank_missing_c_includes(lines, cpp_dirs):
     return out, warnings
 
 
-def convert(src, root, cc="cc", cflags=(), extra_inc_dirs=()):
+def convert(src, root, cc="cc", cflags=(), extra_inc_dirs=(),
+            overlay_ids=None):
     """Run the full MWAS -> GAS pipeline; return (gas_text, warnings)."""
     root = Path(root)
     if not root.is_dir():
@@ -351,7 +385,7 @@ def convert(src, root, cc="cc", cflags=(), extra_inc_dirs=()):
         raise S2GError(
             f"preprocessing {src} failed (exit {proc.returncode}):\n"
             f"{proc.stderr}")
-    return translate_cpp_output(proc.stdout), warnings
+    return translate_cpp_output(proc.stdout, overlay_ids), warnings
 
 
 def assemble(gas_text, output, cc, cflags):
@@ -399,6 +433,12 @@ def build_parser():
                         help="extra compiler flags, passed to both stages; "
                              "must come last on the command line, e.g. "
                              "--cflags -m32 -march=armv6k")
+    parser.add_argument("--overlay-ids", type=Path,
+                        help="ld script with `SDK_OVERLAY_<name>_ID = <n>;` "
+                             "lines (tools/game_overlays.py's output). Each "
+                             "overlay-ID reference is assembled as its number, "
+                             "so the object carries no absolute relocation "
+                             "that 3dsxtool would reject.")
     return parser
 
 
@@ -407,10 +447,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     cflags = split_cflags(args.cflags)
     extra_inc = extract_user_includes(cflags)
+    overlay_ids = load_overlay_ids(args.overlay_ids) if args.overlay_ids else None
     try:
         gas_text, warnings = convert(args.src, args.root, cc=args.cc,
                                      cflags=cflags,
-                                     extra_inc_dirs=extra_inc)
+                                     extra_inc_dirs=extra_inc,
+                                     overlay_ids=overlay_ids)
     except S2GError as exc:
         print(f"s_to_gas: error: {exc}", file=sys.stderr)
         return 1

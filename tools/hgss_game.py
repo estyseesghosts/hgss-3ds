@@ -329,10 +329,14 @@ def compile_command(cc: str, flags: list[str], src: Path, obj: Path,
 
 
 def asm_command(root: Path, src: Path, obj: Path, cc: str,
-                flags: list[str]) -> list[str]:
+                flags: list[str], overlay_ids: Path | None = None) -> list[str]:
     """The tools/s_to_gas.py invocation that assembles one ARM9 .s file."""
-    return [sys.executable, str(TOOLS / "s_to_gas.py"), "--root", str(root),
-            str(src), "-o", str(obj), "--cc", cc, "--cflags", *flags]
+    cmd = [sys.executable, str(TOOLS / "s_to_gas.py"), "--root", str(root),
+           str(src), "-o", str(obj), "--cc", cc]
+    if overlay_ids is not None:
+        cmd += ["--overlay-ids", str(overlay_ids)]
+    cmd += ["--cflags", *flags]
+    return cmd
 
 
 def asm_flags(target: str, root: Path, out: Path) -> list[str]:
@@ -744,7 +748,8 @@ def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
                      sources: list[str], jobs: int, log_dir: Path,
                      keep_going: bool,
                      alias_env: dict[str, str] | None = None,
-                     nm: str | None = None, readelf: str | None = None
+                     nm: str | None = None, readelf: str | None = None,
+                     overlay_ids: Path | None = None
                      ) -> tuple[list[Path], list[tuple[str, int, str]]]:
     """Assemble every .s through tools/s_to_gas.py, then apply any sibling
     .alias-map.json (an .s can own a FUNC alias map too)."""
@@ -754,7 +759,7 @@ def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
     def one(rel: str):
         obj = object_path(out, rel)
         obj.parent.mkdir(parents=True, exist_ok=True)
-        proc = run(asm_command(root, root / rel, obj, cc, flags))
+        proc = run(asm_command(root, root / rel, obj, cc, flags, overlay_ids))
         text = proc.stdout + proc.stderr
         errors = error_count(text)
         if proc.returncode != 0 and errors == 0:
@@ -933,9 +938,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"== assembling ARM9 .s ({len(sources['asm'])} files)", flush=True)
     aflags = asm_flags(args.target, root, out)
+    # The overlay IDs are assembled as numbers (see tools/s_to_gas.py):
+    # a link-script absolute symbol would leave R_ARM_ABS32 relocations with
+    # values below the image base, which 3dsxtool rejects.
     asm_objects, asm_failed = assemble_objects(
         root, tools["cc"], aflags, out, sources["asm"], args.jobs, log_dir,
-        args.keep_going, alias_env, tools["nm"], tools["readelf"])
+        args.keep_going, alias_env, tools["nm"], tools["readelf"],
+        gen / "overlay_ids.ld")
     print(f"   {len(asm_objects)} assembled, {len(asm_failed)} failed")
     if asm_failed:
         print(f"   {sum(e for _, e, _ in asm_failed)} errors in "

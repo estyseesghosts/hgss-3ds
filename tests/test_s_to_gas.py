@@ -135,14 +135,15 @@ class SToGasTests(unittest.TestCase):
         p.write_text(text, encoding="utf-8")
         return p
 
-    def convert(self, src_rel, cflags=()):
+    def convert(self, src_rel, cflags=(), overlay_ids=None):
         gas, warnings = s2g.convert(str(self.root / src_rel),
                                     str(self.root),
                                     cc=self.host_cc[0] if self.host_cc
                                     else "cc",
                                     cflags=list(cflags),
                                     extra_inc_dirs=s2g.extract_user_includes(
-                                        list(cflags)))
+                                        list(cflags)),
+                                    overlay_ids=overlay_ids)
         return gas, warnings
 
     def assemble_all(self, gas):
@@ -299,6 +300,48 @@ class SToGasTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertIn(".global SDK_OVERLAY_OVY_7_ID", gas)
         self.assertNotIn("FSOverlayID", gas)
+
+    def _overlay_fixture(self):
+        self.write("lib/include/nitro/fs/overlay.h",
+                   "#ifndef OVERLAY_H\n#define OVERLAY_H\n"
+                   "#ifdef SDK_ASM\n"
+                   "#define FS_EXTERN_OVERLAY(name) "
+                   ".public SDK_OVERLAY_##name##_ID\n"
+                   "#else\ntypedef unsigned int u32;\n"
+                   "typedef u32 FSOverlayID;\n#endif\n#endif\n")
+        self.write("global.inc",
+                   '#include <nitro/fs/overlay.h>\n'
+                   "FS_EXTERN_OVERLAY(OVY_7)\n")
+        self.write("t.s", '\t.include "global.inc"\n'
+                          "\t.text\nlbl:\n\t.4byte SDK_OVERLAY_OVY_7_ID\n")
+        return self.write("ids.ld",
+                          "/* generated */\nSDK_OVERLAY_field_ID = 1;\n"
+                          "SDK_OVERLAY_OVY_7_ID = 7;\n")
+
+    def test_load_overlay_ids_reads_the_linker_script(self):
+        path = self._overlay_fixture()
+        self.assertEqual(s2g.load_overlay_ids(path),
+                         {"field": 1, "OVY_7": 7})
+
+    def test_overlay_id_reference_becomes_a_number(self):
+        path = self._overlay_fixture()
+        gas, warnings = self.convert("t.s", overlay_ids=s2g.load_overlay_ids(path))
+        self.assertEqual(warnings, [])
+        self.assertIn(".4byte 7", gas)
+        self.assertNotIn("SDK_OVERLAY_OVY_7_ID", gas)
+        for obj in self.assemble_all(gas):
+            undefined = subprocess.run(["nm", "-u", str(obj)],
+                                       capture_output=True, text=True).stdout
+            self.assertNotIn("SDK_OVERLAY", undefined)
+            relocs = subprocess.run(["readelf", "-rW", str(obj)],
+                                    capture_output=True, text=True).stdout
+            self.assertNotIn("SDK_OVERLAY", relocs)
+
+    def test_unknown_overlay_id_is_left_to_the_linker(self):
+        path = self._overlay_fixture()
+        gas, _ = self.convert("t.s", overlay_ids={"field": 1})
+        self.assertIn(".global SDK_OVERLAY_OVY_7_ID", gas)
+        self.assertIn(".4byte SDK_OVERLAY_OVY_7_ID", gas)
 
     # -- end-to-end assembly tests -----------------------------------------
 
