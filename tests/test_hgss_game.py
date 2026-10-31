@@ -1,0 +1,275 @@
+"""Unit tests for tools/hgss_game.py.
+
+Synthetic source lists, flags and directories only: no game data, no
+compiler run, no bootstrapped checkout required.
+"""
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from tools import hgss_game as hg  # noqa: E402
+
+REPO = Path(__file__).resolve().parent.parent
+
+DATA = {
+    "c_sources": ["src/main.c", "src/battle/foo.c"],
+    "cpp_sources": ["src/lobby/ppw_lobby.cpp"],
+    "asm_sources": ["asm/foo_data.s", "lib/asm/spl_data.s"],
+    "port_lib_sources": [
+        "lib/src/nitrocrypto_bn.c",
+        "lib/syscall/src/syscall.c",
+        "lib/NitroSDK/src/os/os_thread.c",
+        "lib/NitroSystem/src/g3d_gecom.c",
+        "lib/MSL_C/src/msl_mem.c",
+        "lib/NitroDWC/src/dwc_main.c",
+        "lib/dsprot/src/dsprot_main.c",
+    ],
+    "overlay_map": [
+        {"kind": "Static", "name": "main", "objects": [
+            {"object": "src/main.o"}, {"object": "src/battle/foo.o"},
+            {"object": "lib/NitroSDK/src/os/os_thread.o"},
+            {"object": "lib/NitroDWC/src/dwc_main.o"},
+            {"object": "lib/MSL_C/asm/MSL_Common_errno.o"},
+        ]},
+        {"kind": "Overlay", "name": "field", "objects": [
+            {"object": "src/field/unlinked.o"},
+            {"object": "lib/NitroDWC/asm/dwc_gamespy_bss.o"},
+        ]},
+    ],
+}
+
+
+class FlagTests(unittest.TestCase):
+    REQUIRED = ["-std=gnu99", "-fgnu89-inline", "-fno-strict-aliasing",
+                "-fno-short-enums", "-fsigned-char", "-fwrapv",
+                "-fno-aggressive-loop-optimizations",
+                "-fno-delete-null-pointer-checks", "-DSDK_PORT_3DS",
+                "-Wall", "-Wuninitialized", "-Wmaybe-uninitialized"]
+
+    def test_host32_flags(self):
+        flags = hg.port_cflags("host32")
+        for want in self.REQUIRED:
+            self.assertIn(want, flags)
+        self.assertIn("-m32", flags)
+        self.assertIn("-malign-double", flags)
+        self.assertNotIn("-march=armv6k", flags)
+        self.assertNotIn("-fno-exceptions", flags)
+
+    def test_3ds_flags(self):
+        flags = hg.port_cflags("3ds")
+        for want in ("-march=armv6k", "-mtune=mpcore", "-mfpu=vfp",
+                     "-mfloat-abi=hard"):
+            self.assertIn(want, flags)
+        self.assertNotIn("-m32", flags)
+
+    def test_cxx_flags(self):
+        flags = hg.port_cflags("host32", cxx=True)
+        self.assertIn("-std=gnu++98", flags)
+        self.assertNotIn("-std=gnu99", flags)
+        self.assertIn("-fno-exceptions", flags)
+        self.assertIn("-fno-rtti", flags)
+
+    def test_unknown_target(self):
+        with self.assertRaises(ValueError):
+            hg.port_cflags("arm7")
+
+
+class IncludeTests(unittest.TestCase):
+    def test_game_includes(self):
+        root = Path("/checkout")
+        flags = hg.hgss_includes(root, Path("/shim"), Path("/out/gen"))
+        self.assertIn("-I/checkout/include", flags)
+        self.assertIn("-I/checkout/include/library", flags)
+        self.assertIn("-I/checkout/files", flags)
+        self.assertIn("-I/checkout/files/msgdata", flags)
+        self.assertIn("-idirafter/checkout/lib/include", flags)
+        self.assertIn(f"-I{REPO / 'hgss' / 'compat' / 'include'}", flags)
+        self.assertIn(f"-I{REPO / '3ds_port' / 'nitro' / 'include'}", flags)
+        self.assertIn(f"-I{REPO / '3ds_port' / 'pak' / 'include'}", flags)
+        self.assertIn("-I/out/gen", flags)
+
+    def test_lib_include_is_after_system_headers(self):
+        # HGSS's lib/include has Metrowerks stdarg.h/stddef.h/string.h; only
+        # -idirafter lets the system headers win while dwc/... still resolves.
+        flags = hg.hgss_includes(Path("/c"), Path("/s"), Path("/g"))
+        self.assertNotIn("-I/c/lib/include", flags)
+        self.assertIn("-idirafter/c/lib/include", flags)
+
+
+class SourceTests(unittest.TestCase):
+    def test_selects_game_and_only_unsupplied_libs(self):
+        got = hg.select_sources(DATA)
+        self.assertEqual(got["c"], ["lib/src/nitrocrypto_bn.c",
+                                    "lib/syscall/src/syscall.c",
+                                    "src/battle/foo.c", "src/main.c"])
+        self.assertEqual(got["cpp"], ["src/lobby/ppw_lobby.cpp"])
+        self.assertEqual(got["asm"], ["asm/foo_data.s", "lib/asm/spl_data.s"])
+
+    def test_object_path_keeps_the_object_name(self):
+        out = Path("/out")
+        self.assertEqual(hg.object_path(out, "src/field/map.c"),
+                         out / "obj" / "src" / "field" / "map.o")
+        self.assertEqual(hg.object_path(out, "asm/foo_data.s"),
+                         out / "obj" / "asm" / "foo_data.o")
+        self.assertEqual(hg.object_path(out, "src/lobby/a.cpp"),
+                         out / "obj" / "src" / "lobby" / "a.o")
+
+
+class LinkSelectionTests(unittest.TestCase):
+    def test_lsf_object_set(self):
+        self.assertEqual(hg.lsf_object_set(DATA), {
+            "src/main.o", "src/battle/foo.o", "src/field/unlinked.o",
+            "lib/NitroSDK/src/os/os_thread.o",
+            "lib/NitroDWC/src/dwc_main.o",
+            "lib/MSL_C/asm/MSL_Common_errno.o",
+            "lib/NitroDWC/asm/dwc_gamespy_bss.o"})
+
+    def test_link_objects_keeps_lsf_objects_but_drops_replaced_libraries(self):
+        out = Path("/out")
+        candidates = [out / "obj" / rel for rel in (
+            "src/main.o", "src/battle/foo.o", "src/not_in_lsf.o",
+            "src/field/unlinked.o",
+            "lib/NitroSDK/src/os/os_thread.o",
+            "lib/NitroDWC/src/dwc_main.o",
+            "lib/NitroDWC/asm/dwc_gamespy_bss.o",
+            "lib/MSL_C/asm/MSL_Common_errno.o")]
+        got = [p.relative_to(out / "obj").as_posix()
+               for p in hg.link_objects(candidates, DATA, out)]
+        self.assertEqual(got, ["src/main.o", "src/battle/foo.o",
+                               "src/field/unlinked.o",
+                               "lib/NitroSDK/src/os/os_thread.o"])
+
+
+class CommandTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+
+    def test_compile_command(self):
+        cmd = hg.compile_command("gcc-10", ["-m32", "-DX"], Path("src/a.c"),
+                                 Path("out/a.o"), "c")
+        self.assertEqual(cmd, ["gcc-10", "-m32", "-DX", "-x", "c", "-c",
+                               "src/a.c", "-o", "out/a.o"])
+
+    def test_asm_command(self):
+        cmd = hg.asm_command(Path("up"), Path("up/asm/a.s"), Path("o/a.o"),
+                             "gcc-10", ["-m32", "-Iup/include"])
+        self.assertIn(str(REPO / "tools" / "s_to_gas.py"), cmd)
+        self.assertIn("--root", cmd)
+        self.assertIn("--cc", cmd)
+        self.assertIn("--cflags", cmd)
+        self.assertIn("-Iup/include", cmd)
+
+    def test_asm_flags_have_no_c_standard(self):
+        flags = hg.asm_flags("host32", Path("/up"), Path("/out"))
+        self.assertNotIn("-std=gnu99", flags)
+        self.assertIn("-DSDK_PORT_3DS", flags)
+        self.assertIn("-m32", flags)
+
+    def test_prepare_writes_overlay_ids_into_out(self):
+        cmd = hg.prepare_command(Path("/up"), Path("/out"))
+        self.assertIn("--root", cmd)
+        self.assertIn("/up", cmd)
+        self.assertIn("/out/gen/overlay_ids.ld", cmd)
+        self.assertIn("/out/gen/overlay_ids.h", cmd)
+
+    def test_overlay_command(self):
+        cmd = hg.overlay_command(Path("/up"), Path("/out"), "objcopy")
+        self.assertIn("--objdir", cmd)
+        self.assertIn("/out/obj", cmd)
+        self.assertIn("--objcopy", cmd)
+        self.assertIn("objcopy", cmd)
+        self.assertIn("/out/gen/overlay_table.c", cmd)
+        self.assertIn("/out/gen/overlay_ids.ld", cmd)
+
+    def test_wifi_stub_command(self):
+        root = self.base / "up"
+        (root / "lib/NitroDWC/include").mkdir(parents=True)
+        (root / "lib/include").mkdir(parents=True)
+        objects = [self.base / "a.o", self.base / "b.o"]
+        cmd = hg.wifi_stub_command("nm", root, objects, self.base / "w.c")
+        self.assertIn("--nm", cmd)
+        self.assertIn("--headers", cmd)
+        self.assertIn("--sources", cmd)
+        # everything after -- is the object list
+        self.assertEqual(cmd[cmd.index("--") + 1:], [str(o) for o in objects])
+        self.assertIn(str(root / "lib/NitroDWC/include"), cmd)
+        self.assertNotIn(str(root / "lib/NitroWiFi/include"), cmd)  # absent
+
+
+class LinkTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "out"
+        self.out.mkdir()
+
+    def make_link(self, target):
+        rsp = self.out / "link.rsp"
+        return hg.link_command(
+            "gcc-10", target,
+            [self.out / "app" / "main_pc.o", self.out / "app" / "heartgold.o"],
+            [self.out / "obj" / "src" / "main.o", self.out / "obj" / "asm" / "a.o"],
+            [self.out / "app" / "wm_stubs.o"],
+            self.out / "gen" / "overlay_table.o",
+            self.out / "gen" / "overlay_ids.ld",
+            [self.out / "sdk" / "libnitrosystem.a", self.out / "sdk" / "libnitro.a"],
+            self.out / "pokeheartgold-pc", rsp), rsp
+
+    def test_host_link(self):
+        cmd, rsp = self.make_link("host32")
+        self.assertEqual(cmd[0], "gcc-10")
+        self.assertIn("-m32", cmd)
+        self.assertIn("-no-pie", cmd)
+        self.assertIn("-pthread", cmd)
+        self.assertIn("-lm", cmd)
+        self.assertIn("-Wl,--gc-sections", cmd)
+        self.assertIn("-Wl,--wrap=ErrorHandling_AssertFail", cmd)
+        self.assertIn("-Wl,--start-group", cmd)
+        self.assertIn("-Wl,--end-group", cmd)
+        self.assertIn(str(self.out / "gen" / "overlay_ids.ld"), cmd)
+        # The response file holds app, then game, then stub objects.
+        lines = rsp.read_text().split()
+        self.assertEqual(lines[:4], [
+            str(self.out / "app" / "main_pc.o"),
+            str(self.out / "app" / "heartgold.o"),
+            str(self.out / "obj" / "src" / "main.o"),
+            str(self.out / "obj" / "asm" / "a.o")])
+        self.assertEqual(lines[-1], str(self.out / "app" / "wm_stubs.o"))
+        # The overlay table is an input after the response file, not in it.
+        self.assertLess(cmd.index(f"@{rsp}"), cmd.index(str(self.out / "gen" / "overlay_table.o")))
+
+    def test_3ds_link_is_static_and_has_no_shell(self):
+        cmd, _ = self.make_link("3ds")
+        self.assertIn("-march=armv6k", cmd)
+        self.assertNotIn("-m32", cmd)
+        self.assertIn("-nostartfiles", cmd)
+        self.assertIn("-Wl,--undefined=Heartgold_Run", cmd)
+        self.assertNotIn("-pthread", cmd)
+
+
+class OutputParsingTests(unittest.TestCase):
+    def test_error_count(self):
+        text = ("a.c:1:1: warning: something\n"
+                "a.c:2:1: error: bad type\n"
+                "a.c:3:1: fatal error: not found\n")
+        self.assertEqual(hg.error_count(text), 2)
+
+    def test_unresolved_symbols_unique_and_ordered(self):
+        text = ("m.o: in function `x':\n"
+                "m.c:(.text+0x1): undefined reference to `GF_Assert'\n"
+                "m.c:(.text+0x2): undefined reference to `Foo_Bar'\n"
+                "n.c:(.text+0x3): undefined reference to `GF_Assert'\n"
+                "ld: something else\n")
+        self.assertEqual(hg.unresolved_symbols(text), ["GF_Assert", "Foo_Bar"])
+
+    def test_no_unresolved(self):
+        self.assertEqual(hg.unresolved_symbols("nothing here\n"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
