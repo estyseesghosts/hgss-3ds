@@ -1,6 +1,7 @@
-# Phase 1 progress (INTERIM, written at a usage-limit checkpoint)
+# Phase 1 progress
 
-Status: **in progress.** Phase 0 is complete (see `phase-0.md`). Nothing below is a final report.
+Status: **partially complete.** The SDK patch stack and the save-layout proof are done and verified; wiring the vendored
+port layer to the HGSS SDK and getting its unit tests green is **not done** (see `docs/port-wiring.md`). Phase 2 not started.
 
 ## How to resume (fresh context)
 
@@ -82,3 +83,41 @@ Caveat: `mi_memory.c` also defines `MI_Copy32B/36B/48B/64B` that the port's `mi_
   caller-side change (Platinum 0024).
 - OS_ReleaseLockID follows the HGSS ARM byte-shift semantics, not Platinum 0015's guard.
 - 37 vs 39 asm files: counts differ by method; the survey (parse failures) is the measure that counts.
+
+## Exit checklist (Phase 1)
+
+| Item | Result |
+| --- | --- |
+| `bootstrap.py` applies all patches cleanly from scratch | **PASS**: 11 patches, `git am`, fails hard on a bad patch (unit-tested); also re-run in a fresh clone in the CI image |
+| `docs/sdk-diff.md` complete | **PARTIAL**: PXI tags, OSSystemWork/SNDSharedWork field lists, G3 opcodes, card backup, `CARD_SpiWait*`, asm inventory done; RTC/TP/PM/MIC payload formats, IRQ/thread struct layouts, NitroSystem detail not compared (the port-wiring review found the PXI encodings differ) |
+| 27 + 5 patches rebased, each with a message | **NOT AS SPECIFIED, by evidence**: none of Platinum's patches applies to HGSS's different SDK tree (`git am` impossible); the triage found 4 trivial / 16 moderate / 3 rewrite / 4 N/A. Done as fresh HGSS patches by function: asm-to-C 0101, 0201, 0301, 0401, 0501, 0801, 0901 (Platinum 0003, 0006, 0008, 0012 equivalents), hooks 0601 (0009, 0017, 0026) and 0501 (0002), `u64` 1001 (0016), NNS 0301 (0001 partly). **Not done:** Platinum 0005 memory map, 0010/0014/0027/0011 overlay + libpak, 0013 timers, 0024/0025 3D command ports, 0018-0023 ARM7 sound (rewrite against `sub/`); NitroSystem 0003/0004/0005 equivalents. |
+| HGSS-only SDK patches added | **PASS** for `CARD_SpiWait*` (0701). Mic PXI not examined. |
+| Layout probe: zero differences, or each explained and fixed | **PASS**: 804 values, 45 save roots; 55 differences found and fixed by patch 1001; 0 remain for host `-m32`, `-m32 -malign-double`, devkitARM |
+| Port unit tests green on `host` (and `host32`) | **FAIL / NOT DONE**: the vendored `3ds_port` suites are not built against HGSS. 26/46 port sources compile; the blockers are documented. What *is* green: 9 SDK host suites in `tests/sdk` + 19 tool tests under `make test` (these are new tests of the patches, not the vendored tests) |
+| `port.yml` passing | **NOT VERIFIED on GitHub** (no remote). A dry run of its exact steps (fresh clone, same image, same `docker run`) passes locally |
+| No game code compiled yet | **PASS**: only lib/ SDK and NitroSystem sources were compiled with GCC; the layout probe includes game *headers* (and 7 save-struct `.c` files, syntax and DWARF only). No game object was linked. |
+
+## DS-side matching (rule 3)
+
+The tree with NitroSDK 0101+0201+0301 and NNS 0301 builds the HeartGold ROM `4fcded0e…` (0 failed checks). A rebuild with
+patches through 0901 is running (`/work/gate-hg.log`); result recorded below when it finished. Patch 1001 is not in
+that run: its text is inside `#ifdef SDK_PORT_3DS` and `gcc -E -P` of `types.h` without the macro is identical to the
+unpatched header (checked), but a full rebuild including it has not been run.
+
+## Deviations from the plan and why
+
+- Platinum's patches are not rebased with `git am` (the SDK trees differ) but redone by function; the patch series is HGSS's
+  own and numbered by area, not 1:1.
+- Agents' commit trailers named the wrong model; normalized to the required `Co-Authored-By` line before committing.
+- `make test` no longer includes the always-failing `port-tests` placeholder; it is its own target so CI does not pretend.
+- The `cp_context` test originally expected GCC's 8-byte-aligned struct sizes; corrected to the DS layout the original asm
+  implies (28/100 bytes), with an overrun guard (commit message explains; it is not a weakened assertion).
+
+## Open questions for you
+
+1. Is it acceptable to continue Phase 1 on the port wiring (compat headers + HGSS PXI decoders + shim + running the vendored
+   tests), or should Phase 1 be closed here with the exit criterion "port unit tests pass" explicitly deferred?
+2. `lib/include/nnsys/g2d/g2d_CellTransferManager.h:24` (missing return type) blocks devkitARM 16 builds of NitroSystem; fix
+   as a pokeheartgold patch (GCC-only fix) or pin an older devkitARM?
+3. Should the port-side fixes (`OS_IrqHandler(0)`, `card_common.h` case, `MIi_CpuClear16` signature) go to the Platinum
+   maintainer as upstream PRs, per the outreach draft, or stay as HGSS-only new files?
