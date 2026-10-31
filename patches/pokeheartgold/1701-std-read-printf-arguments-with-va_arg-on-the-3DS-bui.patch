@@ -1,0 +1,187 @@
+From 37b80955172d8118828b267e9b5bfa60b4efc385 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 21:47:58 +0000
+Subject: [PATCH 1701/1703] std: read printf arguments with va_arg on the 3DS
+ build (SDK_PORT_3DS)
+
+MWCC's va_list is a byte pointer, so std_sprintf walks the argument list
+with `va += 4; width = *(int *)(va - 4)` (and 8 for a 64-bit value) at
+lib/NitroSDK/src/std_sprintf.c:71-257. devkitARM's newlib va_list is an
+opaque struct: `va += 4` is "invalid operands to binary + (have va_list
+and int)" and it stops the 3DS libnitro.a.
+
+Under SDK_PORT_3DS each fetch becomes va_arg with the promoted type the
+DS caller actually passes: int for %d/%i/%c and the `*` width/precision,
+unsigned int for %u/%o/%x/%X, unsigned long long / long long for the
+64-bit forms, u8/u16 or s8/s16 truncated from the int slot for h/hh,
+const char * for %s, void * for %p and s16 */int */s64 * for %n. The
+values, conversions and output are unchanged. The MWCC text stays under
+#else, so without SDK_PORT_3DS the preprocessed file is byte-identical
+(gcc-10 -E -P -DSDK_ARM9 -DSDK_CODE_ARM -DSDK_FINALROM -DNNS_FINALROM,
+same include path: 129890 bytes before and after, empty diff).
+
+Checked by the new tests/sdk/std_sprintf host32 suite: %d %u %s %c %x
+%08x %lld %p and the %n write, with synthetic arguments.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/std_sprintf.c | 64 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/lib/NitroSDK/src/std_sprintf.c b/lib/NitroSDK/src/std_sprintf.c
+index 0345c62..682ad61 100644
+--- a/lib/NitroSDK/src/std_sprintf.c
++++ b/lib/NitroSDK/src/std_sprintf.c
+@@ -7,6 +7,16 @@
+ 
+ // STD_TVSNPrintf: vsnprintf-like formatter of the SDK (also handles two-byte Shift-JIS characters).
+ 
++/*
++ * SDK_PORT_3DS: MWCC's va_list is a byte pointer, so the argument fetches below
++ * advance it by hand and reinterpret the slot. newlib's va_list is an opaque
++ * struct, where `va += 4` does not compile; under SDK_PORT_3DS each fetch uses
++ * va_arg with the promoted type the DS callers actually pass (char/short arrive
++ * as int, u32/s32 as unsigned int/int, 64-bit as unsigned long long/long long,
++ * %s as const char *, %n as the pointer type). The values, conversions and the
++ * output are identical. The MWCC formatter stays untouched below #else.
++ */
++
+ #pragma force_active on
+ 
+ int STD_TVSNPrintf(char *dest, u32 len, const char *format, va_list va) {
+@@ -68,8 +78,12 @@ int STD_TVSNPrintf(char *dest, u32 len, const char *format, va_list va) {
+                 break;
+             }
+             if (c == '*') {
++#ifdef SDK_PORT_3DS
++                width = va_arg(va, int);
++#else
+                 va += 4;
+                 width = *(int *)(va - 4);
++#endif
+                 s++;
+                 if (width < 0) {
+                     width = -width;
+@@ -84,8 +98,12 @@ int STD_TVSNPrintf(char *dest, u32 len, const char *format, va_list va) {
+                 c = *++s;
+                 precision = 0;
+                 if (c == '*') {
++#ifdef SDK_PORT_3DS
++                    precision = va_arg(va, int);
++#else
+                     va += 4;
+                     precision = *(int *)(va - 4);
++#endif
+                     s++;
+                     if (precision < 0) {
+                         precision = -1;
+@@ -138,8 +156,12 @@ int STD_TVSNPrintf(char *dest, u32 len, const char *format, va_list va) {
+                 if (precision >= 0) {
+                     goto put_invalid;
+                 }
++#ifdef SDK_PORT_3DS
++                c = va_arg(va, int);
++#else
+                 va += 4;
+                 c = *(int *)(va - 4);
++#endif
+                 if (flags & 8) {
+                     string_put_char(&w, (char)c);
+                     string_fill_char(&w, ' ', width - 1);
+@@ -152,8 +174,12 @@ int STD_TVSNPrintf(char *dest, u32 len, const char *format, va_list va) {
+             case 's': {
+                 int n = 0;
+                 const char *str;
++#ifdef SDK_PORT_3DS
++                str = va_arg(va, const char *);
++#else
+                 va += 4;
+                 str = *(const char **)(va - 4);
++#endif
+                 if (precision < 0) {
+                     while (str[n] != 0) {
+                         n++;
+@@ -178,14 +204,26 @@ int STD_TVSNPrintf(char *dest, u32 len, const char *format, va_list va) {
+                 int n = w.cursor - w.base;
+                 if (!(flags & 0x100)) {
+                     if (flags & 0x40) {
++#ifdef SDK_PORT_3DS
++                        *va_arg(va, s16 *) = n;
++#else
+                         va += 4;
+                         **(s16 **)(va - 4) = n;
++#endif
+                     } else if (!(flags & 0x80)) {
++#ifdef SDK_PORT_3DS
++                        *va_arg(va, int *) = n;
++#else
+                         va += 4;
+                         **(int **)(va - 4) = n;
++#endif
+                     } else {
++#ifdef SDK_PORT_3DS
++                        *va_arg(va, s64 *) = n;
++#else
+                         va += 4;
+                         **(s64 **)(va - 4) = n;
++#endif
+                     }
+                 }
+                 s++;
+@@ -216,6 +254,19 @@ put_integer:
+                 precision = 1;
+             }
+             if (flags & 0x1000) {
++#ifdef SDK_PORT_3DS
++                if (flags & 0x100) {
++                    value = (u8)va_arg(va, unsigned int);
++                } else if (flags & 0x40) {
++                    value = (u16)va_arg(va, unsigned int);
++                } else if (flags & 0x80) {
++                    value = va_arg(va, unsigned long long);
++                } else if (flags & 4) {
++                    value = (u32)va_arg(va, void *);
++                } else {
++                    value = va_arg(va, unsigned int);
++                }
++#else
+                 if (flags & 0x100) {
+                     va += 4;
+                     value = *(u8 *)(va - 4);
+@@ -229,6 +280,7 @@ put_integer:
+                     va += 4;
+                     value = *(u32 *)(va - 4);
+                 }
++#endif
+                 flags &= ~3;
+                 if (flags & 4) {
+                     if (radix == 16) {
+@@ -243,6 +295,17 @@ put_integer:
+                     }
+                 }
+             } else {
++#ifdef SDK_PORT_3DS
++                if (flags & 0x100) {
++                    value = (u64)(s8)va_arg(va, int);
++                } else if (flags & 0x40) {
++                    value = (u64)(s16)va_arg(va, int);
++                } else if (flags & 0x80) {
++                    value = (u64)va_arg(va, long long);
++                } else {
++                    value = (u64)(s32)va_arg(va, int);
++                }
++#else
+                 if (flags & 0x100) {
+                     va += 4;
+                     value = *(s8 *)(va - 4);
+@@ -256,6 +319,7 @@ put_integer:
+                     va += 4;
+                     value = *(s32 *)(va - 4);
+                 }
++#endif
+                 if ((value >> 32) & 0x80000000) {
+                     value = ~value + 1;
+                     prefix[0] = '-';
+-- 
+2.43.0
+
