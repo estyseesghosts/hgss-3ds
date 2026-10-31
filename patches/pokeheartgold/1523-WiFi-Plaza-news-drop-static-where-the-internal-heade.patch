@@ -1,0 +1,371 @@
+From 724428dc0bf4b629a239bf03e749dadcd67e5199 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 18:57:21 +0000
+Subject: [PATCH] WiFi Plaza news: drop static where the internal header
+ declares the helper
+
+wifi_plaza_internal.h declares the 33 WiFiPlazaNewsSlots_*,
+WiFiPlazaNewsEventList_* and WiFiPlazaNewsEvent_* helpers without static, but
+src/wifi_plaza/wifi_plaza_news.c repeats them as static forward declarations
+(:25-57) and definitions. GCC rejects each with "static declaration ... follows
+non-static declaration" (33 errors); MWCC kept the file-scope symbols local
+and accepted the mismatch. Same fix as 1512: a file-scope macro expands to
+nothing under SDK_PORT_3DS so the definitions match the header, and to static
+on the DS so the original text and linkage are unchanged.
+
+gcc-10 -E -P without SDK_PORT_3DS: byte-identical (425681 bytes both).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/wifi_plaza/wifi_plaza_news.c | 141 ++++++++++++++++---------------
+ 1 file changed, 75 insertions(+), 66 deletions(-)
+
+diff --git a/src/wifi_plaza/wifi_plaza_news.c b/src/wifi_plaza/wifi_plaza_news.c
+index cab7ea0..cfaf1bc 100644
+--- a/src/wifi_plaza/wifi_plaza_news.c
++++ b/src/wifi_plaza/wifi_plaza_news.c
+@@ -10,6 +10,15 @@
+ #include "player_data.h"
+ #include "pm_string.h"
+ 
++// wifi_plaza_internal.h declares these helpers without static; GCC rejects a
++// static definition that follows the non-static declaration. MWCC keeps its
++// file-scope symbols static on the DS.
++#ifdef SDK_PORT_3DS
++#define WIFI_PLAZA_NEWS_FILE_SCOPE
++#else
++#define WIFI_PLAZA_NEWS_FILE_SCOPE static
++#endif
++
+ // The plaza news (shown by the plaza news app): the time the lobby opened, the state of every
+ // lobby slot and a list of events (topics) built from the lobby requests.
+ 
+@@ -22,39 +31,39 @@ static const u16 sWiFiPlazaNewsMinigameResultMsgsOther[4] = { 0, 27, 28, 23 };
+ 
+ static const u32 sWiFiPlazaNewsMinigameEntryRanks[3] = { 4, 3, 2 };
+ 
+-static void WiFiPlazaNewsSlots_Set(WiFiPlazaNewsSlots *slots, int slot, int state, int flags);
+-static void WiFiPlazaNewsSlots_AddPlayer(WiFiPlazaNewsSlots *slots, int slot, int state, int flags);
+-static void WiFiPlazaNewsSlots_RemovePlayer(WiFiPlazaNewsSlots *slots, int slot);
+-static void WiFiPlazaNewsSlots_SetFlags(WiFiPlazaNewsSlots *slots, int slot, int flags);
+-static void WiFiPlazaNewsSlots_SetLastJoined(WiFiPlazaNewsSlots *slots, int slot);
+-static BOOL WiFiPlazaNewsSlots_IsOccupied(WiFiPlazaNewsSlots *slots, int slot);
+-static int WiFiPlazaNewsSlots_GetGender(WiFiPlazaNewsSlots *slots, int slot);
+-static BOOL WiFiPlazaNewsSlots_IsOwn(WiFiPlazaNewsSlots *slots, int slot);
+-static BOOL WiFiPlazaNewsSlots_IsOldest(WiFiPlazaNewsSlots *slots, int slot);
+-static int WiFiPlazaNewsSlots_GetFlags(WiFiPlazaNewsSlots *slots, int slot);
+-static u16 WiFiPlazaNewsSlots_GetChange(WiFiPlazaNewsSlots *slots);
+-static BOOL WiFiPlazaNewsSlots_IsLastJoined(WiFiPlazaNewsSlots *slots, u32 slot);
+-static void WiFiPlazaNewsEventList_RemoveFirst(WiFiPlazaNewsEventList *list);
+-static WiFiPlazaNewsEvent *WiFiPlazaNewsEventList_GetFreeEvent(WiFiPlazaNewsEventList *list, u16 rank);
+-static void WiFiPlazaNewsEvent_InsertAfter(WiFiPlazaNewsEvent *at, WiFiPlazaNewsEvent *event);
+-static void WiFiPlazaNewsEventList_Insert(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event);
+-static void WiFiPlazaNewsEventList_Remove(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event);
+-static void WiFiPlazaNewsEvent_Set(WiFiPlazaNewsEvent *event, u32 a, u32 b, u32 c, const PlayerProfile *player0, const PlayerProfile *player1, const PlayerProfile *player2, const PlayerProfile *player3, u16 slot0, u16 slot1, u16 slot2, u16 slot3, u32 timer, u32 rank, u32 type);
+-static BOOL WiFiPlazaNewsEvent_FormatChat(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatTapToyTrade(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatMinigameEntry(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatFootprintStamp(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatChecking(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatLobbyEventNotice(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatSpecialVisitor(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static BOOL WiFiPlazaNewsEvent_FormatMinigameResult(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
+-static u16 WiFiPlazaNewsEvent_GetChatSlot(WiFiPlazaNewsEvent *event, u32 index);
+-static u16 WiFiPlazaNewsEvent_GetTapToyTradeSlot(WiFiPlazaNewsEvent *event, u32 index);
+-static u16 WiFiPlazaNewsEvent_GetMinigameEntrySlot(WiFiPlazaNewsEvent *event, u32 index);
+-static u16 WiFiPlazaNewsEvent_GetFootprintStampSlot(WiFiPlazaNewsEvent *event, u32 index);
+-static u16 WiFiPlazaNewsEvent_GetCheckingSlot(WiFiPlazaNewsEvent *event, u32 index);
+-static u16 WiFiPlazaNewsEvent_GetLobbyEventNoticeSlot(WiFiPlazaNewsEvent *event, u32 index);
+-static u16 WiFiPlazaNewsEvent_GetSpecialVisitorSlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_Set(WiFiPlazaNewsSlots *slots, int slot, int state, int flags);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_AddPlayer(WiFiPlazaNewsSlots *slots, int slot, int state, int flags);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_RemovePlayer(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_SetFlags(WiFiPlazaNewsSlots *slots, int slot, int flags);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_SetLastJoined(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsOccupied(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE int WiFiPlazaNewsSlots_GetGender(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsOwn(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsOldest(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE int WiFiPlazaNewsSlots_GetFlags(WiFiPlazaNewsSlots *slots, int slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsSlots_GetChange(WiFiPlazaNewsSlots *slots);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsLastJoined(WiFiPlazaNewsSlots *slots, u32 slot);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEventList_RemoveFirst(WiFiPlazaNewsEventList *list);
++WIFI_PLAZA_NEWS_FILE_SCOPE WiFiPlazaNewsEvent *WiFiPlazaNewsEventList_GetFreeEvent(WiFiPlazaNewsEventList *list, u16 rank);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEvent_InsertAfter(WiFiPlazaNewsEvent *at, WiFiPlazaNewsEvent *event);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEventList_Insert(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEventList_Remove(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event);
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEvent_Set(WiFiPlazaNewsEvent *event, u32 a, u32 b, u32 c, const PlayerProfile *player0, const PlayerProfile *player1, const PlayerProfile *player2, const PlayerProfile *player3, u16 slot0, u16 slot1, u16 slot2, u16 slot3, u32 timer, u32 rank, u32 type);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatChat(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatTapToyTrade(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatMinigameEntry(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatFootprintStamp(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatChecking(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatLobbyEventNotice(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatSpecialVisitor(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatMinigameResult(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetChatSlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetTapToyTradeSlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetMinigameEntrySlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetFootprintStampSlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetCheckingSlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetLobbyEventNoticeSlot(WiFiPlazaNewsEvent *event, u32 index);
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetSpecialVisitorSlot(WiFiPlazaNewsEvent *event, u32 index);
+ 
+ u16 (*const gWiFiPlazaNewsEventSlotGetters[9])(WiFiPlazaNewsEvent *event, u32 index) = {
+     WiFiPlazaNewsEvent_GetChatSlot,
+@@ -325,24 +334,24 @@ void WiFiPlazaNewsSlots_Init(WiFiPlazaNewsSlots *slots) {
+     }
+ }
+ 
+-static void WiFiPlazaNewsSlots_Set(WiFiPlazaNewsSlots *slots, int slot, int state, int flags) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_Set(WiFiPlazaNewsSlots *slots, int slot, int state, int flags) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     slots->slots[slot].state = state;
+     slots->slots[slot].flags = flags;
+ }
+ 
+-static void WiFiPlazaNewsSlots_AddPlayer(WiFiPlazaNewsSlots *slots, int slot, int state, int flags) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_AddPlayer(WiFiPlazaNewsSlots *slots, int slot, int state, int flags) {
+     WiFiPlazaNewsSlots_Set(slots, slot, state, flags);
+     WiFiPlazaNewsSlots_SetChange(slots, 1);
+     WiFiPlazaNewsSlots_SetLastJoined(slots, slot);
+ }
+ 
+-static void WiFiPlazaNewsSlots_RemovePlayer(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_RemovePlayer(WiFiPlazaNewsSlots *slots, int slot) {
+     WiFiPlazaNewsSlots_Set(slots, slot, 2, 0);
+     WiFiPlazaNewsSlots_SetChange(slots, 2);
+ }
+ 
+-static void WiFiPlazaNewsSlots_SetFlags(WiFiPlazaNewsSlots *slots, int slot, int flags) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_SetFlags(WiFiPlazaNewsSlots *slots, int slot, int flags) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     slots->slots[slot].flags = flags;
+ }
+@@ -353,43 +362,43 @@ void WiFiPlazaNewsSlots_SetChange(WiFiPlazaNewsSlots *slots, int change) {
+     slots->change = change;
+ }
+ 
+-static void WiFiPlazaNewsSlots_SetLastJoined(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsSlots_SetLastJoined(WiFiPlazaNewsSlots *slots, int slot) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     slots->lastSlot = slot;
+ }
+ 
+-static BOOL WiFiPlazaNewsSlots_IsOccupied(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsOccupied(WiFiPlazaNewsSlots *slots, int slot) {
+     return WiFiPlazaNewsSlots_GetGender(slots, slot) != 2;
+ }
+ 
+-static int WiFiPlazaNewsSlots_GetGender(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE int WiFiPlazaNewsSlots_GetGender(WiFiPlazaNewsSlots *slots, int slot) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     return slots->slots[slot].state;
+ }
+ 
+-static BOOL WiFiPlazaNewsSlots_IsOwn(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsOwn(WiFiPlazaNewsSlots *slots, int slot) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     return (slots->slots[slot].flags & 1) != 0;
+ }
+ 
+-static BOOL WiFiPlazaNewsSlots_IsOldest(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsOldest(WiFiPlazaNewsSlots *slots, int slot) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     return (slots->slots[slot].flags & 2) != 0;
+ }
+ 
+-static int WiFiPlazaNewsSlots_GetFlags(WiFiPlazaNewsSlots *slots, int slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE int WiFiPlazaNewsSlots_GetFlags(WiFiPlazaNewsSlots *slots, int slot) {
+     GF_ASSERT((u32)slot < WIFI_PLAZA_MAX_PLAYERS);
+     return slots->slots[slot].flags;
+ }
+ 
+-static u16 WiFiPlazaNewsSlots_GetChange(WiFiPlazaNewsSlots *slots) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsSlots_GetChange(WiFiPlazaNewsSlots *slots) {
+     return slots->change;
+ }
+ 
+ // The event list of the plaza news: 8 events in a list ordered by rank (head = WiFiPlazaNewsEventList.head); a new
+ // event takes a free one or replaces one of at least its rank.
+ 
+-static BOOL WiFiPlazaNewsSlots_IsLastJoined(WiFiPlazaNewsSlots *slots, u32 slot) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsSlots_IsLastJoined(WiFiPlazaNewsSlots *slots, u32 slot) {
+     GF_ASSERT(slot < WIFI_PLAZA_MAX_PLAYERS);
+     return slots->lastSlot == slot;
+ }
+@@ -435,12 +444,12 @@ void WiFiPlazaNewsEventList_Update(WiFiPlazaNewsEventList *list) {
+ }
+ 
+ // Removes the current event.
+-static void WiFiPlazaNewsEventList_RemoveFirst(WiFiPlazaNewsEventList *list) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEventList_RemoveFirst(WiFiPlazaNewsEventList *list) {
+     WiFiPlazaNewsEventList_Remove(list, list->head.next);
+ }
+ 
+ // A free event, or one of at least rank (taken out of the list); NULL if there is none.
+-static WiFiPlazaNewsEvent *WiFiPlazaNewsEventList_GetFreeEvent(WiFiPlazaNewsEventList *list, u16 rank) {
++WIFI_PLAZA_NEWS_FILE_SCOPE WiFiPlazaNewsEvent *WiFiPlazaNewsEventList_GetFreeEvent(WiFiPlazaNewsEventList *list, u16 rank) {
+     s32 i;
+     WiFiPlazaNewsEvent *event = NULL;
+     for (i = 0; i < 8; i++) {
+@@ -461,7 +470,7 @@ static WiFiPlazaNewsEvent *WiFiPlazaNewsEventList_GetFreeEvent(WiFiPlazaNewsEven
+     return event;
+ }
+ 
+-static void WiFiPlazaNewsEvent_InsertAfter(WiFiPlazaNewsEvent *at, WiFiPlazaNewsEvent *event) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEvent_InsertAfter(WiFiPlazaNewsEvent *at, WiFiPlazaNewsEvent *event) {
+     event->next = at->next;
+     event->prev = at;
+     at->next = event;
+@@ -469,7 +478,7 @@ static void WiFiPlazaNewsEvent_InsertAfter(WiFiPlazaNewsEvent *at, WiFiPlazaNews
+ }
+ 
+ // Inserts the event after the last one of a lower rank.
+-static void WiFiPlazaNewsEventList_Insert(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEventList_Insert(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event) {
+     WiFiPlazaNewsEvent *at = list->head.prev;
+     WiFiPlazaNewsEvent *head = &list->head;
+     if (at != head) {
+@@ -484,14 +493,14 @@ static void WiFiPlazaNewsEventList_Insert(WiFiPlazaNewsEventList *list, WiFiPlaz
+     WiFiPlazaNewsEvent_InsertAfter(at, event);
+ }
+ 
+-static void WiFiPlazaNewsEventList_Remove(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEventList_Remove(WiFiPlazaNewsEventList *list, WiFiPlazaNewsEvent *event) {
+     event->prev->next = event->next;
+     event->next->prev = event->prev;
+     event->prev = NULL;
+     event->next = NULL;
+ }
+ 
+-static void WiFiPlazaNewsEvent_Set(WiFiPlazaNewsEvent *event, u32 a, u32 b, u32 c, const PlayerProfile *player0, const PlayerProfile *player1, const PlayerProfile *player2, const PlayerProfile *player3, u16 slot0, u16 slot1, u16 slot2, u16 slot3, u32 timer, u32 rank, u32 type) {
++WIFI_PLAZA_NEWS_FILE_SCOPE void WiFiPlazaNewsEvent_Set(WiFiPlazaNewsEvent *event, u32 a, u32 b, u32 c, const PlayerProfile *player0, const PlayerProfile *player1, const PlayerProfile *player2, const PlayerProfile *player3, u16 slot0, u16 slot1, u16 slot2, u16 slot3, u32 timer, u32 rank, u32 type) {
+     GF_ASSERT(type < WIFI_PLAZA_NEWS_EVENT_COUNT);
+     event->type = type;
+     event->timer = timer;
+@@ -518,7 +527,7 @@ static void WiFiPlazaNewsEvent_Set(WiFiPlazaNewsEvent *event, u32 a, u32 b, u32
+ }
+ 
+ // Type 0: two players (WiFiPlazaPairRequest).
+-static BOOL WiFiPlazaNewsEvent_FormatChat(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatChat(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     BufferString(format, 0, event->names[0], 0, 1, gGameLanguage);
+     BufferString(format, 1, event->names[1], 0, 1, gGameLanguage);
+@@ -529,7 +538,7 @@ static BOOL WiFiPlazaNewsEvent_FormatChat(WiFiPlazaNewsEvent *event, const u8 *f
+ }
+ 
+ // Type 1: two players and an instrument (a).
+-static BOOL WiFiPlazaNewsEvent_FormatTapToyTrade(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatTapToyTrade(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     BufferString(format, 0, event->names[0], 0, 1, gGameLanguage);
+     BufferString(format, 1, event->names[1], 0, 1, gGameLanguage);
+@@ -541,7 +550,7 @@ static BOOL WiFiPlazaNewsEvent_FormatTapToyTrade(WiFiPlazaNewsEvent *event, cons
+ }
+ 
+ // Type 2: an activity (a) with b players; c = 1: all of them are named.
+-static BOOL WiFiPlazaNewsEvent_FormatMinigameEntry(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatMinigameEntry(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     u32 msgNo;
+     BufferWiFiPlazaActivityName(format, 0, event->a);
+@@ -580,7 +589,7 @@ static BOOL WiFiPlazaNewsEvent_FormatMinigameEntry(WiFiPlazaNewsEvent *event, co
+ }
+ 
+ // Type 3: an activity (a), one named player and the others.
+-static BOOL WiFiPlazaNewsEvent_FormatFootprintStamp(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatFootprintStamp(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     BufferWiFiPlazaActivityName(format, 0, event->a);
+     BufferString(format, 1, event->names[0], 0, 1, gGameLanguage);
+@@ -592,7 +601,7 @@ static BOOL WiFiPlazaNewsEvent_FormatFootprintStamp(WiFiPlazaNewsEvent *event, c
+ }
+ 
+ // Types 4 and 5: a players (WiFiPlazaGroupRequest).
+-static BOOL WiFiPlazaNewsEvent_FormatChecking(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatChecking(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     u32 i;
+     for (i = 0; i < event->a; i++) {
+@@ -610,7 +619,7 @@ static BOOL WiFiPlazaNewsEvent_FormatChecking(WiFiPlazaNewsEvent *event, const u
+ }
+ 
+ // Type 6: a lobby event (b = WiFiPlazaLobbyNotice.which).
+-static BOOL WiFiPlazaNewsEvent_FormatLobbyEventNotice(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatLobbyEventNotice(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     u32 msgNo;
+     switch (event->b) {
+@@ -639,7 +648,7 @@ static BOOL WiFiPlazaNewsEvent_FormatLobbyEventNotice(WiFiPlazaNewsEvent *event,
+ }
+ 
+ // Type 7: the lobby slot a, if flags[a] is set.
+-static BOOL WiFiPlazaNewsEvent_FormatSpecialVisitor(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatSpecialVisitor(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     u32 slot = event->a;
+     if (slot >= WIFI_PLAZA_MAX_PLAYERS) {
+         return FALSE;
+@@ -652,7 +661,7 @@ static BOOL WiFiPlazaNewsEvent_FormatSpecialVisitor(WiFiPlazaNewsEvent *event, c
+ }
+ 
+ // Type 8: an activity (a) with b players.
+-static BOOL WiFiPlazaNewsEvent_FormatMinigameResult(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
++WIFI_PLAZA_NEWS_FILE_SCOPE BOOL WiFiPlazaNewsEvent_FormatMinigameResult(WiFiPlazaNewsEvent *event, const u8 *flags, MessageFormat *format, MsgData *msgData, String *out, enum HeapID heapID) {
+     String *string;
+     u32 i;
+     if (!WiFiPlaza_IsMinigamePlayerCountValid(event->a, event->b)) {
+@@ -672,45 +681,45 @@ static BOOL WiFiPlazaNewsEvent_FormatMinigameResult(WiFiPlazaNewsEvent *event, c
+     return TRUE;
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetChatSlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetChatSlot(WiFiPlazaNewsEvent *event, u32 index) {
+     if (index >= 2) {
+         return WIFI_PLAZA_NEWS_NO_SLOT;
+     }
+     return event->slots[index];
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetTapToyTradeSlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetTapToyTradeSlot(WiFiPlazaNewsEvent *event, u32 index) {
+     if (index >= 2) {
+         return WIFI_PLAZA_NEWS_NO_SLOT;
+     }
+     return event->slots[index];
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetMinigameEntrySlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetMinigameEntrySlot(WiFiPlazaNewsEvent *event, u32 index) {
+     if (event->b <= index) {
+         return WIFI_PLAZA_NEWS_NO_SLOT;
+     }
+     return event->slots[index];
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetFootprintStampSlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetFootprintStampSlot(WiFiPlazaNewsEvent *event, u32 index) {
+     if (index >= 1) {
+         return WIFI_PLAZA_NEWS_NO_SLOT;
+     }
+     return event->slots[index];
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetCheckingSlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetCheckingSlot(WiFiPlazaNewsEvent *event, u32 index) {
+     if (event->a <= index) {
+         return WIFI_PLAZA_NEWS_NO_SLOT;
+     }
+     return event->slots[index];
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetLobbyEventNoticeSlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetLobbyEventNoticeSlot(WiFiPlazaNewsEvent *event, u32 index) {
+     return WIFI_PLAZA_NEWS_NO_SLOT;
+ }
+ 
+-static u16 WiFiPlazaNewsEvent_GetSpecialVisitorSlot(WiFiPlazaNewsEvent *event, u32 index) {
++WIFI_PLAZA_NEWS_FILE_SCOPE u16 WiFiPlazaNewsEvent_GetSpecialVisitorSlot(WiFiPlazaNewsEvent *event, u32 index) {
+     return WIFI_PLAZA_NEWS_NO_SLOT;
+ }

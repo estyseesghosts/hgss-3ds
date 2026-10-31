@@ -1,0 +1,50 @@
+From c02da14694b3bf3608e902fa4a792f9c3ce4a2ce Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 18:57:45 +0000
+Subject: [PATCH] ball_capsule_editor: register the overlay's static
+ initializer with a section attribute
+
+src/application/ball_capsule_editor.c:445-449 repeats the inline
+static-initializer pattern of lib/dsprot/include/static_init.h: the MWCC
+`#pragma define_section SINIT` / `#pragma section SINIT` bracketing an
+`SDK_FORCE_EXPORT static void (*NitroStaticInit_[])(void)` array. GCC does not
+know `__declspec(force_export)`; it parses it as a function declaration named
+__declspec, turns the array into a parameter, and the rest of the file is
+swallowed: 165 errors, almost all "expected '=', ',', ';', 'asm' or
+'__attribute__' before '{' token" at later function definitions, ending in
+"expected '{' at end of input".
+
+Under SDK_PORT_3DS use `__attribute__((section(".sinit"), used))`, exactly as
+1401 did for lib/dsprot/include/static_init.h and 1513 did for battle_main.c
+(Platinum 0027). The original pragmas stay under #else for MWCC. With this
+hunk the whole file compiles: the remaining 164 errors were all cascades.
+
+gcc-10 -E -P without SDK_PORT_3DS: byte-identical (540637 bytes both).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/application/ball_capsule_editor.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/application/ball_capsule_editor.c b/src/application/ball_capsule_editor.c
+index 61d92ef..65193c5 100644
+--- a/src/application/ball_capsule_editor.c
++++ b/src/application/ball_capsule_editor.c
+@@ -441,10 +441,17 @@ static void BallCapsuleEditor_LoadBattleOverlays(void) {
+     HandleLoadOverlay(FS_OVERLAY_ID(OVY_7), OVY_LOAD_ASYNC);
+ }
+ 
++#ifdef SDK_PORT_3DS
++/* GCC section attribute instead of the MWCC section pragmas, as 1401 does in
++ * lib/dsprot/include/static_init.h and 1513 does in battle_main.c. */
++__attribute__((section(".sinit"), used))
++static void (*NitroStaticInit_[])(void) = { BallCapsuleEditor_LoadBattleOverlays };
++#else
+ #pragma define_section SINIT ".sinit" abs32 RWX
+ #pragma section SINIT begin
+ SDK_FORCE_EXPORT static void (*NitroStaticInit_[])(void) = { BallCapsuleEditor_LoadBattleOverlays };
+ #pragma section SINIT end
++#endif
+ 
+ BOOL BallCapsuleEditor_Init(OverlayManager *manager, int *state) {
+     BallCapsuleEditor *editor;
