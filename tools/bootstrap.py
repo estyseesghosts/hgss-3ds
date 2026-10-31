@@ -115,6 +115,23 @@ def apply_patches(dest: Path, patch_dir: Path, subdir: str) -> int:
     return len(patches)
 
 
+def generate_headers(upstream: Path) -> None:
+    """Build the decomp's own host tool and generate lib/include/nitro/fx/fx_const.h.
+
+    The SDK headers include <nitro/fx/fx_const.h>, which the decomp creates at build
+    time (Makefile: FX_CONST_H) and git-ignores. Skipped when the tool is absent.
+    """
+    tool_dir = upstream / "tools" / "gen_fx_consts"
+    header = upstream / "lib" / "include" / "nitro" / "fx" / "fx_const.h"
+    if not tool_dir.is_dir() or header.exists():
+        return
+    print("  generating lib/include/nitro/fx/fx_const.h")
+    for cmd in (["make", "-s"], ["./gen_fx_consts", str(header)]):
+        r = subprocess.run(cmd, cwd=tool_dir, text=True, capture_output=True)
+        if r.returncode != 0:
+            sys.exit(f"{' '.join(cmd)} failed in tools/gen_fx_consts:\n{r.stdout}{r.stderr}")
+
+
 def link_sdks(root: Path) -> None:
     build = root / "build"
     for name in SDK_LINKS:
@@ -157,6 +174,7 @@ def bootstrap(root: Path, clean: bool = False) -> None:
             sys.exit(f"build/upstream has {applied} patches applied but patches/ has {wanted}.\n"
                      "Run with --clean to re-apply from scratch.")
         link_sdks(root)
+        generate_headers(upstream)
         print(f"upstream: already at {lock['commit'][:12]} with {applied} patches")
         return
 
@@ -164,6 +182,7 @@ def bootstrap(root: Path, clean: bool = False) -> None:
     for name, subdir in PATCH_STACKS:
         total += apply_patches(upstream, root / "patches" / name, subdir)
     link_sdks(root)
+    generate_headers(upstream)
     print(f"Done: build/upstream ({total} patches applied), build/NitroSDK, build/NitroSystem")
 
 
