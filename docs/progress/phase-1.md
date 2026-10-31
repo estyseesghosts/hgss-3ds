@@ -35,13 +35,15 @@ not been rerun since the stack grew past the last passing run.
 - Tests: `make test` (182 Python tests + 18 SDK suites; exit 0). Vendored:
   `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x test` (all three subprojects)
   or `make port-tests`. One suite: `bash tests/sdk/<name>/run.sh build/upstream`.
-- DS-side gate (hard rule 3): clone `build/upstream` to `/work/patched`,
-  `tools/install-ds-toolchain.sh /work/patched`, **`make -C tools/mwasmarm_patcher`** (its binary is
-  git-ignored; the gate fails without it), `make patch_mwasmarm MWCCVER=2.0/sp2p3`,
-  `tools/matching-build.sh /work/patched HEARTGOLD` (~18 min), expect ROM SHA1 `4fcded0e…`.
-  **Not passed at 39 patches.** Two build tools pin header hashes (`tools/arm7-alarm-partition`,
-  `tools/alarm-partition`); patch `1601` re-pins them, and a new patch that touches a pinned header
-  needs a new pin or the gate stops with "physical input drift" / "production closure drift".
+- DS-side gate (hard rule 3): move the old reference tree aside and clone `build/upstream` to
+  **`/work/pokeheartgold`** (the MSL partition tools pin the absolute source path inside the object),
+  `tools/install-ds-toolchain.sh /work/pokeheartgold`, **`make -C tools/mwasmarm_patcher`** (its binary
+  is git-ignored; the gate fails without it), `make patch_mwasmarm MWCCVER=2.0/sp2p3`,
+  `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` (~18 min), expect ROM SHA1 `4fcded0e…`.
+  **Not passed at 39 patches.** Five build tools pin inputs (`tools/arm7-alarm-partition`,
+  `tools/alarm-partition`, `tools/msl-new-partition`, `tools/msl-d1-partition`,
+  `tools/dwc-iterator-advance`); patches `1601`/`1602` re-pin them, and a new patch that touches a
+  pinned header or the `to91_msl_*_new.cpp` sources needs a new pin.
 - Patch authoring: clone `build/upstream` to `/work/wt/<name>`, edit, commit, then
   `git format-patch -1 --relative=lib/NitroSDK --start-number N -o /workspaces/pokeheartgold-3ds/patches/NitroSDK`
   (use `--relative=lib/NitroSystem` for NitroSystem; patches touching other trees go to

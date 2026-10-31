@@ -141,30 +141,36 @@ What it proves: 804 values, covering 45 save-chunk root types and everything rea
 
 Any change to a decomp or SDK patch must keep the DS build byte-identical. [docs/progress/phase-1.md](../progress/phase-1.md) calls this check "hard rule 3". It is also in the plan as ground rule 2.
 
-Run the matching build on a copy of the patched tree, not on `/work/pokeheartgold`. Remove an old `/work/patched` first, because the clone fails if the folder exists:
+Run the matching build from a clone of the patched tree at **`/work/pokeheartgold`**. The path is not cosmetic: `tools/msl-new-partition` (and its `msl-d1-partition` / `dwc-iterator-advance` siblings) pins the *complete producer object*, and MWCC embeds the absolute source directory (`Z:\work\pokeheartgold\src\…`) in a section payload. A build from any other path fails with `complete producer section/symbol/relocation/payload drift` even though the code is identical. Move the old reference tree aside, because the clone fails if the folder exists:
 
 ```
 cd /workspaces/pokeheartgold-3ds
-rm -rf /work/patched
-git clone -q /workspaces/pokeheartgold-3ds/build/upstream /work/patched
-tools/install-ds-toolchain.sh /work/patched
-(cd /work/patched && make -C tools/mwasmarm_patcher)          # (git-ignored binary; absent from a clone)
-(cd /work/patched && make patch_mwasmarm MWCCVER=2.0/sp2p3)
-/workspaces/pokeheartgold-3ds/tools/matching-build.sh /work/patched HEARTGOLD
-(cd /work/patched && echo "4fcded0e2713dc03929845de631d0932ea2b5a37  build/heartgold.us/pokeheartgold.us.nds" | sha1sum -c -)
+mv /work/pokeheartgold /work/pokeheartgold.ref   # keeps the old reference ELF; this build recreates the tree
+git clone -q /workspaces/pokeheartgold-3ds/build/upstream /work/pokeheartgold
+tools/install-ds-toolchain.sh /work/pokeheartgold
+(cd /work/pokeheartgold && make -C tools/mwasmarm_patcher)          # (git-ignored binary; absent from a clone)
+(cd /work/pokeheartgold && make patch_mwasmarm MWCCVER=2.0/sp2p3)
+/workspaces/pokeheartgold-3ds/tools/matching-build.sh /work/pokeheartgold HEARTGOLD
+(cd /work/pokeheartgold && echo "4fcded0e2713dc03929845de631d0932ea2b5a37  build/heartgold.us/pokeheartgold.us.nds" | sha1sum -c -)
 ```
 
-Run these from inside the container. The repo tools are called by absolute path because the clone does not contain them. The build must finish, and the SHA1 check must print `OK`.
+Run these from inside the container. The repo tools are called by absolute path because the clone does not contain them. The build must finish, and the SHA1 check must print `OK`. Repeat with `SOULSILVER` and SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (`build/soulsilver.us/pokeheartgold.us.nds`).
 
-Two decomp build tools verify header hashes before they run: `tools/arm7-alarm-partition/build.py`
-("physical input drift") and `tools/alarm-partition/build.py` ("production closure drift"). If the gate
-stops with one of those, a patch changed a header they read; update the pins in their `profile.json`
-(patch `1601` is the example) and rerun.
+Five decomp build tools verify input hashes before they run: `tools/arm7-alarm-partition/build.py`
+("physical input drift"), `tools/alarm-partition/build.py` ("production closure drift"),
+`tools/msl-new-partition/build.py` ("header drift" / "unregistered source" / "complete producer
+… drift"), and its `tools/msl-d1-partition` and `tools/dwc-iterator-advance` siblings. If the gate
+stops with one of those, a patch changed an input they pin; update the pins in that `profile.json`
+and rerun. They pin more than headers: the MSL tools also pin `producers.*.source_sha256`, and
+`dwc-iterator-advance` pins the upstream source that the pinned commit does not ship (that tool is
+not reached by this build). Patches `1601` and `1602` are the examples: 1601 re-pinned the two
+alarm profiles, 1602 the three MSL/DWC profiles (types.h from patch 1001, `tree-iterator4.h` from the
+upstream bump, and the two `to91_msl_*_new.cpp` sources from patch 1505).
 
-Status: the last full pass used 10 patches and produced the retail SHA1. The stack is now **39
-patches**; the run gets past `sub/` and stops at the `tools/alarm-partition` header pins (fixed in
-`1601`), so the gate has **not passed** since. Run it after any patch change; it is the only strong
-proof that the DS build is unchanged.
+Status: the last full pass used 10 patches and produced the retail SHA1. The stack has grown well
+past that and the gate has **not passed** since; every pin class has now been found and fixed, and the
+final run at the closing patch count is the proof. Run it after any patch change; it is the only
+strong evidence that the DS build is unchanged.
 
 The phase records describe this procedure, and a local script used it. That script is not tracked in the repo (see the pitfalls below).
 

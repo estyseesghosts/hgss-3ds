@@ -1,0 +1,107 @@
+From 4df24345b528d051873abf775139f41469c94d25 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 19:26:54 +0000
+Subject: [PATCH] build: re-pin the MSL/DWC tool profiles and correct the gate
+ path (1602)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three more decomp build tools pin their inputs: tools/msl-new-partition,
+tools/msl-d1-partition and tools/dwc-iterator-advance. Patch 1601 only
+re-pinned the two alarm-partition profiles, so the DS gate stops with
+"header drift" at lib/include/nitro/types.h and then "unregistered source"
+at the MSL operator-new partitions.
+
+Inputs changed since the pins were recorded:
+
+- lib/include/nitro/types.h — patch 1001 (u64/s64 aligned(4), inside
+  SDK_PORT_3DS; the Metrowerks text is unchanged).
+- lib/NitroDWC/src/tree-iterator4.h — the pinned upstream commit itself
+  (8cbb4a1); the profile still carried the previous commit's hash.
+- src/to91_msl_{scalar,array}_new.cpp — patches 1505 (drop the dynamic
+  exception specifications) and 1519 (operator new's first parameter is
+  __SIZE_TYPE__) under SDK_PORT_3DS; msl-new-partition pins the producer
+  sources by SHA-256 as well as the headers.
+
+Only recorded hashes change. The DS build is unchanged, which the ROM SHA1
+gate proves.
+
+The gate procedure also changes: clone the patched tree to
+/work/pokeheartgold, not /work/patched. The MSL partition tools pin the
+complete producer object and MWCC embeds the absolute source directory, so
+a build from any other path fails with "complete producer
+section/symbol/relocation/payload drift" even though the code is
+identical. docs/wiki/Daily-Workflow.md and docs/progress/phase-1.md now
+say so.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ tools/dwc-iterator-advance/profile.json | 4 ++--
+ tools/msl-d1-partition/profile.json     | 2 +-
+ tools/msl-new-partition/profile.json    | 6 +++---
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/tools/dwc-iterator-advance/profile.json b/tools/dwc-iterator-advance/profile.json
+index 6faff7e..d54d18f 100644
+--- a/tools/dwc-iterator-advance/profile.json
++++ b/tools/dwc-iterator-advance/profile.json
+@@ -5,9 +5,9 @@
+   "compiler": "tools/mwccarm/2.0/sp2p2/mwccarm.exe",
+   "compiler_sha256": "b1da5a2f191d1cdea3fd078cedc9c504de46609642ae8e44c015014cef5419a7",
+   "headers": {
+-    "lib/include/nitro/types.h": "bc6a942130f6d5643c27a69b6aacf6f9b674fe81b0cc8a5210183df2e2debde4",
++    "lib/include/nitro/types.h": "e411012ebf00dfdf3b34d61b268dffb0efa19c439b1ebdca88464b58f304ecf6",
+     "lib/include/nitro/code32.h": "1b920b5d4420f07164ab0b6d378e8f7f64c1d76341f578baf71cd9584f7987c4",
+-    "lib/NitroDWC/src/tree-iterator4.h": "820ddbe1ec9122807ffb8ffe93814b3f5be3c3a45534666ca8ee117bb518a02f"
++    "lib/NitroDWC/src/tree-iterator4.h": "5287c90cf46a74afd4e18d5f16e1a6a74982bda2952cfd6e7646c8efa4095b45"
+   },
+   "modules": {
+     "build.py": "9fbf85deb0866fe7bf0e3ad2c38e060669fb73b9fa08e9d8d9fda02f1c576830",
+diff --git a/tools/msl-d1-partition/profile.json b/tools/msl-d1-partition/profile.json
+index 2c6a110..2e37c95 100644
+--- a/tools/msl-d1-partition/profile.json
++++ b/tools/msl-d1-partition/profile.json
+@@ -5,7 +5,7 @@
+   "compiler": "tools/mwccarm/2.0/sp2p3/mwccarm.exe",
+   "compiler_sha256": "900e6b2ce072b5c178e98d47468f83caa8156eda7fb2e1efa786535b73cf86f2",
+   "headers": {
+-    "lib/include/nitro/types.h": "bc6a942130f6d5643c27a69b6aacf6f9b674fe81b0cc8a5210183df2e2debde4",
++    "lib/include/nitro/types.h": "e411012ebf00dfdf3b34d61b268dffb0efa19c439b1ebdca88464b58f304ecf6",
+     "lib/include/nitro/code32.h": "1b920b5d4420f07164ab0b6d378e8f7f64c1d76341f578baf71cd9584f7987c4"
+   },
+   "modules": {
+diff --git a/tools/msl-new-partition/profile.json b/tools/msl-new-partition/profile.json
+index d0bdc09..8ba7b72 100644
+--- a/tools/msl-new-partition/profile.json
++++ b/tools/msl-new-partition/profile.json
+@@ -3,7 +3,7 @@
+   "compiler": "tools/mwccarm/2.0/sp2p2/mwccarm.exe",
+   "compiler_sha256": "b1da5a2f191d1cdea3fd078cedc9c504de46609642ae8e44c015014cef5419a7",
+   "headers": {
+-    "lib/include/nitro/types.h": "bc6a942130f6d5643c27a69b6aacf6f9b674fe81b0cc8a5210183df2e2debde4",
++    "lib/include/nitro/types.h": "e411012ebf00dfdf3b34d61b268dffb0efa19c439b1ebdca88464b58f304ecf6",
+     "lib/include/nitro/code32.h": "1b920b5d4420f07164ab0b6d378e8f7f64c1d76341f578baf71cd9584f7987c4"
+   },
+   "modules": {
+@@ -18,7 +18,7 @@
+   "producers": {
+     "scalar": {
+       "source": "src/to91_msl_scalar_new.cpp",
+-      "source_sha256": "dfb55bc068dfee38dc43ede3898af58320b30d7313236e6c6d829b67cd2ed779",
++      "source_sha256": "710fe14e665ce4bcd7f555fa38a3eac6f338677a70a707d840b960706ba1afdb",
+       "functions": [
+         [
+           "_Znwm",
+@@ -158,7 +158,7 @@
+     },
+     "array": {
+       "source": "src/to91_msl_array_new.cpp",
+-      "source_sha256": "1ec5af70c0bb3b5b0970d4b34317aae4cf441f2c1a30315401d8a56897b88458",
++      "source_sha256": "45adf0743b924adbcc55581b2804a35c8aefc44d5fb7ef81538ba1c6d39ef8ee",
+       "functions": [
+         [
+           "_Znam",
+-- 
+2.43.0
+
