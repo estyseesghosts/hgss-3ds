@@ -1,0 +1,99 @@
+From 3c5bbc38a0ed9d3ddcd5cae0f2a56485ad0e08e0 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 08:39:05 +0000
+Subject: [PATCH] sdk: shared-work literals go through OSSystemWork
+ (SDK_PORT_3DS)
+
+tp.c, pm.c and mic.c address the ARM7/touch/power/shared-work words by literal
+DS addresses (0x027FFC80, 0x027FFAA, 0x027FFC40, 0x027FFF90/94). Patches
+1301/1302 moved main and shared memory into the port's arrays, so those
+literals point at unmapped host memory: the vendored test_arm7 segfaulted in
+test_touch (after test_rtc took the same fix in patch 1304).
+
+Under SDK_PORT_3DS each macro reads the same word through OS_GetSystemWork(),
+using the shared struct's own fields, which are at exactly those offsets
+(nitro/os/common/systemWork_shared.h):
+
+  0x027FFC80  nvramUserInfo       (+0x80, 256 bytes)
+  0x027FFC40  wmBootBuf           (+0x40; the console type is its first u16)
+  0x027FFFAA  touch_panel         (+0x3AA)
+  0x027FFF90  mic_last_address    (+0x390)
+  0x027FFF94  mic_sampling_data   (+0x394)
+
+Widths and constness are unchanged, so the surrounding DS-shaped code is
+untouched. The Metrowerks build keeps the original definitions: gcc-10 -E -P
+without the macro is byte-identical for all three files.
+
+Checked by vendored test_arm7 test_touch (TP_RequestCalibratedSampling,
+auto-sampling start/stop/latest), which segfaulted before this patch.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/mic.c | 7 +++++++
+ lib/NitroSDK/src/pm.c  | 6 ++++++
+ lib/NitroSDK/src/tp.c  | 9 +++++++++
+ 3 files changed, 22 insertions(+)
+
+diff --git a/lib/NitroSDK/src/mic.c b/lib/NitroSDK/src/mic.c
+index 2c4e321..84d85b0 100644
+--- a/lib/NitroSDK/src/mic.c
++++ b/lib/NitroSDK/src/mic.c
+@@ -18,8 +18,15 @@ typedef struct MicWork {
+     u16 *sampleResult;        // 0x1C: single sample (command 0x40)
+ } MicWork;
+ 
++#ifdef SDK_PORT_3DS
++/* SDK_PORT_3DS: 0x027FFF90/94 are OSSystemWork.mic_last_address
++ * (0x390) and mic_sampling_data (0x394); the literals are unmapped on the port. */
++#define MIC_LAST_SAMPLING_ADDRESS (*(void **)&OS_GetSystemWork()->mic_last_address)
++#define MIC_SAMPLE_DATA           (*(u16 *)&OS_GetSystemWork()->mic_sampling_data)
++#else
+ #define MIC_LAST_SAMPLING_ADDRESS (*(void **)0x027FFF90)
+ #define MIC_SAMPLE_DATA           (*(u16 *)0x027FFF94)
++#endif
+ 
+ extern MicWork gMicWork;
+ extern u32 gMicLock; // label of gMicWork.lock (MicWaitBusy)
+diff --git a/lib/NitroSDK/src/pm.c b/lib/NitroSDK/src/pm.c
+index b39c884..a8d4b99 100644
+--- a/lib/NitroSDK/src/pm.c
++++ b/lib/NitroSDK/src/pm.c
+@@ -45,7 +45,13 @@ typedef struct PmRegisterRead {
+ 
+ #define PM_REGISTER_COUNT 5
+ #define PM_VBLANK_COUNT   (*(u32 *)HW_VBLANK_COUNT_BUF)
++#ifdef SDK_PORT_3DS
++/* SDK_PORT_3DS: 0x027FFC40 is OSSystemWork+0x40 (wmBootBuf in the shared
++ * struct); the literal points at unmapped host memory on the port. */
++#define PM_CONSOLE_TYPE   (*(vu16 *)(OS_GetSystemWork()->wmBootBuf))
++#else
+ #define PM_CONSOLE_TYPE   (*(vu16 *)0x027FFC40)
++#endif
+ 
+ extern PmWork gPmWork;
+ extern PmSleepCallbackInfo *gPmPreSleepCallbacks;  // label of gPmWork.preSleep
+diff --git a/lib/NitroSDK/src/tp.c b/lib/NitroSDK/src/tp.c
+index 56eaff4..2931dba 100644
+--- a/lib/NitroSDK/src/tp.c
++++ b/lib/NitroSDK/src/tp.c
+@@ -49,8 +49,17 @@ typedef struct TpWork {
+ #define TP_RESULT_ILLEGAL_STATUS 2
+ #define TP_RESULT_PXI_BUSY       3
+ #define TP_RESULT_SEND_ERROR     4
++#ifdef SDK_PORT_3DS
++/* SDK_PORT_3DS: the DS build addresses the shared work area by literal address;
++ * patches 1301/1302 moved main/shared memory into the port's arrays, so these
++ * point at unmapped host memory. touch_panel is OSSystemWork+0x3AA and
++ * nvramUserInfo is +0x80, the fields port_tp.c and the boot code fill. */
++#define TP_RAW_POINT             (*(volatile u16 *)(OS_GetSystemWork()->touch_panel))
++#define TP_USER_SETTINGS         ((const NVRAMConfig *)OS_GetSystemWork()->nvramUserInfo)
++#else
+ #define TP_RAW_POINT             (*(volatile u16 *)0x027FFFAA) // raw point from the ARM7 (2 halfwords)
+ #define TP_USER_SETTINGS         ((const NVRAMConfig *)0x027FFC80)
++#endif
+ 
+ // Raw point as written by the ARM7.
+ typedef struct TpRawPoint {
+-- 
+2.43.0
+

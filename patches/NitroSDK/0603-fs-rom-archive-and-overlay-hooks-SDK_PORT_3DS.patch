@@ -1,0 +1,191 @@
+From 343083f4835a9a3d639a91add9cb5c1558f4c383 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 05:54:47 +0000
+Subject: [PATCH] fs: ROM archive and overlay hooks for the port (SDK_PORT_3DS)
+
+The port has no cartridge ROM and links every overlay into the program, so the
+ROM archive is answered by libpak and overlay loads reset linked data. The DS
+text is unchanged: gcc-10 -E -P of each file without SDK_PORT_3DS (with
+-DSDK_ARM9) has 0 diff lines against the file before this patch. Rebased from
+Platinum patches 0010, 0011 and 0014 (FS half); the overlay.h halves are in
+patch 1402, and HGSS differences are noted below.
+
+FS_rom.c (FSi_InitRom): under SDK_PORT_3DS, register the rom archive with
+NitroPort_PakArchiveProc for all commands and load it empty, then return
+before CARD_Init (Platinum 0011). The multiboot branch is skipped with the
+rest. The port function is a local extern: the port header is not on the SDK
+include path.
+
+FS_overlay.c: under SDK_PORT_3DS, FS_ClearOverlayImage calls
+NitroPort_OverlayClearBss, FS_LoadOverlayInfo returns
+NitroPort_OverlayInfo(p_ovi, target, id), FS_LoadOverlayImage returns
+NitroPort_OverlayLoadImage(p_ovi), and FS_UnloadOverlayImage runs FS_EndOverlay
+as before and then NitroPort_OverlayUnloaded(p_ovi) (Platinum 0014).
+FS_LoadOverlayImageAsync loads the linked image at once and then opens the
+overlay ROM file, so the caller gets a real file to wait on and close. HGSS
+difference: Platinum hands back FS_CreateFileFromMemory(&nothing, 0), which
+does not exist in this SDK revision, so the async path uses FS_OpenFileFast
+with the header file id instead (the port Info hook fills it).
+
+Tests: tests/sdk/fs_overlay/run.sh builds both files with the survey flags and
+runs 41 checks against stub port and filesystem functions: the InitRom archive
+registration (name, proc, flags, empty load, no CARD_Init), clear/info/image/
+async/unload delegation with TRUE and FALSE paths, the async file identity and
+file id, and that the DS fill never runs. Against the tree without this patch
+the run fails 22 checks.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/fs/FS_overlay.c | 38 ++++++++++++++++++++++++++++++++++++++
+ src/fs/FS_rom.c     | 17 +++++++++++++++++
+ 2 files changed, 55 insertions(+)
+
+diff --git a/src/fs/FS_overlay.c b/src/fs/FS_overlay.c
+index 39c636c..ff95d76 100644
+--- a/src/fs/FS_overlay.c
++++ b/src/fs/FS_overlay.c
+@@ -1,5 +1,16 @@
+ #include "fs_private.h"
+ #include <nitro/code32.h>
++#ifdef SDK_PORT_3DS
++/* 3DS port: overlay code is linked into the program, so there is no overlay
++ * table or image to read from a cartridge. Loading an overlay resets its data,
++ * as reading a fresh copy from the cartridge did
++ * (3ds_port/nitro/src/port_overlay.c). */
++BOOL NitroPort_OverlayInfo(FSOverlayInfo *p_ovi, MIProcessor target, FSOverlayID id);
++BOOL NitroPort_OverlayLoadImage(const FSOverlayInfo *p_ovi);
++void NitroPort_OverlayClearBss(const FSOverlayInfo *p_ovi);
++void NitroPort_OverlayUnloaded(const FSOverlayInfo *p_ovi);
++#endif
++
+ 
+ #define FS_OVERLAY_FLAG_COMP    0x0001
+ #define FS_OVERLAY_FLAG_AUTH    0x0002
+@@ -15,6 +26,10 @@ u32 FSi_GetOverlayBinarySize(FSOverlayInfo * p_ovi)
+ 
+ void FS_ClearOverlayImage(FSOverlayInfo * p_ovi)
+ {
++#ifdef SDK_PORT_3DS
++    NitroPort_OverlayClearBss(p_ovi);
++}
++#else
+     u8 * const im_start = FS_GetOverlayAddress(p_ovi);
+     u32 const ram_size = FS_GetOverlayImageSize(p_ovi);
+     u32 const total_size = FS_GetOverlayTotalSize(p_ovi);
+@@ -23,6 +38,7 @@ void FS_ClearOverlayImage(FSOverlayInfo * p_ovi)
+     DC_InvalidateRange(im_start, total_size);
+     MI_CpuFill8(im_start + ram_size, 0, total_size - ram_size);
+ }
++#endif
+ 
+ FSFileID FS_GetOverlayFileID(FSOverlayInfo * p_ovi)
+ {
+@@ -72,6 +88,9 @@ BOOL FSi_LoadOverlayInfoCore(FSOverlayInfo * p_ovi, MIProcessor target, FSOverla
+ 
+ BOOL FS_LoadOverlayInfo(FSOverlayInfo * p_ovi, MIProcessor target, FSOverlayID id)
+ {
++#ifdef SDK_PORT_3DS
++    return NitroPort_OverlayInfo(p_ovi, target, id);
++#else
+     CARDRomRegion * const pr = (target == MI_PROCESSOR_ARM9) ? &fsi_ovt9 : &fsi_ovt7;
+     if (pr->offset)
+     {
+@@ -95,10 +114,21 @@ BOOL FS_LoadOverlayInfo(FSOverlayInfo * p_ovi, MIProcessor target, FSOverlayID i
+         const CARDRomRegion * const p_ovt7 = CARD_GetRomRegionOVT(MI_PROCESSOR_ARM7);
+         return FSi_LoadOverlayInfoCore(p_ovi, target, id, &fsi_arc_rom, p_ovt9->offset, p_ovt9->length, p_ovt7->offset, p_ovt7->length);
+     }
++#endif
+ }
+ 
+ BOOL FS_LoadOverlayImageAsync(FSOverlayInfo * p_ovi, FSFile * p_file)
+ {
++#ifdef SDK_PORT_3DS
++    /* The linked image loads at once; open the overlay ROM file so the caller gets
++     * a real file to wait on and close (HGSS has no FS_CreateFileFromMemory). */
++    FS_InitFile(p_file);
++    if (!NitroPort_OverlayLoadImage(p_ovi))
++    {
++        return FALSE;
++    }
++    return FS_OpenFileFast(p_file, FS_GetOverlayFileID(p_ovi));
++#else
+     FS_InitFile(p_file);
+     if (!FS_OpenFileFast(p_file, FS_GetOverlayFileID(p_ovi)))
+         return FALSE;
+@@ -113,10 +143,14 @@ BOOL FS_LoadOverlayImageAsync(FSOverlayInfo * p_ovi, FSFile * p_file)
+         }
+         return TRUE;
+     }
++#endif
+ }
+ 
+ BOOL FS_LoadOverlayImage(FSOverlayInfo * p_ovi)
+ {
++#ifdef SDK_PORT_3DS
++    return NitroPort_OverlayLoadImage(p_ovi);
++#else
+     FSFile file[1];
+     FS_InitFile(file);
+     if (!FS_OpenFileFast(file, FS_GetOverlayFileID(p_ovi)))
+@@ -133,6 +167,7 @@ BOOL FS_LoadOverlayImage(FSOverlayInfo * p_ovi)
+         (void)FS_CloseFile(file);
+         return TRUE;
+     }
++#endif
+ }
+ 
+ static const u8 fsi_def_digest_key[64] = {
+@@ -289,6 +324,9 @@ void FS_EndOverlay(FSOverlayInfo *p_ovi)
+ BOOL FS_UnloadOverlayImage(FSOverlayInfo * p_ovi)
+ {
+     FS_EndOverlay(p_ovi);
++#ifdef SDK_PORT_3DS
++    NitroPort_OverlayUnloaded(p_ovi);
++#endif
+     return TRUE;
+ }
+ 
+diff --git a/src/fs/FS_rom.c b/src/fs/FS_rom.c
+index 8f230ba..de456da 100644
+--- a/src/fs/FS_rom.c
++++ b/src/fs/FS_rom.c
+@@ -1,5 +1,12 @@
+ #include "fs_private.h"
+ #include <nitro/code32.h>
++#ifdef SDK_PORT_3DS
++/* 3DS port: the ROM archive is answered by the read-only libpak command processor
++ * (3ds_port/nitro/src/port_fs.c). Declared here: the port header is not on the SDK
++ * include path. */
++FSResult NitroPort_PakArchiveProc(FSFile *file, FSCommandType command);
++#endif
++
+ 
+ static u32 fsi_default_dma_no;
+ s32 fsi_card_lock_id;
+@@ -63,6 +70,15 @@ void FSi_InitRom(u32 default_dma_no)
+     fsi_ovt7.offset = 0;
+     fsi_ovt7.length = 0;
+ 
++#ifdef SDK_PORT_3DS
++    /* The port has no cartridge ROM. All file names and file IDs are translated by
++     * the read-only libpak command processor. */
++    FS_InitArchive(&fsi_arc_rom);
++    (void)FS_RegisterArchiveName(&fsi_arc_rom, "rom", 3);
++    FS_SetArchiveProc(&fsi_arc_rom, NitroPort_PakArchiveProc, (u32)FS_ARCHIVE_PROC_ALL);
++    (void)FS_LoadArchive(&fsi_arc_rom, 0, 0, 0, 0, 0, NULL, NULL);
++    return;
++#else
+     CARD_Init();
+ 
+     FS_InitArchive(&fsi_arc_rom);
+@@ -99,6 +115,7 @@ void FSi_InitRom(u32 default_dma_no)
+                                  FSi_ReadRomCallback, FSi_WriteDummyCallback);
+         }
+     }
++#endif
+ }
+ 
+ u32 FS_SetDefaultDMA(u32 dma_no)
+-- 
+2.43.0
+

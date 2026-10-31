@@ -1,0 +1,64 @@
+From f64518784b7bf9de8f4f0b83f2e4d08ef53abdee Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:40 +0000
+Subject: [PATCH] weather_manager: type the snow tables and copy them
+
+src/field/weather_manager.c:1940 declares sSnowFallSpeeds[] without an element
+type (MWCC infers int) and sSnowSlowdownIntervals[] with only const, and
+Snow_AddFlakes assigns the arrays at :1945 and :1947, which C does not allow.
+Under SDK_PORT_3DS give both tables an int element type and memcpy the same
+bytes into the int[4] locals. Same values, same behaviour. gcc-10 -E -P without
+the macro: 0 diff lines.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/field/weather_manager.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/src/field/weather_manager.c b/src/field/weather_manager.c
+index 189cf39..dfc432f 100644
+--- a/src/field/weather_manager.c
++++ b/src/field/weather_manager.c
+@@ -1,5 +1,9 @@
+ #include "field/weather_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++#include <string.h>
++#endif
++
+ #include "constants/weather.h"
+ 
+ #include "field/field_flash_darkness.h"
+@@ -1937,14 +1941,29 @@ static void WeatherTask_Snow(SysTask *task, void *data) {
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// Metrowerks infers int for these definitions; GCC needs the element type.
++static const int sSnowFallSpeeds[] = { 2, 2, 2, 2 };
++static const int sSnowSlowdownIntervals[] = { 16, 32, 16, 10 };
++#else
+ static const sSnowFallSpeeds[] = { 2, 2, 2, 2 };
+ static const sSnowSlowdownIntervals[] = { 16, 32, 16, 10 };
++#endif
+ 
+ static void Snow_AddFlakes(WeatherWork *work, int count) {
+     int table0[4];
++#ifdef SDK_PORT_3DS
++    // An array is not assignable in C; copy the same bytes instead.
++    memcpy(table0, sSnowSlowdownIntervals, sizeof(table0));
++#else
+     table0 = sSnowSlowdownIntervals;
++#endif
+     int table1[4];
++#ifdef SDK_PORT_3DS
++    memcpy(table1, sSnowFallSpeeds, sizeof(table1));
++#else
+     table1 = sSnowFallSpeeds;
++#endif
+     WeatherParticleTaskData *taskData = work->taskData;
+ 
+     for (int i = 0; i < count; i++) {
+-- 
+2.43.0
+

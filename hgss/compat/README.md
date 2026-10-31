@@ -42,12 +42,54 @@ Two header kinds:
 | `nitro/hw/ARM9/mmap.h` | wrapper | `#include_next` + same `HW_ROM_HEADER_BUF_END`; this is what makes it visible to `port_boot.c` |
 | `nitro/mi/uncompress.h` | wrapper | `#include_next` + ntrtwl compression types, `MIUnpackBitsParam`, missing entry points; also includes `<nitro/mi/stream.h>` because ntrtwl's `mi.h` does and HGSS's does not (`svc.c` relies on the chain) |
 | `nitro/mi/stream.h` | new | ntrtwl `mi/stream.h`; the getter has no HGSS definition (link error if ever called; nothing calls it) |
-| `nitro/mi/dma.h` | wrapper | `#include_next` + the 6 ARM9 timing selectors HGSS lacks (`IMM/V_BLANK/DISP/DISP_MMEM/CARTRIDGE/GXFIFO`), ntrtwl values |
+| `nitro/mi/dma.h` | wrapper | `#include_next` + the 6 ARM9 timing selectors HGSS lacks (`IMM/V_BLANK/DISP/DISP_MMEM/CARTRIDGE/GXFIFO`), ntrtwl values + `MI_DmaFill16`/`MI_DmaSend32`/`MI_IsDmaBusy`/`MI_VBlankDmaCopy32Async` declarations (bodies in `src/sdk_standins.c`) |
 | `nitro/os/common/interrupt.h` | new | ntrtwl-path shim; includes HGSS `interrupt_shared.h`, adds `OS_IE_FIFO_{SEND,RECV}`, `OS_IE_GXFIFO` |
 | `nitro/os/common/interrupt_shared.h` | wrapper | `#include_next` + same three macros (ntrtwl values; `OS_IE_GXFIFO` is `(1UL << REG_OS_IE_GF_SHIFT)`) |
-| `nitro/gx/g3x.h` | wrapper | `#include_next` + ntrtwl `GXFifoIntrCond` enum, skipped if flat `GX_g3x.h` was already included |
+| `nitro/gx/g3x.h` | wrapper | `#include_next` + ntrtwl `GXFifoIntrCond`/`GXFifoStat` enums, `G3X_GetCommandFifoStatus/Count` inlines and `G3X_ResetMtxStackOverflow`, skipped if flat `GX_g3x.h` was already included |
 | `nitro/ctrdg.h` | wrapper | `#include_next` + flat `CTRDG_task.h` (`CTRDG_TASK_FUNC`) + `CTRDGBackupType` spelled out with HGSS values (the rest of the flat CTRDG headers redeclare public structs and cannot be included here) |
 | `nitro/spi/userInfo.h` | wrapper | `#include_next` + TS200 firmware constants (`NVRAM_CONFIG_DATA_VERSION 5`, `NICKNAME_LENGTH 10`, 6 `LANG_*`; ntrtwl `userInfo_ts_200.h`) |
+| `nitro/cp.h` | wrapper | `#include_next` + `cp/divider.h` + `cp/sqrt.h` (ntrtwl's `cp.h` pulls all three; HGSS's pulls only `cp/context.h`) |
+| `nitro/cp/context.h` | wrapper | `#include_next` + `CP_RestoreContext` inline over HGSS's `CPi_RestoreContext` (ntrtwl name; patch 0501's function) |
+| `nitro/math.h` | wrapper | `#include_next` + `math/rand.h` (new) + `MATH_CountLeadingZeros` family / `MATH_ILog2` (ntrtwl; bodies in `src/sdk_standins.c`) |
+| `nitro/math/rand.h` | new | ntrtwl `math/rand.h` verbatim (constants fix the game's RNG sequence) |
+| `nitro/math/crc.h` | wrapper | `#include_next` + ntrtwl `MATH_CRC16CCITTInitTable`/`MATH_CRC32InitTable` inlines; `MATH_CRC16InitTable` redirected to ntrtwl's reflected meaning (see below; `HGSS_MATH_KEEP_HGSS_CRC16_INIT` keeps HGSS's) |
+| `nitro/math/dgt.h` | wrapper | `#include_next` + `dgt/dgt.h` + the `MATHMD5/SHA1Context` streaming inlines (mirror flat `MATH_dgt.h`, ntrtwl names) |
+| `nitro/dgt.h` | new (umbrella) | `dgt/common.h` + `dgt/dgt.h`; HGSS's `nitro.h` never includes dgt |
+| `nitro/os.h` | wrapper | `#include_next` + `os/arena.h` (ntrtwl's `os.h` pulls it; HGSS's does not) |
+| `nitro/os/arena.h` | wrapper | `#include_next` + ntrtwl `OS_Set/Get/AllocFromMainArena` inlines over HGSS's arena primitives |
+| `nitro/os/tick.h` | wrapper | `#include_next` + ntrtwl `OS_TicksToMilliSeconds` conversions over HGSS's `OS_SYSTEM_CLOCK` |
+| `nitro/os/system.h` | wrapper | `#include_next` + `OS_WaitInterrupt` declaration (ntrtwl; body in `src/sdk_standins.c`) |
+| `nitro/os/systemCall.h` | wrapper | `#include_next` + ntrtwl `SVC_CpuSet/CpuSetFast/GetCRC16/Div/DivRem/Sqrt` declarations (bodies in the port's `svc.c`) |
+| `nitro/std/string.h` | wrapper | `#include_next` + ntrtwl `STD_TSNPrintf` declaration (body in `src/sdk_standins.c`) |
+| `nitro/mi.h` | wrapper | `#include_next` + `mi/compress.h` (new; HGSS's `mi.h` has no compressor) |
+| `nitro/mi/memory.h` | wrapper | `#include_next` + ntrtwl `MI_CpuSend16/32` inlines over HGSS's `MIi_` primitives + `MI_Copy128B`/`MI_Zero48B` declarations (bodies in the port's `mi_memory.c`) |
+| `nitro/mi/compress.h` | new | ntrtwl `mi/compress.h` API: LZ/LZEx inlines over HGSS's `MI_CompressLZImpl`, `MI_CompressRL/Huffman` (bodies in `src/sdk_standins.c`), `MI_HUFFMAN_COMPRESS_WORK_SIZE` |
+| `nitro/gx/g2_oam.h` | wrapper | `#include_next` + ntrtwl `GXOamAffine`, attribute macros, `GXOamShape/ColorMode/Effect` and the `G2_SetOBJ` inlines (no link dependency) |
+| `nitro/gx/g3imm.h` | wrapper | `#include_next` + `G3_LoadMtx44/43`/`G3_MultMtx43/33` declarations (HGSS's `g3imm.c`) + ntrtwl `G3_StoreMtx/RestoreMtx/Scale/TexCoord` register inlines |
+| `nitro/gx/gx.h` | wrapper | `#include_next` + `GX_SetMasterBrightness` (over HGSS's `GXx_SetMasterBrightness_`), `GX_LoadBG3Bmp` (over `GX_LoadBG3Scr`), `GX_IsHBlank` (ntrtwl/flat forms) |
+| `nitro/fx/fx_cp.h` | wrapper | `#include_next` + `FX_Sqrt`/`FX_DivS32` declarations (HGSS's `fx.c`/`fx_cp.c`) |
+| `nitro/fx/fx_trig.h` | wrapper | `#include_next` + `FX_Atan2Idx` declaration (HGSS's `fx_atanidx.c`) |
+| `nitro/fx/fx_mtx22.h` | wrapper | `#include_next` + `MTX_Identity22/Scale22/Rot22/Transpose22` declarations (bodies in `src/sdk_standins.c`, ntrtwl stores) |
+| `nitro/fx/fx_mtx33.h` | wrapper | `#include_next` + `MTX_Copy33To43/Copy33To44/Transpose33/Scale33/RotAxis33` declarations (bodies in `src/sdk_standins.c`, ntrtwl stores/C) |
+| `nitro/fx/fx_mtx43.h` | wrapper | `#include_next` + `MTX_Copy43To33/Copy43To44` inlines (over `MI_Copy36B`/HGSS's `MTX_Copy43To44_`) + `MTX_Transpose43/RotZ43` declarations (bodies in `src/sdk_standins.c`) |
+| `nitro/spi/ARM9/pm.h` | wrapper | `#include_next` + ntrtwl `PMBattery`/`PM_BATTERY`/`PM_SUCCESS`/`PM_RESULT` enums, `PM_GetBattery`/`PM_SetBackLightAsync` declarations, and a `u32 PM_GetBackLight` wrapper (HGSS's header says `void`; `pm.c` defines `u32`) |
+| `nitro/spi/ARM9/tp.h` | wrapper | `#include_next` + the sync sampling declarations (bodies in `src/sdk_standins.c`, over HGSS's async primitives) |
+| `nitro/rtc/ARM9/api.h` | wrapper | `#include_next` + the sync/async date/time declarations (HGSS's `rtc_api.c`) |
+| `nitro/card/backup.h` | wrapper | `#include_next` + `CARD_GetBackupTotalSize/PageSize` declarations (bodies in `src/sdk_standins.c`) + program/verify/erase inlines (HGSS `CARDi_RequestStreamCommand` forms, ntrtwl request/mode choices) |
+| `nitro/snd.h` | wrapper | `#include_next` + `snd/common/command.h`, `snd/common/main.h`, `snd/ARM9/interface.h` (new; HGSS's `snd.h` has no API) |
+| `nitro/snd/ARM9/interface.h` | new | ARM9 sound API declarations matching the flat `SND_interface/command/alarm/work` headers |
+| `nitro/snd/common/work.h` | wrapper | `#include_next` + `SNDDriverInfo` with ntrtwl member names (layout-identical to HGSS's shared struct; see below) |
+| `nitro/snd/common/bank.h` | new | ntrtwl-named bank/wave structs (layout-identical to HGSS's shared structs; see below) |
+| `nitro/snd/common/mml.h` | new | ntrtwl MML opcodes (HGSS's driver decodes the same bytes) |
+| `nitro/fs/file.h` | wrapper | `#include_next` + ntrtwl `FS_GetPosition` inline (same struct) + `FS_End` declaration (body in `src/sdk_standins.c`) |
+| `nitro/ctrdg/common/ctrdg_common.h` | wrapper | `#include_next` + `CTRDG_IsExisting/IsAgbCartridge` declarations (bodies in the port's `ctrdg.c`) |
+
+## Sources (`src/`, compiled into `libnitro.a` by `tools/hgss_nitro.py`)
+
+| File | Contents |
+| --- | --- |
+| `sdk_standins.c` | Weak C definitions for SDK functions HGSS stripped (all of `test_nitro.c`/`test_arm7.c`'s needs): the 10 missing `MTX_` functions, `MATH_CountLeadingZeros` pair, the 4 missing `MI_Dma` functions, `MI_CompressRL/Huffman` (ntrtwl algorithms), `OS_WaitInterrupt` (ntrtwl), `PM_GetBattery` (ntrtwl, over HGSS's `PMi_ReadRegister`), the 4 TP sync wrappers (over HGSS's async primitives), `CARD_GetBackupTotalSize/PageSize`, `SND_StartSeq` (over HGSS's `PushCommand_impl`), `FS_End`, `STD_TSNPrintf`. |
+| `sdk_data.c` | Weak SDK data the port's GCC build never assembles: `FX_SinCosTable_` (from `lib/NitroSDK/asm/fx_sincos.s`), the `.bss.unified_02` work cluster (`gTpWork` plus interior `.set` aliases, sizes asserted), `_version_NINTENDO_BACKUP`, and the `SDK_SYS/IRQ_STACKSIZE` / `SDK_SECTION_ARENA_DTCM_START` absolute symbols. |
 
 ## Deliberate deviations and non-fixes
 
@@ -93,3 +135,15 @@ Two header kinds:
   here, so this file branches on `NITRO_H_`: public headers for the port's
   TU, flat-forward for SDK TUs. No SDK TU mixes `<nitro.h>` with flat CARD
   includes, so the public branch fires only for `port_card.c`.
+- **`MATH_CRC16InitTable` means the reflected table here.** HGSS's own
+  inline builds a CCITT table and HGSS's game code (`src/math_util.c`)
+  pairs it with `MATH_CalcCRC16CCITT`; ntrtwl (and the port's test) pairs
+  the name with `MATH_CalcCRC16` (check value `0xBB3D`). The wrapper
+  redirects the name to ntrtwl's meaning for port/test translation units;
+  game code that wants HGSS's meaning must define
+  `HGSS_MATH_KEEP_HGSS_CRC16_INIT` (Phase 2 wiring must handle this; see
+  `docs/progress/agent-notes/p1-standins.md`).
+- **`SNDDriverInfo` / bank structs use ntrtwl member names.** Layouts are
+  identical to HGSS's shared structs (same offsets, verified in
+  `p1-standins.md`); only the names differ, so the test's synthetic structs
+  parse the same bytes HGSS's driver reads.

@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
- * nitro/mi/uncompress.h: decompression entry points, wrapping HGSS's header.
+ * nitro/mi/uncompress.h: decompression entry points, replacing HGSS's header.
  *
- * HGSS's lib/include/nitro/mi/uncompress.h declares only MI_UncompressLZ8
- * (plus a bare `inline' MI_GetUncompressedSize). The port's svc.c and
- * mi_uncompress.c also need the compression-type names, MIUnpackBitsParam and
- * the remaining entry points, with ntrtwl values
- * (include/nitro/mi/uncompress.h). Declarations match the port's definitions
- * in 3ds_port/nitro/src/mi_uncompress.c. The guard is compat-specific so the
- * chained HGSS header is still processed.
+ * HGSS's lib/include/nitro/mi/uncompress.h declares only MI_UncompressLZ8,
+ * plus a bare `inline' (not `static inline') MI_GetUncompressedSize. Under
+ * GCC's gnu89 inline rules that bare inline emits a standalone symbol in
+ * every translation unit, so any final link (the port's tests) fails with
+ * "multiple definition". This header is NOT an #include_next wrapper: it
+ * declares the same MI_UncompressLZ8 plus the static-inline getter (same
+ * body) and the remaining entry points, with ntrtwl values
+ * (include/nitro/mi/uncompress.h). Declarations match the port's
+ * definitions in 3ds_port/nitro/src/mi_uncompress.c. The proper long-term
+ * fix is an SDK patch making HGSS's getter `static inline'; until then this
+ * header shadows it (it is byte-identical in behavior).
  */
 
 #ifndef HGSS_COMPAT_MI_UNCOMPRESS_H
 #define HGSS_COMPAT_MI_UNCOMPRESS_H
-
-#include_next <nitro/mi/uncompress.h>
 
 /* ntrtwl's <nitro/mi.h> also pulls in <nitro/mi/stream.h>; HGSS's does not,
  * and svc.c relies on the chain for MIReadStreamCallbacks, so include it. */
@@ -25,6 +27,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+void MI_UncompressLZ8(const void *srcp, void *destp);
+
+static inline u32 MI_GetUncompressedSize(const void *srcp)
+{
+    return (*(u32 *)srcp >> 8);
+}
 
 typedef enum {
     MI_COMPRESSION_LZ              = 0x10,

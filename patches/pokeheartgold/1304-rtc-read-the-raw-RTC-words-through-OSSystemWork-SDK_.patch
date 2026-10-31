@@ -1,0 +1,56 @@
+From a932905820e625766d3722d01129785d0d464f95 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 08:29:37 +0000
+Subject: [PATCH] rtc: read the raw RTC words through OSSystemWork
+ (SDK_PORT_3DS)
+
+rtc_api.c addressed the three raw words the ARM7 fills by literal DS address
+(0x027FFDE8/EC/EA, OSSystemWork.real_time_clock at +0/+4/+2). Patches 1301/1302
+moved main and shared memory into the port's arrays, so those literals point at
+unmapped host memory: the vendored test_arm7 test_rtc segfaulted on the first
+RTC_GetDate.
+
+Under SDK_PORT_3DS the macros address the same three words through
+OS_GetSystemWork()->real_time_clock, which is where port_rtc.c writes the ARM7
+reply. Offsets and types are unchanged, so the DS-shaped BCD decoding above them
+is untouched. The Metrowerks build keeps the original three lines: gcc-10
+-E -P without the macro is byte-identical.
+
+Checked by vendored test_arm7 test_rtc (RTC_GetDate/GetTime/GetDateTime),
+which segfaulted before this patch.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/rtc/rtc_api.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/lib/NitroSDK/src/rtc/rtc_api.c b/lib/NitroSDK/src/rtc/rtc_api.c
+index ab0c2b9..7add202 100644
+--- a/lib/NitroSDK/src/rtc/rtc_api.c
++++ b/lib/NitroSDK/src/rtc/rtc_api.c
+@@ -29,9 +29,22 @@ typedef struct RtcWork {
+ } RtcWork;
+ 
+ // RTC registers as received from the ARM7 (BCD).
++#ifdef SDK_PORT_3DS
++/* SDK_PORT_3DS: these three words are OSSystemWork.real_time_clock (the same
++ * field port_rtc.c fills), but the DS build addresses the shared work area by
++ * literal address. Patches 1301/1302 moved main/shared memory into the port's
++ * arrays, so the literals point at unmapped host memory and the first
++ * RTC_GetDate read segfaulted. Go through OS_GetSystemWork(), as the port's
++ * ARM7 side does: real_time_clock is at +0x1E8, date at +0, time at +4 and
++ * status2 at +2. */
++#define RTC_RAW_DATE    (*(volatile u32 *)(OS_GetSystemWork()->real_time_clock + 0))
++#define RTC_RAW_TIME    (*(volatile u32 *)(OS_GetSystemWork()->real_time_clock + 4))
++#define RTC_RAW_STATUS2 (*(RtcStatus2 *)(OS_GetSystemWork()->real_time_clock + 2))
++#else
+ #define RTC_RAW_DATE    (*(volatile u32 *)0x027FFDE8)
+ #define RTC_RAW_TIME    (*(volatile u32 *)0x027FFDEC)
+ #define RTC_RAW_STATUS2 (*(RtcStatus2 *)0x027FFDEA)
++#endif
+ 
+ #define BITS(value, left, right) (((u32)(value) << (left)) >> (right))
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,59 @@
+From 7bdf59fa29be275f17c5ef3099d16541ae3741c6 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 08:02:18 +0000
+Subject: [PATCH] math: MATH_CountPopulation returns 32 bits under the port
+
+HGSS defines MATH_CountPopulation as u8 (lib/NitroSDK/src/math/MATH_pop.c:4,6)
+but declares it as int in nitro/wm/wm_internal.h:155 and
+vct/vct_audio_internal.h:155. On the ARM EABI a caller with the int prototype
+reads the whole of r0: the callee only promises the low byte, and GCC leaves
+the rest of the register as the last intermediate value, so the vendored SDK
+test read 0x04080C11 for 0xF0F0F0F1 instead of 17 (the low byte is right).
+MWCC happens to leave the register zero above the byte for this body, which is
+why the DS build and the game work.
+
+Under SDK_PORT_3DS the declaration and the definition return u32, so the same
+byte value is zero-extended and every caller, whatever prototype it uses, sees
+17. The MSL/Metrowerks build keeps the original two lines: gcc-10 -E -P of the
+file without the macro is byte-identical.
+
+Checked by the vendored test_nitro test_math case (MATH_CountPopulation
+(0xF0F0F0F1) == 17), which failed before this patch.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/math/MATH_pop.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/math/MATH_pop.c b/src/math/MATH_pop.c
+index 32aa11b..92b57d0 100644
+--- a/src/math/MATH_pop.c
++++ b/src/math/MATH_pop.c
+@@ -1,9 +1,24 @@
+ #include <nitro/types.h>
+ #include <nitro/code32.h>
+ 
++#ifdef SDK_PORT_3DS
++/* SDK_PORT_3DS: return u32, not u8. The DS build keeps the byte return; on
++ * the ARM EABI the caller sees the low byte of r0 and whatever the callee
++ * left above it, and HGSS itself declares this function as `int` in
++ * nitro/wm/wm_internal.h:155 and vct/vct_audio_internal.h:155, so a caller
++ * with that prototype (the vendored SDK test among them) reads 0x4080C11
++ * for 0xF0F0F0F1 instead of 17. A 32-bit return zero-extends the same byte
++ * value, which is what every caller of this function actually wants. */
++u32 MATH_CountPopulation(u32 x);
++#else
+ u8 MATH_CountPopulation(u32 x);
++#endif
+ 
++#ifdef SDK_PORT_3DS
++u32 MATH_CountPopulation(u32 x) {
++#else
+ u8 MATH_CountPopulation(u32 x) {
++#endif
+     x -= (x >> 1) & 0x55555555;
+     x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+     x += x >> 4;
+-- 
+2.43.0
+

@@ -92,6 +92,11 @@ void NitroPort_Gx3dSyncResults(void) {
     }
 }
 
+/* G3X_Init/Reset (patch 0604) clear the engine-side stack error through the port.
+ * The functions under test never reach them, so this only needs to exist. */
+void NitroPort_Gx3dClearStackError(void) {
+}
+
 static void set_stale_busy(void) {
     unsigned i;
     reg_G3X_GXSTAT |= REG_G3X_GXSTAT_B_MASK;

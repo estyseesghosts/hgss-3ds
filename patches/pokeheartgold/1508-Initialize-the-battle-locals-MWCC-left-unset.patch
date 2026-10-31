@@ -1,0 +1,80 @@
+From b9485ef546370ef5ffac26361e9584fa1f236223 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:42 +0000
+Subject: [PATCH] Initialize the battle locals MWCC left unset
+
+Three paths read a local that may never have been assigned:
+BattleAnimUtil_IsEmitterActive at src/battle/battle_anim_funcs.c:2469 reads
+age/life when the particle list is empty; GetDynamicMoveType at
+src/battle/battle_util.c:6623 and TrainerAI_MoveType at
+src/battle/trainer_ai.c:2965 leave type/result unset for Weather Ball in fog.
+MWCC did not zero these; the DS value was whatever the stack held. Under
+SDK_PORT_3DS initialize to 0, the safe documented choice. DS text unchanged:
+0 diff lines each.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/battle/battle_anim_funcs.c | 7 +++++++
+ src/battle/battle_util.c       | 6 ++++++
+ src/battle/trainer_ai.c        | 6 ++++++
+ 3 files changed, 19 insertions(+)
+
+diff --git a/src/battle/battle_anim_funcs.c b/src/battle/battle_anim_funcs.c
+index a541ed8..2e548af 100644
+--- a/src/battle/battle_anim_funcs.c
++++ b/src/battle/battle_anim_funcs.c
+@@ -2469,8 +2469,15 @@ static void BattleAnimEmitterMotion_Init(BattleAnimSystem *system, BattleAnimEmi
+ static BOOL BattleAnimUtil_IsEmitterActive(SPLEmitter *emitter) {
+     BOOL ret = FALSE;
+     SPLParticle *particle = emitter->act_ptcl_list.p_begin;
++#ifdef SDK_PORT_3DS
++    // An empty emitter list leaves both locals set. MWCC zeroed nothing here;
++    // the DS result is whatever the stack held, so use 0.
++    u16 age = 0;
++    u16 life = 0;
++#else
+     u16 age;
+     u16 life;
++#endif
+ 
+     while (particle != NULL) {
+         age = particle->age;
+diff --git a/src/battle/battle_util.c b/src/battle/battle_util.c
+index 09a3e18..ccc20f3 100644
+--- a/src/battle/battle_util.c
++++ b/src/battle/battle_util.c
+@@ -6621,7 +6621,13 @@ static BOOL IsFixedDamageMove(BattleContext *ctx, int moveNo) {
+ }
+ 
+ static int GetDynamicMoveType(BattleSystem *battleSystem, BattleContext *ctx, int battlerId, int moveNo) {
++#ifdef SDK_PORT_3DS
++    // The WEATHER_BALL path only assigns type for rain, sandstorm, sun and hail;
++    // fog falls through with the local unset. MWCC zeroed nothing here; use 0.
++    int type = 0;
++#else
+     int type;
++#endif
+ 
+     switch (moveNo) {
+     case MOVE_NATURAL_GIFT:
+diff --git a/src/battle/trainer_ai.c b/src/battle/trainer_ai.c
+index 45a1053..5399e9d 100644
+--- a/src/battle/trainer_ai.c
++++ b/src/battle/trainer_ai.c
+@@ -2963,7 +2963,13 @@ static s32 TrainerAI_CalcDamage(BattleSystem *battleSystem, BattleContext *ctx,
+  * @return The type of the move.
+  */
+ static int TrainerAI_MoveType(BattleSystem *battleSystem, BattleContext *ctx, int battler, int move) {
++#ifdef SDK_PORT_3DS
++    // As GetDynamicMoveType: fog leaves result unset on the WEATHER_BALL path.
++    // MWCC zeroed nothing here; use 0.
++    int result = 0;
++#else
+     int result;
++#endif
+ 
+     switch (move) {
+     case MOVE_NATURAL_GIFT:
+-- 
+2.43.0
+

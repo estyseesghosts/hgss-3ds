@@ -1,0 +1,59 @@
+From 7171b64aa5c49e3d30556d923e2e424bc9b6326f Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:41 +0000
+Subject: [PATCH] ScriptRunByIndex and the Frontier GoTo: read the word before
+ adding
+
+src/script_manager.c:343 and src/frontier/frontier_system.c:158 do
+ptr += ReadWord(ctx). Metrowerks reads ptr after ReadWord advanced it past the
+word (checked with MWCC 2.0/sp2p2: the call precedes the load of *p); GCC is
+free to read it before, landing four bytes early. Under SDK_PORT_3DS read the
+word into a local first, as Platinum patch 0009 does. DS text unchanged: 0
+diff lines each.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/frontier/frontier_system.c | 6 ++++++
+ src/script_manager.c           | 7 +++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/src/frontier/frontier_system.c b/src/frontier/frontier_system.c
+index 86ff6b2..f21141b 100644
+--- a/src/frontier/frontier_system.c
++++ b/src/frontier/frontier_system.c
+@@ -155,7 +155,13 @@ void FrontierSystem_RestoreVars(FrontierSystem *system, u16 *saved) {
+ // The script data starts with a table of relative offsets, one word per script.
+ static void FrontierScriptContext_GoToScript(FrontierScriptContext *ctx, u32 scriptIndex) {
+     ctx->scriptPtr += scriptIndex * 4;
++#ifdef SDK_PORT_3DS
++    // As ScriptRunByIndex: MWCC read scriptPtr after ReadWord advanced it.
++    u32 offset = FrontierScriptContext_ReadWord(ctx);
++    ctx->scriptPtr += offset;
++#else
+     ctx->scriptPtr += FrontierScriptContext_ReadWord(ctx);
++#endif
+ }
+ 
+ u16 *FrontierSystem_GetVarPtr(FrontierSystem *system, u32 index) {
+diff --git a/src/script_manager.c b/src/script_manager.c
+index 87d1e95..dd31342 100644
+--- a/src/script_manager.c
++++ b/src/script_manager.c
+@@ -340,7 +340,14 @@ void Script_ReopenStartMenuOnEnd(FieldSystem *fieldSystem) {
+ 
+ void ScriptRunByIndex(ScriptContext *ctx, int idx) {
+     ctx->script_ptr += 4 * idx;
++#ifdef SDK_PORT_3DS
++    // MWCC read ctx->script_ptr for the += after ScriptReadWord moved it past
++    // the offset; read the word into a local first so GCC does the same.
++    u32 offset = ScriptReadWord(ctx);
++    ctx->script_ptr += offset;
++#else
+     ctx->script_ptr += ScriptReadWord(ctx);
++#endif
+ }
+ 
+ u8 *LoadScriptsForCurrentMap(u32 mapno) {
+-- 
+2.43.0
+

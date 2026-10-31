@@ -1,0 +1,273 @@
+From a3579ad19ed12b7b4792e03de76b4756ed7b0d84 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 05:45:36 +0000
+Subject: [PATCH] fx,touchpanel: hook the remaining divider/square-root writers
+ (SDK_PORT_3DS)
+
+The remaining raw divider and square-root register writers, under SDK_PORT_3DS:
+CPi_PortUpdateDiv() runs once after the write sequence that starts a division,
+CPi_PortUpdateSqrt() once after the sequence that starts a square root, before
+anything reads the result. The port recomputes the result registers from the
+operands (3ds_port/nitro/src/port_cp.c), so one call after each sequence is
+enough, and no result is computed from half-written operands. The DS text is
+unchanged: gcc-10 -E -P of each file without SDK_PORT_3DS (with -DSDK_ARM9) has
+0 diff lines against the file before this patch. Every hunk is guarded; there
+is no #else branch because the added lines are calls, not replacements.
+
+Platinum 0002 hooks the CP_SetDiv*/CP_SetSqrt* header inlines instead. HGSS has
+no divider.h or sqrt.h and no CP_Set* helpers, so the two port functions are
+declared with a local extern in each touched file, as patch 0501 does. Patch
+0501 hooked fx_cp.c (FX_InvAsync, FX_DivAsync, FX_DivS32, FX_ModS32, FX_Sqrt) and
+listed these files as left for later; this patch hooks them:
+
+- fx/fx_vec.c (VEC_Mag): sqrt hook after reg_CP_SQRT_PARAM, before the busy-wait.
+- fx/fx_vec_mult_add.c (VEC_Distance): same.
+- fx/fx_vec_normalize.c (VEC_Normalize, VEC_Fx16Normalize): div hook after the
+  REG_DIV_DENOM_ADDR write, sqrt hook after the REG_SQRT_PARAM_ADDR write.
+- fx/fx_mtx44_ortho.c (inv, divfixed): div hook after the r[1]/r[2..3] writes,
+  which are the 64-bit stores covering REG_DIV_DENOM_ADDR. divfixed is never
+  called (MTX_OrthoW uses inv and FX_InvAsync), but it writes the denominator
+  address, so it is hooked the same way. DIVCNT keeps the mode FX_InvAsync set.
+- fx/fx_mtx44_perspective.c (DivAsyncShift): div hook after the
+  REG_DIV_DENOM_ADDR write.
+- tp.c (TP_SetCalibrateParam x and y, TpStartDiv): div hook after each
+  reg_CP_DIV_DENOM / REG_DIV_DENOM_ADDR write, before the busy-wait. TpStartDiv
+  writes the denominator with one 64-bit store, as its comment says.
+
+MTX_OrthoW and MTX_PerspectiveW interleave hooked starts (FX_InvAsync from
+0501, inv, DivAsyncShift) with result reads (FX_GetDivResultFx64c,
+FX_GetDivResult), and each read follows its own start, so every value the game
+reads was recomputed from the operands just written.
+
+Tests: tests/sdk/div_sqrt_writers/run.sh builds the six files plus fx_cp.c and
+tp.c with the survey flags and runs them against stub port functions that
+emulate the divider and square root the way port_cp.c does, with the I/O page
+mapped at 0x04000000. 69 checks: VEC_Mag/VEC_Distance against an exact integer
+sqrt, both normalizes and both projection matrices against exact integer
+mirrors of the SDK formulas, TP_SetCalibrateParam scales and stored fields, and
+TP_CalcCalibrateParam against hand-computed calibration values, plus the exact
+div/sqrt call count of every function. Mutation checks: neutralising the
+VEC_Mag sqrt hook or the TpStartDiv div hook makes the run fail (6 failures
+each). Against the tree without this patch the run fails 37 checks.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/fx/fx_mtx44_ortho.c       | 11 +++++++++++
+ src/fx/fx_mtx44_perspective.c |  8 ++++++++
+ src/fx/fx_vec.c               |  8 ++++++++
+ src/fx/fx_vec_mult_add.c      |  8 ++++++++
+ src/fx/fx_vec_normalize.c     | 22 ++++++++++++++++++++++
+ src/tp.c                      | 14 ++++++++++++++
+ 6 files changed, 71 insertions(+)
+
+diff --git a/src/fx/fx_mtx44_ortho.c b/src/fx/fx_mtx44_ortho.c
+index 16088d1..da449e5 100644
+--- a/src/fx/fx_mtx44_ortho.c
++++ b/src/fx/fx_mtx44_ortho.c
+@@ -1,6 +1,11 @@
+ #pragma force_active on
+ #include "global.h"
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no divider unit. Result registers recomputed from the operands just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in divider.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateDiv(void);
++#endif
++
+ // The code below is compiled as ARM (32-bit) code.
+ #include <nitro/code32.h>
+ #pragma force_active on
+@@ -12,6 +17,9 @@ static inline void inv(fx32 x) {
+     volatile u64 *r = (volatile u64 *)REG_DIV_NUMER_ADDR;
+     r[0] = (u64)4096 << 32;
+     r[1] = (u32)x;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+ }
+ 
+ static inline void divfixed(fx32 a, fx32 b) {
+@@ -20,6 +28,9 @@ static inline void divfixed(fx32 a, fx32 b) {
+     r[1] = a;
+     r[2] = b;
+     r[3] = 0;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+ }
+ 
+ static inline fx32 mul32(fx32 a, fx32 b) {
+diff --git a/src/fx/fx_mtx44_perspective.c b/src/fx/fx_mtx44_perspective.c
+index 6a345af..8e2c124 100644
+--- a/src/fx/fx_mtx44_perspective.c
++++ b/src/fx/fx_mtx44_perspective.c
+@@ -1,6 +1,11 @@
+ #pragma force_active on
+ #include "global.h"
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no divider unit. Result registers recomputed from the operands just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in divider.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateDiv(void);
++#endif
++
+ // The code below is compiled as ARM (32-bit) code.
+ #include <nitro/code32.h>
+ fx32 FX_Div(fx32 numerator, fx32 denominator);
+@@ -11,6 +16,9 @@ void MTX_PerspectiveW(fx32 fovySin, fx32 fovyCos, fx32 aspect, fx32 n, fx32 f, f
+ static inline void DivAsyncShift(fx32 numer, fx32 denom) {
+     *(s64 *)REG_DIV_NUMER_ADDR = (s64)numer << 32;
+     *(u64 *)REG_DIV_DENOM_ADDR = (u32)denom;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+ }
+ 
+ void MTX_PerspectiveW(fx32 fovySin, fx32 fovyCos, fx32 aspect, fx32 n, fx32 f, fx32 scaleW, MtxFx44 *mtx) {
+diff --git a/src/fx/fx_vec.c b/src/fx/fx_vec.c
+index 04ca76c..1720a05 100644
+--- a/src/fx/fx_vec.c
++++ b/src/fx/fx_vec.c
+@@ -1,5 +1,10 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no square-root unit. Result register recomputed from the operand just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in sqrt.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateSqrt(void);
++#endif
++
+ fx32 VEC_Distance(const VecFx32 *a, const VecFx32 *b);
+ fx32 VEC_Fx16DotProduct(const VecFx16 *a, const VecFx16 *b);
+ void VEC_CrossProduct(const VecFx32 *a, const VecFx32 *b, VecFx32 *dst);
+@@ -60,6 +65,9 @@ fx32 VEC_Mag(VecFx32 *a) {
+     l2 += (fx64)a->z * a->z;
+     reg_CP_SQRTCNT = 0x1;
+     reg_CP_SQRT_PARAM = (u64)(l2 << 2);
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateSqrt();
++#endif
+     while (reg_CP_SQRTCNT & REG_CP_SQRTCNT_BUSY_MASK) {} // wait for coprocessor to finish
+     return ((fx32)reg_CP_SQRT_RESULT + 1) >> 1;
+ }
+diff --git a/src/fx/fx_vec_mult_add.c b/src/fx/fx_vec_mult_add.c
+index ce9e4ec..e80be2b 100644
+--- a/src/fx/fx_vec_mult_add.c
++++ b/src/fx/fx_vec_mult_add.c
+@@ -1,5 +1,10 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no square-root unit. Result register recomputed from the operand just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in sqrt.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateSqrt(void);
++#endif
++
+ fx32 VEC_Distance(const VecFx32 *a, const VecFx32 *b);
+ fx32 VEC_Fx16DotProduct(const VecFx16 *a, const VecFx16 *b);
+ void VEC_CrossProduct(const VecFx32 *a, const VecFx32 *b, VecFx32 *dst);
+@@ -17,6 +22,9 @@ fx32 VEC_Distance(const VecFx32 *a, const VecFx32 *b) {
+     l2 += (fx64)(a->z - b->z) * (a->z - b->z);
+     reg_CP_SQRTCNT = 1;
+     reg_CP_SQRT_PARAM = (u64)(l2 * 4);
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateSqrt();
++#endif
+     while (reg_CP_SQRTCNT & REG_CP_SQRTCNT_BUSY_MASK) {}
+     return ((fx32)reg_CP_SQRT_RESULT + 1) >> 1;
+ }
+diff --git a/src/fx/fx_vec_normalize.c b/src/fx/fx_vec_normalize.c
+index e76183c..06b32af 100644
+--- a/src/fx/fx_vec_normalize.c
++++ b/src/fx/fx_vec_normalize.c
+@@ -1,6 +1,16 @@
+ #pragma force_active on
+ #include "global.h"
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no divider unit. Result registers recomputed from the operands just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in divider.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateDiv(void);
++#endif
++
++#ifdef SDK_PORT_3DS
++/* 3DS port: no square-root unit. Result register recomputed from the operand just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in sqrt.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateSqrt(void);
++#endif
++
+ // The code below is compiled as ARM (32-bit) code.
+ #include <nitro/code32.h>
+ void VEC_Normalize(const VecFx32 *src, VecFx32 *dst);
+@@ -16,8 +26,14 @@ void VEC_Normalize(const VecFx32 *src, VecFx32 *dst) {
+     reg_CP_DIVCNT = 2;
+     *(s64 *)REG_DIV_NUMER_ADDR = 0x0100000000000000LL;
+     *(s64 *)REG_DIV_DENOM_ADDR = len;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+     reg_CP_SQRTCNT = 1;
+     *(s64 *)REG_SQRT_PARAM_ADDR = len << 2;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateSqrt();
++#endif
+     while (reg_CP_SQRTCNT & REG_CP_SQRTCNT_BUSY_MASK) {
+     }
+     root = reg_CP_SQRT_RESULT;
+@@ -39,8 +55,14 @@ void VEC_Fx16Normalize(const VecFx16 *src, VecFx16 *dst) {
+     reg_CP_DIVCNT = 2;
+     *(s64 *)REG_DIV_NUMER_ADDR = 0x0100000000000000LL;
+     *(s64 *)REG_DIV_DENOM_ADDR = len;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+     reg_CP_SQRTCNT = 1;
+     *(s64 *)REG_SQRT_PARAM_ADDR = len << 2;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateSqrt();
++#endif
+     while (reg_CP_SQRTCNT & REG_CP_SQRTCNT_BUSY_MASK) {
+     }
+     root = reg_CP_SQRT_RESULT;
+diff --git a/src/tp.c b/src/tp.c
+index 3764489..56eaff4 100644
+--- a/src/tp.c
++++ b/src/tp.c
+@@ -1,5 +1,10 @@
+ #include <nitro.h>
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no divider unit. Result registers recomputed from the operands just written (3ds_port/nitro/src/port_cp.c); call once after the write sequence that starts an operation, before anything reads the result. Platinum declares this in divider.h (patch 0002); HGSS has neither divider.h nor sqrt.h (see patch 0501). */
++extern void CPi_PortUpdateDiv(void);
++#endif
++
+ // The code below is compiled as ARM (32-bit) code.
+ #include <nitro/code32.h>
+ 
+@@ -202,6 +207,9 @@ void TP_SetCalibrateParam(const TPCalibrateParam *param) {
+         reg_CP_DIVCNT = 0;
+         reg_CP_DIV_NUMER_L = 0x10000000;
+         reg_CP_DIV_DENOM = (u32)dotSize;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+         gTpWork.calibration.x0 = param->x0;
+         gTpWork.calibration.xDotSize = param->xDotSize;
+         while (reg_CP_DIVCNT & REG_CP_DIVCNT_BUSY_MASK) {}
+@@ -215,6 +223,9 @@ void TP_SetCalibrateParam(const TPCalibrateParam *param) {
+         reg_CP_DIVCNT = 0;
+         reg_CP_DIV_NUMER_L = 0x10000000;
+         reg_CP_DIV_DENOM = (u32)dotSize;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+         gTpWork.calibration.y0 = param->y0;
+         gTpWork.calibration.yDotSize = param->yDotSize;
+         while (reg_CP_DIVCNT & REG_CP_DIVCNT_BUSY_MASK) {}
+@@ -359,6 +370,9 @@ static inline void TpStartDiv(s32 numer, s32 denom) {
+     reg_CP_DIVCNT = 0;
+     reg_CP_DIV_NUMER_L = numer;
+     *(REGType64 *)REG_DIV_DENOM_ADDR = (u32)denom;
++#ifdef SDK_PORT_3DS
++    CPi_PortUpdateDiv();
++#endif
+ }
+ 
+ static inline void TpWaitDiv(void) {
+-- 
+2.43.0
+

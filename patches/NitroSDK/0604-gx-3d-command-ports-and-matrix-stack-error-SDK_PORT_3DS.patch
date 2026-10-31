@@ -1,0 +1,190 @@
+From 3b8fa3c72f826cb96017b03fe20be668935b414c Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 06:22:26 +0000
+Subject: [PATCH] gx: 3D command ports and matrix stack error for the port
+ (SDK_PORT_3DS)
+
+The 3DS has no DS geometry command ports or FIFO, and the engine-side matrix
+stack error lives in the port, so immediate writes go to the port decoder and
+stack-error clears go to the port engine. The DS text is unchanged: gcc-10 -E
+-P of each file without SDK_PORT_3DS (with -DSDK_ARM9) has 0 diff lines
+against the file before this patch. Rebased from Platinum patches 0024 and
+0025 (src halves); the g3imm.h/g3x.h halves are in patch 1402, and HGSS
+differences are noted below.
+
+g3imm.c (G3_LoadMtx44, G3_LoadMtx43, G3_MultMtx43, G3_MultMtx33): under
+SDK_PORT_3DS, send the matrix words one at a time with NitroPort_GxDirectWrite
+and the matching G3OP_MTX_* opcode (Platinum 0024). HGSS difference: only
+these four exist here (no MultMtx44/Shininess/MultTrans here as in Platinum);
+MultMtx33 uses MI_Copy36B on the DS side. DirectWrite accumulates same-opcode
+parameters in the port decoder, so the per-word loop is equivalent to the FIFO
+burst; NitroPort_GxFifoWords (used by the port DMA path) is not needed.
+
+g3x.c: the four writes of 1 to the GXSTAT stack-error bit (in G3X_Init,
+G3X_Reset, G3X_InitMtxStack, G3X_ResetMtxStack) clear the error on the DS;
+under SDK_PORT_3DS they call NitroPort_Gx3dClearStackError() instead, so the
+engine-side error is cleared without setting a register bit that stack-level
+readers would misread (Platinum 0025 covers the inline; HGSS needs the same
+treatment at these four sites). The full-register GXSTAT writes in G3X_Init
+are one-time initialization with a fresh engine and are left alone.
+
+Tests: tests/sdk/gx_3d/run.sh builds both files with the survey flags and runs
+119 checks against stub port functions: the exact opcode/value stream of all
+four matrix loads, the MtxMode/PushMtx/Translate/Identity inlines, two clears
+each from G3X_Init and G3X_Reset plus the g3x.h inline, and
+MI_GetUncompressedSize (whose link from two TUs also proves the uncompress.h
+half of 1402). Against the tree without this patch the suite fails to link.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/gx/g3imm.c | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/gx/g3x.c   | 23 +++++++++++++++++++++++
+ 2 files changed, 69 insertions(+)
+
+diff --git a/src/gx/g3imm.c b/src/gx/g3imm.c
+index 0146aef..26aaefc 100644
+--- a/src/gx/g3imm.c
++++ b/src/gx/g3imm.c
+@@ -1,5 +1,11 @@
+ #include <nitro.h>
+ #include <nitro/code32.h>
++#ifdef SDK_PORT_3DS
++/* The 3DS has no DS geometry command FIFO. Send matrix words to the port geometry
++ * engine one at a time (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0024). */
++void NitroPort_GxDirectWrite(int opcode, unsigned int parameter);
++#endif
++
+ 
+ void GX_SendFifo48B(const void *src, void *dst);
+ void GX_SendFifo64B(const void *src, void *dst);
+@@ -9,21 +15,61 @@ void G3_MultMtx43(const MtxFx43 *mtx);
+ void G3_MultMtx33(const MtxFx33 *mtx);
+ 
+ void G3_LoadMtx44(const MtxFx44 *mtx) {
++#ifdef SDK_PORT_3DS
++    {
++        const u32 *words = (const u32 *)(&mtx->_00);
++        int i;
++        for (i = 0; i < 16; ++i) {
++            NitroPort_GxDirectWrite(G3OP_MTX_LOAD_4x4, words[i]);
++        }
++    }
++#else
+     reg_G3X_GXFIFO = G3OP_MTX_LOAD_4x4;
+     GX_SendFifo64B(mtx, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_LoadMtx43(const MtxFx43 *mtx) {
++#ifdef SDK_PORT_3DS
++    {
++        const u32 *words = (const u32 *)(&mtx->_00);
++        int i;
++        for (i = 0; i < 12; ++i) {
++            NitroPort_GxDirectWrite(G3OP_MTX_LOAD_4x3, words[i]);
++        }
++    }
++#else
+     reg_G3X_GXFIFO = G3OP_MTX_LOAD_4x3;
+     GX_SendFifo48B(mtx, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_MultMtx43(const MtxFx43 *mtx) {
++#ifdef SDK_PORT_3DS
++    {
++        const u32 *words = (const u32 *)(&mtx->_00);
++        int i;
++        for (i = 0; i < 12; ++i) {
++            NitroPort_GxDirectWrite(G3OP_MTX_MULT_4x3, words[i]);
++        }
++    }
++#else
+     reg_G3X_GXFIFO = G3OP_MTX_MULT_4x3;
+     GX_SendFifo48B(mtx, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+ 
+ void G3_MultMtx33(const MtxFx33 *mtx) {
++#ifdef SDK_PORT_3DS
++    {
++        const u32 *words = (const u32 *)(&mtx->_00);
++        int i;
++        for (i = 0; i < 9; ++i) {
++            NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, words[i]);
++        }
++    }
++#else
+     reg_G3X_GXFIFO = G3OP_MTX_MULT_3x3;
+     MI_Copy36B(mtx, (void *)&reg_G3X_GXFIFO);
++#endif
+ }
+diff --git a/src/gx/g3x.c b/src/gx/g3x.c
+index f2d0a55..f2ee6ae 100644
+--- a/src/gx/g3x.c
++++ b/src/gx/g3x.c
+@@ -24,6 +24,13 @@ u32 G3X_GetBoxTestResult(u32 *result);
+ void G3X_SetHOffset(u32 offset);
+ 
+ extern u32 GXi_DmaId;
++#ifdef SDK_PORT_3DS
++/* Writing 1 to the GXSTAT stack-error bit clears it on the DS; on the port the engine
++ * keeps that error itself, so clear it there instead of setting a register bit that
++ * stack-level readers would misread (3ds_port/nitro/src/port_gx3d.c). */
++extern void NitroPort_Gx3dClearStackError(void);
++#endif
++
+ 
+ #ifdef SDK_PORT_3DS
+ /* The port's geometry engine works out the matrix result registers when they're read
+@@ -43,7 +50,11 @@ void G3X_Init() {
+     reg_G3X_DISP3DCNT &= ~(REG_G3X_DISP3DCNT_GO_MASK | REG_G3X_DISP3DCNT_RO_MASK | REG_G3X_DISP3DCNT_THS_MASK);
+     reg_G3X_DISP3DCNT = (u16)((reg_G3X_DISP3DCNT & ~(REG_G3X_DISP3DCNT_GO_MASK | REG_G3X_DISP3DCNT_RO_MASK)) | REG_G3X_DISP3DCNT_AAE_MASK);
+     reg_G3X_DISP3DCNT = (u16)(reg_G3X_DISP3DCNT & (u16)~(REG_G3X_DISP3DCNT_GO_MASK | REG_G3X_DISP3DCNT_RO_MASK | REG_G3X_DISP3DCNT_ATE_MASK));
++#ifdef SDK_PORT_3DS
++    NitroPort_Gx3dClearStackError();
++#else
+     reg_G3X_GXSTAT |= REG_G3X_GXSTAT_SE_MASK;
++#endif
+     reg_G3X_GXSTAT = (reg_G3X_GXSTAT & ~REG_G3X_GXSTAT_FI_MASK) | 0x80000000;
+     G3X_InitMtxStack();
+     reg_G3X_CLEAR_COLOR = 0x0;
+@@ -60,7 +71,11 @@ void G3X_Init() {
+ 
+ void G3X_Reset() {
+     while (reg_G3X_GXSTAT & REG_G3X_GXSTAT_B_MASK) {}
++#ifdef SDK_PORT_3DS
++    NitroPort_Gx3dClearStackError();
++#else
+     reg_G3X_GXSTAT |= REG_G3X_GXSTAT_SE_MASK;
++#endif
+     reg_G3X_DISP3DCNT |= REG_G3X_DISP3DCNT_GO_MASK;
+     reg_G3X_DISP3DCNT |= REG_G3X_DISP3DCNT_RO_MASK;
+     G3X_ResetMtxStack();
+@@ -76,7 +91,11 @@ void G3X_ClearFifo() {
+ 
+ void G3X_InitMtxStack() {
+     u32 PV_level, PJ_level;
++#ifdef SDK_PORT_3DS
++    NitroPort_Gx3dClearStackError();
++#else
+     reg_G3X_GXSTAT |= REG_G3X_GXSTAT_SE_MASK;
++#endif
+     while (G3X_GetMtxStackLevelPV(&PV_level)) {}
+     while (G3X_GetMtxStackLevelPJ(&PJ_level)) {}
+     reg_G3_MTX_MODE = 0x3;
+@@ -93,7 +112,11 @@ void G3X_InitMtxStack() {
+ 
+ void G3X_ResetMtxStack() {
+     u32 PV_level, PJ_level;
++#ifdef SDK_PORT_3DS
++    NitroPort_Gx3dClearStackError();
++#else
+     reg_G3X_GXSTAT |= REG_G3X_GXSTAT_SE_MASK;
++#endif
+     while (G3X_GetMtxStackLevelPV(&PV_level)) {}
+     while (G3X_GetMtxStackLevelPJ(&PJ_level)) {}
+     reg_G3_MTX_MODE = 0x3;
+-- 
+2.43.0
+

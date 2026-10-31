@@ -5,10 +5,14 @@
  * HGSS has only lib/include/nitro/cp/context.h; the register names this
  * file's helpers use (REG_DIV_*_ADDR, REG_CP_DIVCNT_* in
  * lib/include/nitro/hw/ARM9/io_reg.h, reached via <nitro/ioreg.h>) match
- * ntrtwl's, so the helpers are ntrtwl's verbatim
+ * ntrtwl's, so the helpers are ntrtwl's
  * (include/nitro/cp/divider.h) except for the <stdint.h> include: HGSS's
  * lib/include/nitro/types.h provides no INT64_MIN (the Platinum port got it
  * from its patched types.h), and 3ds_port/nitro/src/port_cp.c needs it.
+ * The port's software hooks call CPi_PortUpdateDiv after every operand
+ * write, exactly as Platinum's patch 0002 does to its SDK copy (no divider
+ * hardware on the port; this directory is only on the port build's include
+ * path, so the DS build is unaffected).
  */
 
 #ifndef NITRO_CP_DIVIDER_H_
@@ -21,6 +25,9 @@ extern "C" {
 #include <stdint.h>
 #include <nitro/ioreg.h>
 
+void CPi_PortUpdateDiv(void);
+#define CPi_PORT_DIV_WRITTEN() CPi_PortUpdateDiv()
+
 #define CP_DIV_32_32BIT_MODE    (0UL << REG_CP_DIVCNT_MODE_SHIFT)
 #define CP_DIV_64_32BIT_MODE    (1UL << REG_CP_DIVCNT_MODE_SHIFT)
 #define CP_DIV_64_64BIT_MODE    (2UL << REG_CP_DIVCNT_MODE_SHIFT)
@@ -28,24 +35,28 @@ extern "C" {
 static inline void CP_SetDivControl(u16 parameter)
 {
     reg_CP_DIVCNT = parameter;
+    CPi_PORT_DIV_WRITTEN();
 }
 
 static inline void CP_SetDivImm32_32_NS_(u32 numer, u32 denom)
 {
     *(REGType32 *)REG_DIV_NUMER_ADDR = numer;
     *(REGType64 *)REG_DIV_DENOM_ADDR = denom;
+    CPi_PORT_DIV_WRITTEN();
 }
 
 static inline void CP_SetDivImm64_32_NS_(u64 numer, u32 denom)
 {
     *(REGType64 *)REG_DIV_NUMER_ADDR = numer;
     *(REGType64 *)REG_DIV_DENOM_ADDR = denom;
+    CPi_PORT_DIV_WRITTEN();
 }
 
 static inline void CP_SetDivImm64_64_NS_(u64 numer, u64 denom)
 {
     *(REGType64 *)REG_DIV_NUMER_ADDR = numer;
     *(REGType64 *)REG_DIV_DENOM_ADDR = denom;
+    CPi_PORT_DIV_WRITTEN();
 }
 
 static inline void CP_SetDivImm32_32(u32 numer, u32 denom)

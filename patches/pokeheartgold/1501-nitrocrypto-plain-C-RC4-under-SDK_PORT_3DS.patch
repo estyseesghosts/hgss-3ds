@@ -1,0 +1,128 @@
+From ad0d399452d269d9f7e0598b56e8829697bfab96 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:39 +0000
+Subject: [PATCH] nitrocrypto: plain-C RC4 under SDK_PORT_3DS
+
+MWCC accepts the asm void bodies at lib/src/nitrocrypto_rc4.c:10 and
+lib/src/nitrocrypto_rc4_fast.c:9; GCC does not. Under SDK_PORT_3DS, build the
+same RC4 stream in C against the contexts CRYPTO_RC4Init and
+CRYPTO_RC4FastInit fill (byte state at +4; fast word state in the top byte of
+each u32) and leave i and j exactly as the assembly did. The DS translation
+unit is unchanged: gcc-10 -E -P of both files without SDK_PORT_3DS has 0 diff
+lines.
+
+tests/game/rc4 checks the classic vectors and RFC 6229 section 2.1 against both
+contexts and a split-call continuation.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/src/nitrocrypto_rc4.c      | 37 ++++++++++++++++++++++++++++++++++
+ lib/src/nitrocrypto_rc4_fast.c | 32 +++++++++++++++++++++++++++++
+ 2 files changed, 69 insertions(+)
+
+diff --git a/lib/src/nitrocrypto_rc4.c b/lib/src/nitrocrypto_rc4.c
+index 73303de..b9ff31d 100644
+--- a/lib/src/nitrocrypto_rc4.c
++++ b/lib/src/nitrocrypto_rc4.c
+@@ -1,8 +1,44 @@
++#ifdef SDK_PORT_3DS
++#include "nitrocrypto_rc4.h"
++#else
+ #include "nitrocrypto_bn.h"
++#endif
+ 
+ // RC4 stream cipher: en-/decrypts `length` bytes with the key state in `context`
+ // (bytes i and j at +0 and +1, the 256-byte permutation from +4).
+ 
++#ifdef SDK_PORT_3DS
++// Plain-C CRYPTO_RC4Encrypt. MWCC keeps this in the ARM assembly below; GCC
++// cannot assemble it. The context layout is the one CRYPTO_RC4Init fills: i at
++// +0, j at +1 and the 256-byte permutation at +4. The byte loop is the same
++// RC4 keystream the assembly produces and leaves ctx->i/ctx->j at the same
++// values, so a context can be handed back and forth between the two.
++void CRYPTO_RC4Encrypt(void *context, const void *in, u32 length, void *out) {
++    CRYPTORC4Context *ctx = context;
++    const u8 *src = in;
++    u8 *dst = out;
++    u8 *s = ctx->s;
++    u8 i = ctx->i;
++    u8 j = ctx->j;
++    u32 n;
++
++    for (n = 0; n < length; n++) {
++        u8 a;
++        u8 b;
++
++        i++;
++        a = s[i];
++        j += a;
++        b = s[j];
++        s[i] = b;
++        s[j] = a;
++        dst[n] = (u8)(src[n] ^ s[(u8)(a + b)]);
++    }
++
++    ctx->i = i;
++    ctx->j = j;
++}
++#else
+ // clang-format off
+ asm void CRYPTO_RC4Encrypt(void *context, const void *in, u32 length, void *out)
+ {
+@@ -39,4 +75,5 @@ asm void CRYPTO_RC4Encrypt(void *context, const void *in, u32 length, void *out)
+     strb r6, [r0, #-3]
+     ldmia sp!, {r4, r5, r6, r7, r8, r9, pc}
+ }
++#endif
+ // clang-format on
+diff --git a/lib/src/nitrocrypto_rc4_fast.c b/lib/src/nitrocrypto_rc4_fast.c
+index ac0a3b9..e6da181 100644
+--- a/lib/src/nitrocrypto_rc4_fast.c
++++ b/lib/src/nitrocrypto_rc4_fast.c
+@@ -4,6 +4,37 @@
+ 
+ #pragma force_active on
+ 
++#ifdef SDK_PORT_3DS
++// Plain-C CRYPTO_RC4FastEncrypt. MWCC keeps this in the ARM assembly below;
++// GCC cannot assemble it. CRYPTO_RC4FastInit keeps i, j and every table entry
++// in the top byte of a 32-bit word, so the byte loop shifts in and out of that
++// byte exactly as the assembly does (including the wrap of a + b at 256).
++void CRYPTO_RC4FastEncrypt(void *context, const void *in, u32 length, void *out) {
++    CRYPTORC4FastContext *ctx = context;
++    const u8 *src = in;
++    u8 *dst = out;
++    u32 *s = ctx->s;
++    u8 i = (u8)(ctx->i >> 24);
++    u8 j = (u8)(ctx->j >> 24);
++    u32 n;
++
++    for (n = 0; n < length; n++) {
++        u8 a;
++        u8 b;
++
++        i++;
++        a = (u8)(s[i] >> 24);
++        j += a;
++        b = (u8)(s[j] >> 24);
++        s[i] = (u32)b << 24;
++        s[j] = (u32)a << 24;
++        dst[n] = (u8)(src[n] ^ (s[(u8)(a + b)] >> 24));
++    }
++
++    ctx->i = (u32)i << 24;
++    ctx->j = (u32)j << 24;
++}
++#else
+ // clang-format off
+ asm void CRYPTO_RC4FastEncrypt(void *context, const void *in, u32 length, void *out) {
+     stmdb sp!, {r4, r5, r6, r7, r8, r9, lr}
+@@ -130,4 +161,5 @@ asm void CRYPTO_RC4FastEncrypt(void *context, const void *in, u32 length, void *
+     str r7, [r0, #-8]
+     ldmia sp!, {r4, r5, r6, r7, r8, r9, pc}
+ }
++#endif
+ // clang-format on
+-- 
+2.43.0
+

@@ -1,0 +1,74 @@
+From 2dde3a523c9ad1d596520929eb41a5867c057a74 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 05:51:50 +0000
+Subject: [PATCH] os: count the hardware timers in software (SDK_PORT_3DS)
+
+The DS timers count by themselves; the port counts them from a real clock
+(3ds_port/nitro/src/port_timer.c), so it must bring the counters up to date
+before the tick is read. The DS text is unchanged: gcc-10 -E -P of the file
+without SDK_PORT_3DS (with -DSDK_ARM9) has 0 diff lines against the file before
+this patch. Rebased from Platinum patch 0013 (os_tick.c half); HGSS has no
+OSi_GetTick_noProfile, so only OS_GetTick and OS_GetTickLo are synced, with
+plain guarded calls rather than a null macro, so the Metrowerks build
+preprocesses byte-identically. The OS_SetTimerCount/Control half is the
+timer_shared.h hunk of patch 1402: OS_InitTick, OS_SetTick and OSi_CountUpTick
+go through those hooked inlines and need no changes here.
+
+Tests: tests/sdk/os_timer/run.sh builds os_tick.c with the survey flags and
+runs 23 checks against stub port functions: SetTimerCount/Control reach the
+port with the right id and value and leave the registers untouched, OS_InitTick
+issues the reserve/off/zero/on sequence, OS_GetTick returns the counter plus
+the canned low word (with the pending-interrupt carry case), OS_GetTickLo
+returns the low word, OS_SetTick sets the counter and re-arms, OSi_CountUpTick
+bumps the counter, and both readers sync first. Against the tree without this
+patch and 1402 the run fails 15 checks; dropping the OS_GetTickLo sync fails
+one.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/os/os_tick.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/os/os_tick.c b/src/os/os_tick.c
+index 79733d2..f303ce3 100644
+--- a/src/os/os_tick.c
++++ b/src/os/os_tick.c
+@@ -8,8 +8,14 @@ BOOL OSi_NeedResetTimer = FALSE;
+ #define OSi_TICK_TIMER         OS_TIMER_0
+ #define OSi_TICK_IE_TIMER      OS_IE_TIMER0
+ 
+-void OSi_CountUpTick(void);
++#ifdef SDK_PORT_3DS
++/* 3DS port: bring the software timers up to date before reading one
++ * (3ds_port/nitro/src/port_timer.c). The call sites below are guarded, so the
++ * Metrowerks build preprocesses exactly as before. */
++void NitroPort_SyncTimers(void);
++#endif
+ 
++void OSi_CountUpTick(void);
+ void OS_InitTick(void) {
+     if (OSi_UseTick) {
+         return;
+@@ -46,6 +52,9 @@ OSTick OS_GetTick(void) {
+     vu64 countH;
+     OSIntrMode enabled = OS_DisableInterrupts();
+ 
++#ifdef SDK_PORT_3DS
++    NitroPort_SyncTimers();
++#endif
+     countL = *(REGType16 *)((u32)REG_TM0CNT_L_ADDR + OSi_TICK_TIMER * 4);
+     countH = OSi_TickCounter & 0xffffffffffffULL;
+     if (reg_OS_IF & OSi_TICK_IE_TIMER && !(countL & 0x8000)) {
+@@ -56,6 +65,9 @@ OSTick OS_GetTick(void) {
+ }
+ 
+ u16 OS_GetTickLo(void) {
++#ifdef SDK_PORT_3DS
++    NitroPort_SyncTimers();
++#endif
+     return *(REGType16 *)((u32)REG_TM0CNT_L_ADDR + OSi_TICK_TIMER * 4);
+ }
+ 
+-- 
+2.43.0
+

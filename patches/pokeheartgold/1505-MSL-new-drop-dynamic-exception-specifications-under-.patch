@@ -1,0 +1,110 @@
+From 580d4e0ef0eee054c58690d1b672038dc185733b Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:41 +0000
+Subject: [PATCH] MSL new: drop dynamic exception specifications under the port
+
+src/to91_msl_array_new.cpp:7 and src/to91_msl_scalar_new.cpp:9 use
+throw(std::bad_alloc) and throw(), which C++17 removed. Under __cplusplus and
+SDK_PORT_3DS, MSL_THROW_BAD_ALLOC and MSL_THROW_NOTHING expand to nothing; in
+the DS build they expand to the original tokens, so gcc-10 -E -P without the
+macro is byte-identical (0 diff lines). The operator new size_t errors in
+these two files are a separate GCC problem and are unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/to91_msl_array_new.cpp  | 21 +++++++++++++++------
+ src/to91_msl_scalar_new.cpp | 25 +++++++++++++++++--------
+ 2 files changed, 32 insertions(+), 14 deletions(-)
+
+diff --git a/src/to91_msl_array_new.cpp b/src/to91_msl_array_new.cpp
+index cb47f9a..5e7cd13 100644
+--- a/src/to91_msl_array_new.cpp
++++ b/src/to91_msl_array_new.cpp
+@@ -3,12 +3,21 @@
+ #include <nitro/code32.h>
+ // clang-format on
+ #pragma force_active on
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// C++17 removed dynamic exception specifications.
++#define MSL_THROW_BAD_ALLOC
++#define MSL_THROW_NOTHING
++#else
++#define MSL_THROW_BAD_ALLOC throw(std::bad_alloc)
++#define MSL_THROW_NOTHING throw()
++#endif
++
+ namespace std { class bad_alloc; struct nothrow_t {}; }
+-void*operator new(unsigned long) throw(std::bad_alloc);
+-void*operator new(unsigned long,const std::nothrow_t&) throw();
+-void*operator new[](unsigned long) throw(std::bad_alloc);
+-void*operator new[](unsigned long,const std::nothrow_t&) throw();
++void*operator new(unsigned long) MSL_THROW_BAD_ALLOC;
++void*operator new(unsigned long,const std::nothrow_t&) MSL_THROW_NOTHING;
++void*operator new[](unsigned long) MSL_THROW_BAD_ALLOC;
++void*operator new[](unsigned long,const std::nothrow_t&) MSL_THROW_NOTHING;
+ // @fn _Znam
+-void*operator new[](unsigned long count) throw(std::bad_alloc) {return operator new(count);}
++void*operator new[](unsigned long count) MSL_THROW_BAD_ALLOC {return operator new(count);}
+ // @fn _ZnamRKSt9nothrow_t
+-void*operator new[](unsigned long count,const std::nothrow_t&tag) throw() {return operator new(count,tag);}
++void*operator new[](unsigned long count,const std::nothrow_t&tag) MSL_THROW_NOTHING {return operator new(count,tag);}
+diff --git a/src/to91_msl_scalar_new.cpp b/src/to91_msl_scalar_new.cpp
+index e83c1f9..5c21db3 100644
+--- a/src/to91_msl_scalar_new.cpp
++++ b/src/to91_msl_scalar_new.cpp
+@@ -1,27 +1,36 @@
+ #include <nitro/types.h>
+ #include <nitro/code32.h>
+ #pragma force_active on
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// C++17 removed dynamic exception specifications.
++#define MSL_THROW_BAD_ALLOC
++#define MSL_THROW_NOTHING
++#else
++#define MSL_THROW_BAD_ALLOC throw(std::bad_alloc)
++#define MSL_THROW_NOTHING throw()
++#endif
++
+ typedef unsigned long size_t;
+ extern "C" void *malloc(size_t);
+ namespace std {
+ class exception {
+ public:
+-    virtual ~exception() throw();
+-    virtual const char *what() const throw();
++    virtual ~exception() MSL_THROW_NOTHING;
++    virtual const char *what() const MSL_THROW_NOTHING;
+ };
+ class bad_alloc : public exception {
+ public:
+-    virtual ~bad_alloc() throw();
+-    virtual const char *what() const throw();
++    virtual ~bad_alloc() MSL_THROW_NOTHING;
++    virtual const char *what() const MSL_THROW_NOTHING;
+ };
+ struct nothrow_t {};
+ typedef void (*new_handler)();
+ extern new_handler __new_handler;
+ void __throw_bad_alloc();
+ }
+-void *operator new(size_t) throw(std::bad_alloc);
+-void *operator new(size_t, const std::nothrow_t &) throw();
+-void *operator new(size_t size) throw(std::bad_alloc) {
++void *operator new(size_t) MSL_THROW_BAD_ALLOC;
++void *operator new(size_t, const std::nothrow_t &) MSL_THROW_NOTHING;
++void *operator new(size_t size) MSL_THROW_BAD_ALLOC {
+     void *pointer;
+     if (size == 0) size = 4;
+     for (;;) {
+@@ -36,7 +45,7 @@ void *operator new(size_t size) throw(std::bad_alloc) {
+     }
+     return pointer;
+ }
+-void *operator new(size_t size, const std::nothrow_t &) throw() {
++void *operator new(size_t size, const std::nothrow_t &) MSL_THROW_NOTHING {
+     try {
+         return ::operator new(size);
+     } catch (...) {
+-- 
+2.43.0
+

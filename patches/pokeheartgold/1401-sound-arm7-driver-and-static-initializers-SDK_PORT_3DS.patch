@@ -1,0 +1,581 @@
+From 951b7f110acd472fbea8754c951b8dc2ec5ccaf1 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 06:13:02 +0000
+Subject: [PATCH] sound: ARM7 driver and static initializers for the port
+ (SDK_PORT_3DS)
+
+The ARM7 sound driver runs on the port sound chip model instead of DS
+hardware, and overlay static initializers use a GCC section attribute. The DS
+text is unchanged: gcc-10 -E -P of each file without SDK_PORT_3DS (with
+-DSDK_ARM7 for sub/, -DSDK_ARM9 for the rest) has 0 diff lines against the
+file before this patch. The ARM7 part is rebased from Platinum NitroSDK
+0018-0023 against the HGSS driver (sub/lib/src/sound_*.c, a different revision
+with unified files); HGSS differences are noted below.
+
+lib/dsprot/include/static_init.h: under SDK_PORT_3DS, NitroStaticInit_ goes in
+__attribute__((section(".sinit"), used)) instead of the MWCC section pragmas
+(Platinum 0027). The #else keeps the original line order so the Metrowerks
+build preprocesses byte-identically. A host object was checked to carry a
+.sinit section with the pointer.
+
+sound_main.c (SND_Init): under SDK_PORT_3DS, no ARM7 thread or interval timer;
+the subsystems init directly (Command/ExChannel/Seq/Alarm, Enable, output
+selector, master volume), as the port audio thread drives the ticks (Platinum
+0018). Start/StopIntervalTimer are empty. The dollar-sign statics stay: GCC
+accepts them, and the sound data object defines them under the same names, so
+no rename is needed. Setup/IsCaptureActive use the port sound array.
+
+sound_command.c (SND_CommandProc): commands are popped with
+NitroPort_SoundPopCommand and finishedCommandTag goes up atomically (Platinum
+0019); the queue and PXI callback init are skipped, and channel enables call
+NitroPort_SoundChannelStart on 0 to 1 only. HGSS differences: the enable bit
+lives inline in START_TIMER (there is no SND_StartChannel), so the transition
+is checked there; the PCM source keeps all 32 bits (the DS mask is 27).
+
+sound_alarm.c: alarm start/stop go to NitroPort_SoundAlarmStart/Stop with the
+(id << 8 | no) message (Platinum 0020); setup only stores. The restart path
+stops the old port alarm first, as the DS cancels the old OS alarm.
+
+sound_channel.c and sound_driver.c: register accesses go to
+NitroPort_SoundRegisters (Platinum 0018): the R8/R16/R32 macros and the
+SOUNDCNT/capture macros are redefined onto the array (indexed from
+0x04000400); the direct casts in SetupPsg/Noise, StopChannel and the surround
+decay helper are redirected the same way. REG_POWCNT2 is outside the sound
+block and stays absolute (sleep paths the port never calls). SND_StopChannel
+keeps its read-modify-write shape with a plain word access, since the struct
+overlay is addressed from 0x04000000.
+
+sound_ex_channel.c: the SYNC_START enable calls NitroPort_SoundChannelStart
+on 0 to 1 (Platinum 0023). Pointers into wave data were already full 32-bit,
+as were the bank direct-PCM halves, so no 0021 change was needed beyond the
+command mask. sound_bank.c, sound_seq_player.c and sound_shared_work.c need
+no changes (no registers, no truncated pointers; shared-work updates already
+guard NULL).
+
+lib/NitroSDK/src/snd/SND_work.c: the four ARM9 shared-work getters read under
+the port audio spinlock (Platinum 0022), with duplicated bodies (rather than
+Platinum null macro) so the Metrowerks build preprocesses byte-identically.
+
+Tests: tests/sdk/arm7_sound/run.sh builds the six ARM7 files plus
+sound_shared_work.c, sound_seq_player.c and ARM9 SND_work.c with the survey
+flags and runs 42 checks: init order and once-only, the pop-driven command
+flow (shared work, starts, PCM pointer, stops, tag), no restarts, alarm
+setup/start/restart/stop/id, and the locked getters. Dropping the alarm
+restart stop was caught by the suite while writing it. Against the tree
+without this patch the suite fails to link.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/snd/SND_work.c  | 52 ++++++++++++++++++++++++++++++++
+ lib/dsprot/include/static_init.h |  8 +++++
+ sub/lib/src/sound_alarm.c        | 22 ++++++++++++++
+ sub/lib/src/sound_channel.c      | 46 ++++++++++++++++++++++++++++
+ sub/lib/src/sound_command.c      | 31 +++++++++++++++++++
+ sub/lib/src/sound_driver.c       | 13 ++++++++
+ sub/lib/src/sound_ex_channel.c   | 15 +++++++++
+ sub/lib/src/sound_main.c         | 33 ++++++++++++++++++++
+ 8 files changed, 220 insertions(+)
+
+diff --git a/lib/NitroSDK/src/snd/SND_work.c b/lib/NitroSDK/src/snd/SND_work.c
+index bd3b11f..790d530 100644
+--- a/lib/NitroSDK/src/snd/SND_work.c
++++ b/lib/NitroSDK/src/snd/SND_work.c
+@@ -4,28 +4,69 @@
+ #include "OS_cache.h"
+ #include "nitro/types.h"
+ #include "code32.h"
++#ifdef SDK_PORT_3DS
++/* All ARM7 writes run under the port audio spinlock. The ARM9 getters take the same
++ * lock to read shared player and command state (3ds_port/nitro/src/port_snd.c).
++ * Platinum NitroSDK 0022. */
++extern void NitroPort_SoundSharedLock(void);
++extern void NitroPort_SoundSharedUnlock(void);
++#endif
++
+ 
+ struct SNDSharedWork *SNDi_SharedWork;
+ 
++#ifdef SDK_PORT_3DS
++u32 SND_GetPlayerStatus(void) {
++    u32 value;
++    DC_InvalidateRange(&SNDi_SharedWork->playerStatus, 4);
++    NitroPort_SoundSharedLock();
++    value = SNDi_SharedWork->playerStatus;
++    NitroPort_SoundSharedUnlock();
++    return value;
++}
++#else
+ u32 SND_GetPlayerStatus(void) {
+     DC_InvalidateRange(&SNDi_SharedWork->playerStatus, 4);
+     return SNDi_SharedWork->playerStatus;
+ }
++#endif
+ 
++#ifdef SDK_PORT_3DS
++u16 SND_GetChannelStatus(void) {
++    u16 value;
++    DC_InvalidateRange(&SNDi_SharedWork->channelStatus, 2);
++    NitroPort_SoundSharedLock();
++    value = SNDi_SharedWork->channelStatus;
++    NitroPort_SoundSharedUnlock();
++    return value;
++}
++#else
+ u16 SND_GetChannelStatus(void) {
+     DC_InvalidateRange(&SNDi_SharedWork->channelStatus, 2);
+     return SNDi_SharedWork->channelStatus;
+ }
++#endif
+ 
+ //u16 SND_GetCaptureStatus(void) {
+ //    DC_InvalidateRange(&SNDi_SharedWork->captureStatus, 2);
+ //    return SNDi_SharedWork->captureStatus;
+ //}
+ 
++#ifdef SDK_PORT_3DS
++u32 SND_GetPlayerTickCounter(u32 playerId) {
++    u32 value;
++    DC_InvalidateRange(&SNDi_SharedWork->players[playerId].tickCounter, 4);
++    NitroPort_SoundSharedLock();
++    value = SNDi_SharedWork->players[playerId].tickCounter;
++    NitroPort_SoundSharedUnlock();
++    return value;
++}
++#else
+ u32 SND_GetPlayerTickCounter(u32 playerId) {
+     DC_InvalidateRange(&SNDi_SharedWork->players[playerId].tickCounter, 4);
+     return SNDi_SharedWork->players[playerId].tickCounter;
+ }
++#endif
+ 
+ //s16 SND_GetPlayerLocalVariable(u32 playerId, u32 var) {
+ //    DC_InvalidateRange(&SNDi_SharedWork->players[playerId].localVars[var], 2);
+@@ -89,10 +130,21 @@ u32 SND_GetPlayerTickCounter(u32 playerId) {
+ //    return TRUE;
+ //}
+ 
++#ifdef SDK_PORT_3DS
++u32 SNDi_GetFinishedCommandTag(void) {
++    u32 value;
++    DC_InvalidateRange(&SNDi_SharedWork->finishedCommandTag, 4);
++    NitroPort_SoundSharedLock();
++    value = SNDi_SharedWork->finishedCommandTag;
++    NitroPort_SoundSharedUnlock();
++    return value;
++}
++#else
+ u32 SNDi_GetFinishedCommandTag(void) {
+     DC_InvalidateRange(&SNDi_SharedWork->finishedCommandTag, 4);
+     return SNDi_SharedWork->finishedCommandTag;
+ }
++#endif
+ 
+ void SNDi_InitSharedWork(struct SNDSharedWork *sw) {
+     sw->playerStatus = 0;
+diff --git a/lib/dsprot/include/static_init.h b/lib/dsprot/include/static_init.h
+index 8857965..2b9c740 100644
+--- a/lib/dsprot/include/static_init.h
++++ b/lib/dsprot/include/static_init.h
+@@ -3,9 +3,17 @@
+ 
+ // Registers this file's NitroStaticInit in .sinit, to run when the overlay loads.
+ static void NitroStaticInit(void);
++#ifdef SDK_PORT_3DS
++/* GCC section attribute instead of the MWCC section pragmas (Platinum 0027). The
++ * game build gathers the overlay's pointers into a table of its own, and FS_StartOverlay
++ * calls them once the overlay is loaded. */
++__attribute__((section(".sinit"), used))
++static void (*NitroStaticInit_[])(void) = { NitroStaticInit };
++#else
+ #pragma define_section SINIT ".sinit" abs32 RWX
+ #pragma section SINIT begin
+ SDK_FORCE_EXPORT static void (*NitroStaticInit_[])(void) = { NitroStaticInit };
+ #pragma section SINIT end
++#endif
+ 
+ #endif // DSPROT_STATIC_INIT_H
+diff --git a/sub/lib/src/sound_alarm.c b/sub/lib/src/sound_alarm.c
+index 9a7b4d0..f27f11e 100644
+--- a/sub/lib/src/sound_alarm.c
++++ b/sub/lib/src/sound_alarm.c
+@@ -13,6 +13,12 @@
+ 
+ // Not declared by the OS_*.h headers used with the SND_*_shared.h types.
+ void OS_SetPeriodicAlarm(OSAlarm *alarm, OSTick start, OSTick period, OSAlarmHandler handler, void *arg);
++#ifdef SDK_PORT_3DS
++/* Stream alarms run on the port audio clock (3ds_port/nitro/src/port_snd.c). Ticks are
++ * OS ticks, as in the SDK. Platinum NitroSDK 0020. */
++extern void NitroPort_SoundAlarmStart(int alarmNo, u64 tick, u64 period, u32 id);
++extern void NitroPort_SoundAlarmStop(int alarmNo);
++#endif
+ 
+ void SND_AlarmInit(void);
+ void SND_SetupAlarm(int index, OSTick tick, OSTick period, int id);
+@@ -34,7 +40,11 @@ void SND_AlarmInit(void) {
+ void SND_SetupAlarm(int index, OSTick tick, OSTick period, int id) {
+     struct SNDAlarm *alarm = &SNDi_Work.alarms[index];
+     if (alarm->enable) {
++#ifdef SDK_PORT_3DS
++        NitroPort_SoundAlarmStop(index);
++#else
+         OS_CancelAlarm(&alarm->alarm);
++#endif
+         alarm->enable = 0;
+     }
+     alarm->tick = tick;
+@@ -47,25 +57,37 @@ void SND_StartAlarm(int index) {
+     struct SNDAlarm *alarm = &SNDi_Work.alarms[index];
+     u32 arg;
+     if (alarm->enable) {
++#ifdef SDK_PORT_3DS
++        NitroPort_SoundAlarmStop(index);
++#else
+         OS_CancelAlarm(&alarm->alarm);
++#endif
+         alarm->enable = 0;
+     }
+     period = alarm->period;
+     tick = alarm->tick;
+     arg = index | ((u32)alarm->id << 8);
++#ifdef SDK_PORT_3DS
++    NitroPort_SoundAlarmStart(index, tick, period, arg);
++#else
+     OS_CreateAlarm(&alarm->alarm);
+     if (!period) {
+         OS_SetAlarm(&alarm->alarm, tick, AlarmHandler, (void *)arg);
+     } else {
+         OS_SetPeriodicAlarm(&alarm->alarm, OS_GetTick() + tick, period, AlarmHandler, (void *)arg);
+     }
++#endif
+     alarm->enable = 1;
+ }
+ 
+ void SND_StopAlarm(int index) {
+     struct SNDAlarm *alarm = &SNDi_Work.alarms[index];
+     if (alarm->enable) {
++#ifdef SDK_PORT_3DS
++        NitroPort_SoundAlarmStop(index);
++#else
+         OS_CancelAlarm(&alarm->alarm);
++#endif
+         alarm->id++;
+         alarm->enable = 0;
+     }
+diff --git a/sub/lib/src/sound_channel.c b/sub/lib/src/sound_channel.c
+index 8f242ee..3b88cd8 100644
+--- a/sub/lib/src/sound_channel.c
++++ b/sub/lib/src/sound_channel.c
+@@ -7,6 +7,17 @@
+ #define R8(c, o)  (*(volatile u8 *)(0x04000000u + ((u32)(c) << 4) + (o)))
+ #define R16(c, o) (*(volatile u16 *)(0x04000000u + ((u32)(c) << 4) + (o)))
+ #define R32(c, o) (*(volatile u32 *)(0x04000000u + ((u32)(c) << 4) + (o)))
++#ifdef SDK_PORT_3DS
++/* Channel registers live in the port sound array (3ds_port/nitro/src/port_sound_chip.c),
++ * indexed from 0x04000400. Platinum NitroSDK 0018. */
++extern volatile u8 NitroPort_SoundRegisters[];
++#undef R8
++#undef R16
++#undef R32
++#define R8(c, o)  (*(volatile u8 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o) - 0x400]))
++#define R16(c, o) (*(volatile u16 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o) - 0x400]))
++#define R32(c, o) (*(volatile u32 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o) - 0x400]))
++#endif
+ 
+ typedef struct SoundChannelRegisters {
+     volatile u32 control;
+@@ -84,9 +95,17 @@ void SND_SetupChannelPsg(int c, int duty, int volume, int shift, int timer, int
+     }
+     {
+         u32 control = ((u32)duty << 24) | 0x60000000u | ((u32)pan << 16) | ((u32)shift << 8);
++#ifdef SDK_PORT_3DS
++        *(volatile u32 *)&NitroPort_SoundRegisters[channelOffset] = (u32)volume | control;
++#else
+         *(volatile u32 *)(0x04000400u + channelOffset) = (u32)volume | control;
++#endif
+     }
++#ifdef SDK_PORT_3DS
++    *(volatile u16 *)&NitroPort_SoundRegisters[8 + channelOffset] = 0x10000u - (u32)timer;
++#else
+     *(volatile u16 *)(0x04000408u + channelOffset) = 0x10000u - (u32)timer;
++#endif
+ }
+ 
+ void SND_SetupChannelNoise(int c, int volume, int shift, int timer, int pan) {
+@@ -104,13 +123,31 @@ void SND_SetupChannelNoise(int c, int volume, int shift, int timer, int pan) {
+     }
+     {
+         u32 control = ((u32)pan << 16) | 0x60000000u | ((u32)shift << 8);
++#ifdef SDK_PORT_3DS
++        *(volatile u32 *)&NitroPort_SoundRegisters[channelOffset] = (u32)volume | control;
++#else
+         *(volatile u32 *)(0x04000400u + channelOffset) = (u32)volume | control;
++#endif
+     }
++#ifdef SDK_PORT_3DS
++    *(volatile u16 *)&NitroPort_SoundRegisters[8 + channelOffset] = 0x10000u - (u32)timer;
++#else
+     *(volatile u16 *)(0x04000408u + channelOffset) = 0x10000u - (u32)timer;
++#endif
+ }
+ 
+ void SND_StopChannel(int c, int flags) {
+     u32 offset = (u32)c << 4;
++#ifdef SDK_PORT_3DS
++    /* Same read-modify-write on the channel control word, without the struct overlay
++     * (which is addressed from 0x04000000, outside the sound block). */
++    volatile u32 *reg = (volatile u32 *)&NitroPort_SoundRegisters[offset];
++    u32 value = *reg & ~0x80000000u;
++    if (flags & 1) {
++        value |= 0x8000;
++    }
++    *reg = value;
++#else
+     SoundRegisters *input = (SoundRegisters *)(0x04000000u + offset);
+     u32 value = input->channels[0].control & ~0x80000000u;
+     volatile u32 *output = (volatile u32 *)(offset + 0x400u + 0x04000000u);
+@@ -118,6 +155,7 @@ void SND_StopChannel(int c, int flags) {
+         value |= 0x8000;
+     }
+     *output = value;
++#endif
+ }
+ 
+ void SND_SetChannelVolume(int c, int volume, int shift) {
+@@ -171,9 +209,17 @@ u32 SND_GetChannelControl(int c) {
+ 
+ static inline void ApplyChannelSurroundDecay(int i, const u8 *volume) {
+     u32 offset = (u32)i << 4;
++#ifdef SDK_PORT_3DS
++    int pan = NitroPort_SoundRegisters[offset + 2u];
++#else
+     int pan = *(volatile u8 *)(0x04000000u + offset + 0x402u);
++#endif
+     int value = CalcSurroundDecay(volume[i], pan);
++#ifdef SDK_PORT_3DS
++    NitroPort_SoundRegisters[offset] = value;
++#else
+     *(volatile u8 *)(0x04000000u + offset + 0x400u) = value;
++#endif
+ }
+ 
+ void SNDi_SetSurroundDecay(int decay) {
+diff --git a/sub/lib/src/sound_command.c b/sub/lib/src/sound_command.c
+index 89f0155..af710b2 100644
+--- a/sub/lib/src/sound_command.c
++++ b/sub/lib/src/sound_command.c
+@@ -13,6 +13,13 @@
+ 
+ extern OSMessageQueue sCommandMesgQueue;
+ extern OSMessage sCommandMesgBuffer[8];
++#ifdef SDK_PORT_3DS
++/* Sound registers and the audio service entry points. The command queue is owned by
++ * the audio service, never the ARM7 OS (Platinum NitroSDK 0018 and 0019). */
++extern volatile u8 NitroPort_SoundRegisters[];
++extern const struct SNDCommand *NitroPort_SoundPopCommand(void);
++extern void NitroPort_SoundChannelStart(int chNo);
++#endif
+ 
+ // Sound driver entry points called by the command processor (defined in the other sound files).
+ u32 SND_GetChannelControl(int c);
+@@ -61,16 +68,25 @@ void PxiFifoCallback(PXIFifoTag tag, u32 data, BOOL err);
+ #pragma dont_inline on
+ 
+ void SND_CommandInit(void) {
++#ifndef SDK_PORT_3DS
+     OS_InitMessageQueue(&sCommandMesgQueue, sCommandMesgBuffer, 8);
+     PXI_SetFifoRecvCallback(PXI_FIFO_TAG_SOUND, PxiFifoCallback);
++#endif
+     SNDi_SharedWork = NULL;
+ }
+ 
+ void SND_CommandProc(void) {
++#ifdef SDK_PORT_3DS
++    const struct SNDCommand *command_p;
++    while ((command_p = NitroPort_SoundPopCommand()) != NULL) {
++        volatile u8 *cap1 = &NitroPort_SoundRegisters[0x109], *cap0 = cap1 - 1;
++        struct SNDCommand *list = (struct SNDCommand *)command_p;
++#else
+     OSMessage message;
+     while (OS_ReceiveMessage(&sCommandMesgQueue, &message, OS_MESSAGE_NOBLOCK)) {
+         volatile u8 *cap1 = (volatile u8 *)0x04000509, *cap0 = cap1 - 1;
+         struct SNDCommand *list = (struct SNDCommand *)message;
++#endif
+         while (list) {
+             struct SNDCommand cmd = *list;
+             switch (cmd.id) {
+@@ -119,7 +135,14 @@ void SND_CommandProc(void) {
+                 int i;
+                 for (i = 0; i < 16 && channels; i++, channels >>= 1) {
+                     if (channels & 1) {
++#ifdef SDK_PORT_3DS
++                        volatile u8 *ctrl = &NitroPort_SoundRegisters[3 + (u32)i * 16];
++                        if (!(*ctrl & 128)) {
++                            NitroPort_SoundChannelStart(i);
++                        }
++#else
+                         volatile u8 *ctrl = (volatile u8 *)(0x04000403 + (u32)i * 16);
++#endif
+                         *ctrl |= 128;
+                     }
+                 }
+@@ -213,7 +236,11 @@ void SND_CommandProc(void) {
+                 break;
+             }
+             case SND_CMD_SETUP_CHANNEL_PCM:
++#ifdef SDK_PORT_3DS
++                SND_SetupChannelPcm((u16)cmd.arg[0], cmd.arg[1], (cmd.arg[3] >> 24) & 3, (cmd.arg[3] >> 26) & 3, (u16)cmd.arg[3], cmd.arg[2] & 0x3fffff, (cmd.arg[2] >> 24) & 127, (cmd.arg[2] >> 22) & 3, (u16)(cmd.arg[0] >> 16), (cmd.arg[3] >> 16) & 127);
++#else
+                 SND_SetupChannelPcm((u16)cmd.arg[0], cmd.arg[1] & 0x7ffffff, (cmd.arg[3] >> 24) & 3, (cmd.arg[3] >> 26) & 3, (u16)cmd.arg[3], cmd.arg[2] & 0x3fffff, (cmd.arg[2] >> 24) & 127, (cmd.arg[2] >> 22) & 3, (u16)(cmd.arg[0] >> 16), (cmd.arg[3] >> 16) & 127);
++#endif
+                 break;
+             case SND_CMD_SETUP_CHANNEL_PSG:
+                 SND_SetupChannelPsg(cmd.arg[0], cmd.arg[3], cmd.arg[1] & 127, (cmd.arg[1] >> 8) & 3, (cmd.arg[2] >> 8) & 65535, cmd.arg[2] & 127);
+@@ -267,7 +294,11 @@ void SND_CommandProc(void) {
+             }
+             list = cmd.llNext;
+         }
++#ifdef SDK_PORT_3DS
++        (void)__atomic_add_fetch(&SNDi_SharedWork->finishedCommandTag, 1, __ATOMIC_RELEASE);
++#else
+         SNDi_SharedWork->finishedCommandTag++;
++#endif
+     }
+ }
+ 
+diff --git a/sub/lib/src/sound_driver.c b/sub/lib/src/sound_driver.c
+index 4b42381..990390e 100644
+--- a/sub/lib/src/sound_driver.c
++++ b/sub/lib/src/sound_driver.c
+@@ -8,6 +8,19 @@
+ #define REG_SNDCAP0CNT    (*(volatile u8 *)0x04000508)
+ #define REG_SNDCAP1CNT    (*(volatile u8 *)0x04000509)
+ #define REG_POWCNT2       (*(volatile u16 *)0x04000304)
++#ifdef SDK_PORT_3DS
++/* Sound registers in the port sound array; REG_POWCNT2 is outside that block and stays
++ * absolute (sleep paths the port never calls). Platinum NitroSDK 0018. */
++extern volatile u8 NitroPort_SoundRegisters[];
++#undef REG_SOUNDCNT_VOL
++#undef REG_SOUNDCNT_CTRL
++#undef REG_SNDCAP0CNT
++#undef REG_SNDCAP1CNT
++#define REG_SOUNDCNT_VOL  (*(volatile u8 *)&NitroPort_SoundRegisters[0x100])
++#define REG_SOUNDCNT_CTRL (*(volatile u8 *)&NitroPort_SoundRegisters[0x101])
++#define REG_SNDCAP0CNT    (*(volatile u8 *)&NitroPort_SoundRegisters[0x108])
++#define REG_SNDCAP1CNT    (*(volatile u8 *)&NitroPort_SoundRegisters[0x109])
++#endif
+ 
+ #define SOUND_MASTER_ENABLE 0x80
+ #define POWCNT2_SPEAKER     1
+diff --git a/sub/lib/src/sound_ex_channel.c b/sub/lib/src/sound_ex_channel.c
+index ced72ba..c64838a 100644
+--- a/sub/lib/src/sound_ex_channel.c
++++ b/sub/lib/src/sound_ex_channel.c
+@@ -15,6 +15,13 @@ extern const s16 SNDi_DecibelTable[];
+ extern const u8 attack_table$3790[19];
+ extern const u8 shift$4005[];
+ extern const u8 channel_order$3829[];
++#ifdef SDK_PORT_3DS
++/* The port sound chip restarts a channel when its enable bit goes 0 to 1, as the DS
++ * hardware does; the driver may stop and start a channel between two of its mixes,
++ * so it is told here (3ds_port/nitro/src/port_snd.c). Platinum NitroSDK 0023. */
++extern volatile u8 NitroPort_SoundRegisters[];
++extern void NitroPort_SoundChannelStart(int chNo);
++#endif
+ 
+ void SND_SetupChannelPcm(int channel, u32 src, int format, int repeat, int loop, u32 length, int volume, int shift, int timer, int pan);
+ void SND_SetupChannelPsg(int channel, u32 duty, int volume, int shift, int timer, int pan);
+@@ -110,7 +117,15 @@ void SND_UpdateExChannel(void) {
+         u32 sync = chn->flags.syncFlag;
+         if (sync) {
+             if (sync & SND_CHN_SYNC_START) {
++#ifdef SDK_PORT_3DS
++                volatile u8 *enable = &NitroPort_SoundRegisters[3 + (u32)i * 16];
++                if (!(*enable & 0x80)) {
++                    NitroPort_SoundChannelStart(i);
++                }
++                *enable |= 0x80;
++#else
+                 *(volatile u8 *)(0x04000403 + i * 16) |= 0x80;
++#endif
+             }
+             chn->flags.syncFlag = 0;
+         }
+diff --git a/sub/lib/src/sound_main.c b/sub/lib/src/sound_main.c
+index e3bffd3..8083cd5 100644
+--- a/sub/lib/src/sound_main.c
++++ b/sub/lib/src/sound_main.c
+@@ -26,6 +26,12 @@ extern OSMessageQueue sndMesgQueue;
+ extern OSMessage sndMesgBuffer[8];
+ extern OSAlarm sndAlarm;
+ extern u8 sWeakLockChannel[];
++#ifdef SDK_PORT_3DS
++/* Sound registers 0x04000400-0x0400051F as seen by the ARM7 driver. The port mixer
++ * owns them (3ds_port/nitro/src/port_sound_chip.c); the POWCNT2 power register below
++ * is outside that block and stays absolute. Platinum NitroSDK 0018. */
++extern volatile u8 NitroPort_SoundRegisters[];
++#endif
+ 
+ void SND_CommandInit(void);
+ void SND_CommandProc(void);
+@@ -64,17 +70,34 @@ void SND_Init(int priority) {
+     if (!initialized$3619) {
+         initialized$3619 = 1;
+         SND_CommandInit(); // The thread stack ends where sWeakLockChannel begins.
++#ifdef SDK_PORT_3DS
++        /* The port audio thread drives the ticks; no ARM7 thread scheduling.
++         * The dollar-sign statics stay: GCC accepts them, and the sound data
++         * object defines them under the same names. Platinum NitroSDK 0018. */
++        (void)priority;
++        SND_ExChannelInit();
++        SND_SeqInit();
++        SND_AlarmInit();
++        SND_Enable();
++        SND_SetOutputSelector(0, 0, 0, 0);
++        SND_SetMasterVolume(127);
++#else
+         OS_CreateThread(&sndThread, SndThread, 0, sWeakLockChannel, 1024, (u32)priority);
+         OS_WakeupThreadDirect(&sndThread);
++#endif
+     }
+ }
+ 
+ void SND_StartIntervalTimer(void) {
++#ifndef SDK_PORT_3DS
+     OS_SetPeriodicAlarm(&sndAlarm, OS_GetTick() + 65536, 2728, SndAlarmCallback, 0);
++#endif
+ }
+ 
+ void SND_StopIntervalTimer(void) {
++#ifndef SDK_PORT_3DS
+     OS_CancelAlarm(&sndAlarm);
++#endif
+ }
+ 
+ void SND_SendWakeupMessage(void) {
+@@ -124,13 +147,23 @@ void SndThread(void *arg) {
+ void SND_SetupCapture(int capture, int format, u32 dest, int length, BOOL loop, int in, int out) {
+     int offset = capture * 8;
+     SNDCaptureRepeat repeat = loop ? SND_CAPTURE_REPEAT : SND_CAPTURE_ONESHOT;
++#ifdef SDK_PORT_3DS
++    NitroPort_SoundRegisters[0x108 + capture] = (u8)((format << 3) | (repeat << 2) | (in << 1) | out);
++    *(vu32 *)&NitroPort_SoundRegisters[0x110 + offset] = dest;
++    *(vu16 *)&NitroPort_SoundRegisters[0x114 + offset] = (u16)length;
++#else
+     *(vu8 *)(0x04000508 + capture) = (u8)((format << 3) | (repeat << 2) | (in << 1) | out);
+     *(vu32 *)(0x04000510 + offset) = dest;
+     *(vu16 *)(0x04000514 + offset) = (u16)length;
++#endif
+ }
+ 
+ int SND_IsCaptureActive(u32 capture) {
++#ifdef SDK_PORT_3DS
++    return (NitroPort_SoundRegisters[capture + 0x108] & 0x80) != 0;
++#else
+     return (*(volatile u8 *)(capture + 0x04000508) & 0x80) != 0;
++#endif
+ }
+ 
+ #pragma dont_inline reset
+-- 
+2.43.0
+

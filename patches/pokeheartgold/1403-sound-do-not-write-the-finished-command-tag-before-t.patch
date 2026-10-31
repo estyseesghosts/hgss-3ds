@@ -1,0 +1,52 @@
+From 03e0d3aa6bf0cb5681ee1655f8a886b08ced53bc Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 08:21:30 +0000
+Subject: [PATCH] sound: do not write the finished-command tag before the
+ shared work exists
+
+The ARM7 driver learns the shared-work pointer from the command that carries
+it (sub/lib/src/sound_command.c, the SND_CMD_INIT case: SNDi_SharedWork =
+cmd.arg[0]). At the end of every processed command it then bumps
+finishedCommandTag through that pointer. On the DS the ARM9 always sends the
+setup command first, so the pointer is set; the vendored test_arm7's test_sound
+calls SND_Init and the command APIs directly, and the port's virtual ARM7 can
+process a queued command first, so the bump dereferenced NULL and the test
+segfaulted.
+
+Under SDK_PORT_3DS the bump is skipped while the pointer is NULL. That only
+delays the counter the ARM9 polls; every status field is still updated by the
+commands themselves. The Metrowerks build keeps the original line: gcc-10
+-E -P without the macro is byte-identical.
+
+Checked by vendored test_arm7 test_sound, which segfaulted before this patch.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ sub/lib/src/sound_command.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/sub/lib/src/sound_command.c b/sub/lib/src/sound_command.c
+index af710b2..30d4452 100644
+--- a/sub/lib/src/sound_command.c
++++ b/sub/lib/src/sound_command.c
+@@ -295,7 +295,16 @@ void SND_CommandProc(void) {
+             list = cmd.llNext;
+         }
+ #ifdef SDK_PORT_3DS
+-        (void)__atomic_add_fetch(&SNDi_SharedWork->finishedCommandTag, 1, __ATOMIC_RELEASE);
++        /* The ARM7 only learns the shared-work pointer from the command that
++         * carries it (this file, SND_CMD_INIT below), which the DS sends
++         * before any other request. The port's virtual ARM7 can have a
++         * command queued first (the vendored test calls SND_Init and then
++         * the command APIs without a full ARM9 boot), and dereferencing NULL
++         * here crashed. The tag only tells the ARM9 how far the queue has
++         * got, so skipping it until the pointer exists is safe. */
++        if (SNDi_SharedWork != NULL) {
++            (void)__atomic_add_fetch(&SNDi_SharedWork->finishedCommandTag, 1, __ATOMIC_RELEASE);
++        }
+ #else
+         SNDi_SharedWork->finishedCommandTag++;
+ #endif
+-- 
+2.43.0
+

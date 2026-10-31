@@ -35,4 +35,24 @@
 #define MI_DMA_TIMING_GXFIFO       (7UL << 27)
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ntrtwl's include/nitro/mi/dma.h declares these; HGSS's header and SDK
+ * sources only carry the 32-bit fill/copy/wait/stop/GX-command family.
+ * Bodies live in hgss/compat/src/sdk_standins.c (ntrtwl's
+ * libraries/mi/src/mi_dma.c and mi_dma_vblank.c, over the same MIi_
+ * register helpers HGSS's mi_dma.c uses). */
+void MI_DmaFill16(u32 dmaNo, void *dest, u16 data, u32 size);
+void MI_DmaSend32(u32 dmaNo, const void *src, volatile void *dest, u32 size);
+BOOL MI_IsDmaBusy(u32 dmaNo);
+void MI_HBlankDmaCopy32(u32 dmaNo, const void *src, void *dest, u32 size);
+void MI_VBlankDmaCopy32Async(u32 dmaNo, const void *src, void *dest, u32 size,
+                             MIDmaCallback callback, void *arg);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* HGSS_COMPAT_MI_DMA_H */

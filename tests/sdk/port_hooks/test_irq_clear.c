@@ -11,6 +11,19 @@ void NitroPort_RaiseIrq(u32 mask) {
     (void)mask;
 }
 
+/* os_tick.c (software timers, patch 0602) calls the port on every timer write and
+ * before every tick read. This test never reads a timer, so these only need to exist. */
+void NitroPort_TimerSetReload(int id, u16 count) {
+    (void)id;
+    (void)count;
+}
+void NitroPort_TimerSetControl(int id, u16 control) {
+    (void)id;
+    (void)control;
+}
+void NitroPort_SyncTimers(void) {
+}
+
 /* os_interrupt.c and os_tick.c reference the IRQ table, the IRQ stack symbols and the timer
  * reservation. The functions under test never reach them, so these are placeholders of the
  * declared types. */

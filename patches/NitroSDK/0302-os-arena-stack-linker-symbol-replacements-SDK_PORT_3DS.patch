@@ -1,0 +1,131 @@
+From baf04a405b22eb150d41205ccf9059efda8cece1 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 05:50:13 +0000
+Subject: [PATCH] os: arena/stack linker-symbol replacements for the port
+ (SDK_PORT_3DS)
+
+With no DS linker script the SDK-side arena low defaults and stack sizes are
+casts of symbols nothing defines (SDK_MAIN_ARENA_LO, SDK_SECTION_ARENA_*,
+SDK_SYS_STACKSIZE, SDK_IRQ_STACKSIZE); the port build cannot use them. Under
+SDK_PORT_3DS they become the port memory blocks and the main.lsf stack sizes
+(main.lsf: StackSize 0 2048). The DS text is unchanged: gcc-10 -E -P of each
+file without SDK_PORT_3DS (with -DSDK_ARM9) has 0 diff lines against the file
+before this patch. Rebased from Platinum patch 0006 (same values, same
+comments); HGSS differences are noted below.
+
+os_arena.c: after the ARM9/ARM7 default block, OSi_MAIN_ARENA_LO_DEFAULT is
+HW_MAIN_MEM, OSi_DTCM/ITCM_ARENA_LO_DEFAULT are HW_DTCM/HW_ITCM,
+OSi_SYS_STACKSIZE is 0 and OSi_IRQ_STACKSIZE is 2048. OSi_MAINEX_ARENA_LO_DEFAULT
+is (HW_MAIN_MEM + 0x400000). HGSS difference: MAINEX is defined in
+nitro/hw/ARM9/mmap.h here (not in os_arena.c as in Platinum), so the #undef
+picks it up from the header; it is only read in OS_GetInitArenaLo/Hi, which
+return NULL while the SDK-side MAINEX flag is clear (nothing in the SDK sets
+it), so no host check observes it.
+
+os_thread.c: OSi_SYS_STACKSIZE 0, OSi_IRQ_STACKSIZE 2048, and
+OSi_LAUNCHER_STACK_LO_DEFAULT HW_DTCM inside the SDK_ARM9 launcher block.
+With SYS == 0 the launcher stack top is the bottom of DTCM and its bottom is
+the IRQ stack top; OSi_LAUNCHER_STACK_HI_MAX/BOTTOM follow from the IRQ size.
+
+os_interrupt.c: OSi_IRQ_STACK_TOP is (HW_DTCM_SVC_STACK - 2048) inside the
+SDK_ARM9 IRQ-stack block. HW_DTCM_SVC_STACK is HW_DTCM + 0x3fc0 - 0x40, and
+HW_DTCM is the SDK_AUTOLOAD_DTCM_START array the port provides
+(3ds_port/nitro/src/port_memory.c), so the stacks land in real memory.
+
+Tests: tests/sdk/os_arena/run.sh builds os_arena.c and os_thread.c with the
+survey flags and runs 22 checks: init defaults for MAIN/ITCM/DTCM against the
+port arrays, OS_InitArena end to end, allocation from MAIN, the dormant MAINEX
+behaviour, and the launcher thread stack top/bottom plus both check numbers
+after OS_InitThread. Against the tree without this patch the suite fails to
+link on exactly the six replaced DS symbols; changing the IRQ size to 4096
+fails the launcher-bottom check.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/os/os_arena.c     | 20 ++++++++++++++++++++
+ src/os/os_interrupt.c |  4 ++++
+ src/os/os_thread.c    | 13 +++++++++++++
+ 3 files changed, 37 insertions(+)
+
+diff --git a/src/os/os_arena.c b/src/os/os_arena.c
+index 25e5962..20dfbb5 100644
+--- a/src/os/os_arena.c
++++ b/src/os/os_arena.c
+@@ -22,6 +22,26 @@ extern void SDK_WRAM_ARENA_LO(void);
+ #define OSi_WRAM_ARENA_LO_DEFAULT ((s32)SDK_WRAM_ARENA_LO)
+ #endif //SDK_ARM9
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: no DS linker script. The game code does not live in DS main
++ * memory here, so the whole of it is available as the main arena; the other
++ * areas start at the beginning of their memory blocks.
++ * OSi_MAINEX_ARENA_LO_DEFAULT is defined in nitro/hw/ARM9/mmap.h; the rest above.
++ * Platinum patch 0006; sizes from main.lsf StackSize 0 2048. */
++#undef OSi_MAIN_ARENA_LO_DEFAULT
++#define OSi_MAIN_ARENA_LO_DEFAULT HW_MAIN_MEM
++#undef OSi_MAINEX_ARENA_LO_DEFAULT
++#define OSi_MAINEX_ARENA_LO_DEFAULT (HW_MAIN_MEM + 0x400000)
++#undef OSi_DTCM_ARENA_LO_DEFAULT
++#define OSi_DTCM_ARENA_LO_DEFAULT HW_DTCM
++#undef OSi_ITCM_ARENA_LO_DEFAULT
++#define OSi_ITCM_ARENA_LO_DEFAULT HW_ITCM
++#undef OSi_SYS_STACKSIZE
++#define OSi_SYS_STACKSIZE 0
++#undef OSi_IRQ_STACKSIZE
++#define OSi_IRQ_STACKSIZE 2048
++#endif
++
+ static BOOL OSi_Initialized = FALSE;
+ #ifdef SDK_ARM9
+ static BOOL OSi_MainArenaEnabled = FALSE;
+diff --git a/src/os/os_interrupt.c b/src/os/os_interrupt.c
+index 648685b..54e9ebf 100644
+--- a/src/os/os_interrupt.c
++++ b/src/os/os_interrupt.c
+@@ -127,7 +127,11 @@ extern void SDK_IRQ_STACKSIZE(void);
+ 
+ //---- defs for irq stack
+ #ifdef SDK_ARM9
++#ifdef SDK_PORT_3DS
++#define  OSi_IRQ_STACK_TOP                (HW_DTCM_SVC_STACK - 2048)  /* main.lsf IRQ stack */
++#else
+ #define  OSi_IRQ_STACK_TOP                (HW_DTCM_SVC_STACK - ((s32)SDK_IRQ_STACKSIZE))
++#endif
+ #define  OSi_IRQ_STACK_BOTTOM             HW_DTCM_SVC_STACK
+ #else
+ #define  OSi_IRQ_STACK_TOP                (HW_PRV_WRAM_IRQ_STACK_END - ((s32)SDK_IRQ_STACKSIZE))
+diff --git a/src/os/os_thread.c b/src/os/os_thread.c
+index ffd6ed9..4abd0ee 100644
+--- a/src/os/os_thread.c
++++ b/src/os/os_thread.c
+@@ -9,6 +9,15 @@ extern void SDK_IRQ_STACKSIZE(void);
+ #define OSi_SYS_STACKSIZE ((s32)SDK_SYS_STACKSIZE)
+ #define OSi_IRQ_STACKSIZE ((s32)SDK_IRQ_STACKSIZE)
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: there is no DS linker script to define these symbols,
++ * so use the main.lsf values directly (StackSize 0 2048). Platinum patch 0006. */
++#undef OSi_SYS_STACKSIZE
++#undef OSi_IRQ_STACKSIZE
++#define OSi_SYS_STACKSIZE 0
++#define OSi_IRQ_STACKSIZE 2048
++#endif
++
+ #ifdef SDK_ARM9
+ #define  OSi_STACK_CHECKNUM_BOTTOM     0xfddb597dUL
+ #define  OSi_STACK_CHECKNUM_TOP        0x7bf9dd5bUL
+@@ -23,7 +32,11 @@ extern void SDK_IRQ_STACKSIZE(void);
+ #ifdef SDK_ARM9
+ extern void SDK_SECTION_ARENA_DTCM_START(void);
+ void    SDK_AUTOLOAD_DTCM_END(void);   // defined in LCF
++#ifdef SDK_PORT_3DS
++#define  OSi_LAUNCHER_STACK_LO_DEFAULT    HW_DTCM  /* no DS linker script */
++#else
+ #define  OSi_LAUNCHER_STACK_LO_DEFAULT    SDK_SECTION_ARENA_DTCM_START
++#endif
+ #define  OSi_LAUNCHER_STACK_HI_MAX        (HW_DTCM_SVC_STACK - OSi_IRQ_STACKSIZE)
+ #define  OSi_LAUNCHER_STACK_BOTTOM        (HW_DTCM_SVC_STACK - OSi_IRQ_STACKSIZE)
+ #else
+-- 
+2.43.0
+

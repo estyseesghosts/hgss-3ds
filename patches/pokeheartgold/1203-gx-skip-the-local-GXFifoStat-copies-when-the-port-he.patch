@@ -1,0 +1,59 @@
+From 4d33c405b7dc6fb2b9e299dc1ad7f58eda9cc902 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 06:51:36 +0000
+Subject: [PATCH] gx: skip the local GXFifoStat copies when the port header
+ provides them
+
+hgss/compat/include/nitro/gx/g3x.h supplies GXFifoStat and
+G3X_GetCommandFifoStatus for the port: HGSS's public gx/g3x.h has neither,
+and the vendored test_threads.c calls the getter. mi_dma_gxcommand.c also
+declared both locally, so building it with hgss/compat/include on the path
+failed with "redeclaration of enumerator GX_FIFOSTAT_EMPTY" and
+"conflicting types for G3X_GetCommandFifoStatus" (lines 35-39 and 56).
+
+Patch 1202 guarded the neighbouring GXFifoIntrCond copy with
+HGSS_COMPAT_GX_G3X_H but left these two unguarded. Guard them the same way:
+the macro is defined only by the port's compat header, so Metrowerks sees
+exactly the original text (gcc-10 -E -P without SDK_PORT_3DS is
+byte-identical), and a standalone SDK build without hgss/compat/include
+still declares them here.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/mi/mi_dma_gxcommand.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/lib/NitroSDK/src/mi/mi_dma_gxcommand.c b/lib/NitroSDK/src/mi/mi_dma_gxcommand.c
+index aa67ca7..eca7b11 100644
+--- a/lib/NitroSDK/src/mi/mi_dma_gxcommand.c
++++ b/lib/NitroSDK/src/mi/mi_dma_gxcommand.c
+@@ -31,12 +31,14 @@ typedef enum {
+ } GXFifoIntrCond;
+ #endif
+ 
++#ifndef HGSS_COMPAT_GX_G3X_H
+ typedef enum {
+     GX_FIFOSTAT_EMPTY = 6,
+     GX_FIFOSTAT_UNDERHALF = 2,
+     GX_FIFOSTAT_OVERHALF = 0,
+     GX_FIFOSTAT_FULL = 1
+ } GXFifoStat;
++#endif
+ 
+ typedef struct {
+     volatile BOOL isBusy;
+@@ -53,9 +55,11 @@ static inline void G3X_SetFifoIntrCond(GXFifoIntrCond cond) {
+     reg_G3X_GXSTAT = (reg_G3X_GXSTAT & ~REG_G3X_GXSTAT_FI_MASK) | (cond << REG_G3X_GXSTAT_FI_SHIFT);
+ }
+ 
++#ifndef HGSS_COMPAT_GX_G3X_H
+ static inline GXFifoStat G3X_GetCommandFifoStatus(void) {
+     return (GXFifoStat)((reg_G3X_GXSTAT & 0x07000000) >> 24);
+ }
++#endif
+ 
+ static MIiGXDmaParams MIi_GXDmaParams = { FALSE };
+ 
+-- 
+2.43.0
+

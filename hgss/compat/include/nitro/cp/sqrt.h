@@ -5,7 +5,11 @@
  * HGSS has only lib/include/nitro/cp/context.h; the register names this
  * file's helpers use (REG_SQRT_*_ADDR, REG_CP_SQRTCNT_* in
  * lib/include/nitro/hw/ARM9/io_reg.h) match ntrtwl's, so the helpers are
- * ntrtwl's verbatim (include/nitro/cp/sqrt.h).
+ * ntrtwl's (include/nitro/cp/sqrt.h), plus the port's software hooks: there
+ * is no square-root hardware on the port, so every operand write calls
+ * CPi_PortUpdateSqrt (3ds_port/nitro/src/port_cp.c), exactly as Platinum's
+ * patch 0002 does to its SDK copy. This directory is only on the port
+ * build's include path, so the DS build is unaffected.
  */
 
 #ifndef NITRO_CP_SQRT_H_
@@ -17,32 +21,40 @@ extern "C" {
 
 #include <nitro/cp/context.h>
 
+void CPi_PortUpdateSqrt(void);
+#define CPi_PORT_SQRT_WRITTEN() CPi_PortUpdateSqrt()
+
 #define CP_SQRT_32BIT_MODE    (0UL << REG_CP_SQRTCNT_MODE_SHIFT)
 #define CP_SQRT_64BIT_MODE    (1UL << REG_CP_SQRTCNT_MODE_SHIFT)
 
 static inline void CP_SetSqrtControl(u16 param)
 {
     reg_CP_SQRTCNT = param;
+    CPi_PORT_SQRT_WRITTEN();
 }
 
 static inline void CP_SetSqrtImm64_NS_(u64 param)
 {
     *((REGType64 *)REG_SQRT_PARAM_ADDR) = param;
+    CPi_PORT_SQRT_WRITTEN();
 }
 
 static inline void CP_SetSqrtImm32_NS_(u32 param)
 {
     *((REGType32 *)REG_SQRT_PARAM_ADDR) = param;
+    CPi_PORT_SQRT_WRITTEN();
 }
 
 static inline void CP_SetSqrtImm64(u64 param)
 {
     *((REGType64 *)REG_SQRT_PARAM_ADDR) = param;
+    CPi_PORT_SQRT_WRITTEN();
 }
 
 static inline void CP_SetSqrtImm32(u32 param)
 {
     *((REGType32 *)REG_SQRT_PARAM_ADDR) = param;
+    CPi_PORT_SQRT_WRITTEN();
 }
 
 static inline void CP_SetSqrt64(u64 param)

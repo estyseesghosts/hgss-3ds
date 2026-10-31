@@ -1,0 +1,35 @@
+From da8f501e7351ece4e5fbc5bd22861e592f2040d6 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:41 +0000
+Subject: [PATCH] field_very_tall_grass: complete the extern array element type
+
+include/field_very_tall_grass.h:14 declares gVeryTallGrassRecordParams[2] as
+struct BillboardSequenceRange, which the header only forward-declares. Under
+SDK_PORT_3DS include billboard_internal.h, where the struct is defined, so GCC
+can size the array. Without the macro the include is not there: 0 diff lines.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ include/field_very_tall_grass.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/include/field_very_tall_grass.h b/include/field_very_tall_grass.h
+index 30459cd..6916ee3 100644
+--- a/include/field_very_tall_grass.h
++++ b/include/field_very_tall_grass.h
+@@ -3,6 +3,12 @@
+ 
+ #include "field/field_effect_manager.h"
+ 
++#ifdef SDK_PORT_3DS
++// The extern array below needs its element type; the forward declaration is
++// not enough for GCC, which cannot size the array without the definition.
++#include "billboard_internal.h"
++#endif
++
+ // Very tall grass around map objects.
+ 
+ typedef struct VeryTallGrass VeryTallGrass;
+-- 
+2.43.0
+

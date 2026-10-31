@@ -1,0 +1,40 @@
+From f407e8b169e2112b884f7ac23211a631b30e8a39 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:13:42 +0000
+Subject: [PATCH] Safari GetFacingSafariObject: read the two halfwords in order
+
+src/overlay_03/overlay_03_scrcmds.c:40 calls ScriptReadHalfword twice in one
+assignment. The script macro GetFacingSafariObject(dest_var, index_var) puts
+the destination first; MWCC evaluates the assignment left side first (MWCC
+2.0/sp2p2 test), so the DS reads dest then index. GCC may read them in either
+order. Under SDK_PORT_3DS read each into a sequenced local in that order; the
+GetVarPointer calls are then pure. 0 diff lines without the macro.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/overlay_03/overlay_03_scrcmds.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/overlay_03/overlay_03_scrcmds.c b/src/overlay_03/overlay_03_scrcmds.c
+index a74b2e7..5e1b26e 100644
+--- a/src/overlay_03/overlay_03_scrcmds.c
++++ b/src/overlay_03/overlay_03_scrcmds.c
+@@ -37,7 +37,15 @@ BOOL ScrCmd_BufferSafariZoneObjectName(ScriptContext *ctx) {
+ BOOL ScrCmd_GetFacingSafariObject(ScriptContext *ctx) {
+     FieldSystem *fieldSystem = ctx->fieldSystem;
+     FieldSysGetAttrAddr(fieldSystem, SCRIPTENV_MESSAGE_FORMAT);
++#ifdef SDK_PORT_3DS
++    // MWCC evaluated the assignment's left side first: dest_var then index_var.
++    // C leaves the order of the two ScriptReadHalfword calls unspecified.
++    u16 destVar = ScriptReadHalfword(ctx);
++    u16 indexVar = ScriptReadHalfword(ctx);
++    *GetVarPointer(ctx->fieldSystem, destVar) = FieldSystem_GetFacingSafariObject(fieldSystem, GetVarPointer(ctx->fieldSystem, indexVar));
++#else
+     *GetVarPointer(ctx->fieldSystem, ScriptReadHalfword(ctx)) = FieldSystem_GetFacingSafariObject(fieldSystem, GetVarPointer(ctx->fieldSystem, ScriptReadHalfword(ctx)));
++#endif
+     return FALSE;
+ }
+ 
+-- 
+2.43.0
+

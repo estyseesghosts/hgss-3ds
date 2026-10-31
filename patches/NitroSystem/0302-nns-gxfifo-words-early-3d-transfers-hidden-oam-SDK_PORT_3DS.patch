@@ -1,0 +1,283 @@
+From 483f9262c7cdb6b7b7eb0a6a662e8b12a645e665 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 06:22:26 +0000
+Subject: [PATCH] nns: GXFIFO words, early 3D transfers and hidden OAM entries
+ (SDK_PORT_3DS)
+
+NitroSystem behavior hooks for the port. The DS text is unchanged: gcc-10 -E
+-P of each file without SDK_PORT_3DS (with -DSDK_ARM9) has 0 diff lines
+against the file before this patch. Rebased from Platinum NitroSystem patches
+0001-0005; every hunk was checked against the HGSS tree, whose NitroSystem is
+a different revision (flat src/, smaller files), so most do not apply:
+
+- 0001 (GCC build fixes): no equivalent needed. The seven hunks touch
+  g2d_Data.h (NNS_G2D_UNPACK_OFFSET_PTR), g2di_Char.h (wchar_t NNSG2dChar),
+  g2d_CharCanvas.c (__alloca, two sequence points), g2di_BGManipulator.c
+  (BGCNT table), g2di_SplitChar.c (wchar_t/UTF-16), gfd_FrameTexVramMan.c
+  (implicit int) and sndarc_stream.c (post-increment assign): none of those
+  constructs exist in the HGSS files (no UNPACK macro, no NNSG2dChar or
+  wchar_t use, no alloca, no MapScrToChar-style *pScr++ reads, no implicit
+  int, no AdpcmState increment). The whole of lib/NitroSystem already parses
+  under the survey flags (the 15 failing survey files are all NitroSDK).
+- 0002 (capture divide by zero): N/A. HGSS capture is its own 121-line
+  snd_capture.c with no bufLen/interval division; no NNSi_SndCaptureStart of
+  that shape exists anywhere in the tree.
+- 0003 (GXFIFO stores): g3d_gecom.c NNS_G3dGeBufferOP_N sends its opcode word
+  through NitroPort_GxFifoWord, and all eleven single-register
+  reg_G3X_GXFIFO stores in g3d_sbc.c do the same. Bulk sends through
+  MIi_CpuSend32 need no hook: the port MI layer already forwards GXFIFO-range
+  writes (3ds_port/nitro/src/mi_memory.c). HGSS packs opcodes with shifts
+  rather than GX_PACK_OP; the hooked values are identical either way.
+- 0004 (3D transfers early): gfd_vram_transfer_manager.c gains
+  NNSi_GfdDoVramTransfer3D, which runs the queued texture/palette/clear-image
+  tasks (type < NNS_GFD_DST_2D_BG0_CHAR_MAIN, the same boundary as Platinum)
+  and marks them done, and NNS_GfdDoVramTransfer skips marked tasks while
+  still popping them and subtracting their size. The header declares the new
+  function (in patch 1402). No OS_Halt change is needed: the vendored
+  port_os.c already calls it (weak). HGSS difference: single global queue
+  gVramTransferTaskQueue rather than a manager struct.
+- 0005 (OAM hide): NNS_G2dResetOamManagerBuffer parks unused entries with
+  (192 | 0x0200) instead of 0xc0 under SDK_PORT_3DS, in both the fill and the
+  attr0 paths. HGSS writes the literal 0xc0 (Platinum used a macro); only the
+  reset function is changed, not the module-init fills (follow-up).
+
+Tests: tests/sdk/nns_port/run.sh builds the three files with the survey flags
+and runs 31 checks: the BufferOP_N opcode word plus its bulk send, the
+halt-then-vblank transfer sequence with all four 3D kinds (done once, never
+redone, queue reusable), and both OAM reset paths plus the DMA fill value.
+Against the tree without this patch the suite fails to link on
+NNSi_GfdDoVramTransfer3D.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/g2d_oam.c                   | 15 ++++++++--
+ src/g3d_gecom.c                 |  8 ++++++
+ src/g3d_sbc.c                   | 51 +++++++++++++++++++++++++++++++++
+ src/gfd_vram_transfer_manager.c | 33 +++++++++++++++++++++
+ 4 files changed, 104 insertions(+), 3 deletions(-)
+
+diff --git a/src/g2d_oam.c b/src/g2d_oam.c
+index 8c96e7e..c89376d 100644
+--- a/src/g2d_oam.c
++++ b/src/g2d_oam.c
+@@ -200,6 +200,15 @@ void NNS_G2dApplyOamManagerToHW(OamManagerInstance *pMan) {
+     }
+ }
+ 
++#ifdef SDK_PORT_3DS
++// Unused OAM entries are parked at y 192 on the DS, under the visible screen; on the
++// port taller lower screen those lines show, so hide the entries outright (attr0
++// disable bit): on the DS they do not show either way. Platinum NitroSystem 0005.
++#define OAM_SETTING_INVISIBLE   (192 | 0x0200)
++#else
++#define OAM_SETTING_INVISIBLE   0xc0
++#endif
++
+ void NNS_G2dResetOamManagerBuffer(OamManagerInstance *pMan) {
+     u8 *oam;
+     if (pMan->useFastTransfer) {
+@@ -209,9 +218,9 @@ void NNS_G2dResetOamManagerBuffer(OamManagerInstance *pMan) {
+         oam = (u8 *)addr;
+         DC_InvalidateRange(oam, szByte);
+         if (GXi_DmaId != (u32)-1) { // -1: no DMA channel
+-            MI_DmaFill32(GXi_DmaId, oam, 0xc0, szByte);
++            MI_DmaFill32(GXi_DmaId, oam, OAM_SETTING_INVISIBLE, szByte);
+         } else {
+-            MIi_CpuClear32(0xc0, (void *)oam, szByte);
++            MIi_CpuClear32(OAM_SETTING_INVISIBLE, (void *)oam, szByte);
+         }
+     } else {
+         u16 n;
+@@ -221,7 +230,7 @@ void NNS_G2dResetOamManagerBuffer(OamManagerInstance *pMan) {
+         oam = (u8 *)addr;
+         n = pMan->oam.last - pMan->oam.first + 1;
+         for (; i < n; i++, oam += 8) {
+-            ((GXOamAttr *)oam)->attr0 = 0xc0;
++            ((GXOamAttr *)oam)->attr0 = OAM_SETTING_INVISIBLE;
+         }
+     }
+     pMan->oam.next = pMan->oam.first;
+diff --git a/src/g3d_gecom.c b/src/g3d_gecom.c
+index a5885d9..48ebb0d 100644
+--- a/src/g3d_gecom.c
++++ b/src/g3d_gecom.c
+@@ -1,5 +1,9 @@
+ #include <nitro.h>
+ #include <nnsys/g3d/gecom.h>
++#if defined(SDK_PORT_3DS)
++extern void NitroPort_GxFifoWord(unsigned int value);
++#endif
++
+ #include <nnsys/g3d_util_internal.h>
+ 
+ #pragma force_active on
+@@ -61,7 +65,11 @@ void NNS_G3dGeBufferOP_N(u32 op, const u32 *args, u32 num) {
+     } else if (gGeBufferState.isLocked) {
+         NNS_G3dGeWaitSendDL();
+     }
++    #if defined(SDK_PORT_3DS)
++    NitroPort_GxFifoWord(op);
++    #else
+     reg_G3X_GXFIFO = op;
++    #endif
+     MIi_CpuSend32(args, &reg_G3X_GXFIFO, num * sizeof(u32));
+ }
+ 
+diff --git a/src/g3d_sbc.c b/src/g3d_sbc.c
+index cbdcaa8..a7dc402 100644
+--- a/src/g3d_sbc.c
++++ b/src/g3d_sbc.c
+@@ -1,5 +1,12 @@
+ #include <nitro.h>
+ #include <nnsys/g3d_render_internal.h>
++#if defined(SDK_PORT_3DS)
++/* The port GXFIFO is ordinary memory: keep the side effects of single-register
++ * writes (3ds_port/nitro/src/port_gx3d.c). Bulk sends through MIi_CpuSend32 are
++ * forwarded by the port MI layer already. Platinum NitroSystem 0003. */
++extern void NitroPort_GxFifoWord(unsigned int value);
++#endif
++
+ 
+ #pragma force_active on
+ 
+@@ -459,9 +466,21 @@ done:
+ // reads the current position matrix through the clip matrix with an identity projection
+ static inline void GetCurrentPosMtx(MtxFx44 *pClip) {
+     NNS_G3dGeFlushBuffer();
++    #if defined(SDK_PORT_3DS)
++    NitroPort_GxFifoWord((G3OP_MTX_IDENTITY << 16) | (G3OP_MTX_PUSH << 8) | G3OP_MTX_MODE);
++    #else
+     reg_G3X_GXFIFO = (G3OP_MTX_IDENTITY << 16) | (G3OP_MTX_PUSH << 8) | G3OP_MTX_MODE;
++    #endif
++    #if defined(SDK_PORT_3DS)
++    NitroPort_GxFifoWord(GX_MTXMODE_PROJECTION);
++    #else
+     reg_G3X_GXFIFO = GX_MTXMODE_PROJECTION;
++    #endif
++    #if defined(SDK_PORT_3DS)
++    NitroPort_GxFifoWord(0);
++    #else
+     reg_G3X_GXFIFO = 0;
++    #endif
+     while (G3X_GetClipMtx(pClip) != 0) {
+     }
+ }
+@@ -527,16 +546,32 @@ void NNSi_G3dFuncSbc_BB(G3dRS *pRS, u32 opt) {
+         pScale->y = VEC_Mag((VecFx32 *)&l.clip._10);
+         pScale->z = VEC_Mag((VecFx32 *)&l.clip._20);
+         if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP;
++            #endif
+             MIi_CpuSend32(gBillboardCmdParams, &reg_G3X_GXFIFO, 2 * sizeof(u32));
+             MIi_CpuSend32(NNS_G3dGlbGetInvWV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3;
++            #endif
+             MIi_CpuSend32(&gBillboardMtx, &reg_G3X_GXFIFO, sizeof(MtxFx43) + sizeof(VecFx32));
+         } else if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_VP) {
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP;
++            #endif
+             MIi_CpuSend32(gBillboardCmdParams, &reg_G3X_GXFIFO, 2 * sizeof(u32));
+             MIi_CpuSend32(NNS_G3dGlbGetInvV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3;
++            #endif
+             MIi_CpuSend32(&gBillboardMtx, &reg_G3X_GXFIFO, sizeof(MtxFx43) + sizeof(VecFx32));
+         } else {
+             MIi_CpuSend32(gBillboardCmd, &reg_G3X_GXFIFO, sizeof(gBillboardCmd));
+@@ -629,16 +664,32 @@ void NNSi_G3dFuncSbc_BBY(G3dRS *pRS, u32 opt) {
+             pRows[1].y = pRows[2].z;
+         }
+         if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP;
++            #endif
+             MIi_CpuSend32(gBillboardYCmdParams, &reg_G3X_GXFIFO, 2 * sizeof(u32));
+             MIi_CpuSend32(NNS_G3dGlbGetInvWV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3;
++            #endif
+             MIi_CpuSend32(&gBillboardYMtx, &reg_G3X_GXFIFO, sizeof(MtxFx43) + sizeof(VecFx32));
+         } else if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_VP) {
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_LOAD_4x3 << 16) | (G3OP_MTX_MODE << 8) | G3OP_MTX_POP;
++            #endif
+             MIi_CpuSend32(gBillboardYCmdParams, &reg_G3X_GXFIFO, 2 * sizeof(u32));
+             MIi_CpuSend32(NNS_G3dGlbGetInvV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
++            #if defined(SDK_PORT_3DS)
++            NitroPort_GxFifoWord((G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3);
++            #else
+             reg_G3X_GXFIFO = (G3OP_MTX_SCALE << 8) | G3OP_MTX_MULT_4x3;
++            #endif
+             MIi_CpuSend32(&gBillboardYMtx, &reg_G3X_GXFIFO, sizeof(MtxFx43) + sizeof(VecFx32));
+         } else {
+             MIi_CpuSend32(gBillboardYCmd, &reg_G3X_GXFIFO, sizeof(gBillboardYCmd));
+diff --git a/src/gfd_vram_transfer_manager.c b/src/gfd_vram_transfer_manager.c
+index 9783e7a..81de57d 100644
+--- a/src/gfd_vram_transfer_manager.c
++++ b/src/gfd_vram_transfer_manager.c
+@@ -248,12 +248,45 @@ void NNS_GfdDoVramTransfer(void) {
+         return;
+     }
+     do {
++#ifdef SDK_PORT_3DS
++        /* Done already (NNSi_GfdDoVramTransfer3D). */
++        if (task->pSrc != NULL) {
++            DoTransfer_(task);
++        }
++#else
+         DoTransfer_(task);
++#endif
+         queue->totalSize -= task->szByte;
+         task = NNSi_GfdGetFrontVramTransferTaskQueue(queue);
+     } while (NNSi_GfdPopVramTransferTaskQueue(queue));
+ }
+ 
++#ifdef SDK_PORT_3DS
++/* The 3DS port draws a 3D scene when the game ends its frame (OS_Halt), before the
++ * V-blank work that does the transfers queued in that frame; the DS 3D engine draws it
++ * after. The queued texture, texture palette and clear image transfers are done then
++ * instead, from OS_Halt through the port (3ds_port/nitro/src/port_os.c), so a texture
++ * a scene uses for the first time is there when it is drawn. Each is marked done
++ * (pSrc NULL) and skipped by NNS_GfdDoVramTransfer, which still takes it off the queue
++ * and its size off the total, at the V-blank as on the DS. The 2D transfers wait for
++ * the V-blank. Platinum NitroSystem 0004. */
++void NNSi_GfdDoVramTransfer3D(void) {
++    VramTransferTaskQueue *queue = &gVramTransferTaskQueue;
++    u16 idx = queue->idxFront;
++    u16 n;
++
++    for (n = 0; n < queue->numTasks; n++) {
++        NNSGfdVramTransferTask *task = &queue->pTaskArray[idx];
++
++        if (task->pSrc != NULL && task->type < NNS_GFD_DST_2D_BG0_CHAR_MAIN) {
++            DoTransfer_(task);
++            task->pSrc = NULL;
++        }
++        idx = GetNextIndex_(queue, idx);
++    }
++}
++#endif
++
+ BOOL NNS_GfdRegisterNewVramTransferTask(NNS_GFD_DST_TYPE type, u32 dstAddr, void *pSrc, u32 szByte) {
+     VramTransferTaskQueue *queue = &gVramTransferTaskQueue;
+     NNSGfdVramTransferTask *task;
+-- 
+2.43.0
+

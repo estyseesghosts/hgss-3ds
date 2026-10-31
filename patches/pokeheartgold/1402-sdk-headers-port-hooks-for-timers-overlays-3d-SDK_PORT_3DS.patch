@@ -1,0 +1,303 @@
+From 262856185841d0736d768410304159aad33f15ce Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 06:22:27 +0000
+Subject: [PATCH] sdk-headers: port hooks for timers, overlays, 3D, uncompress
+ and transfers (SDK_PORT_3DS)
+
+The lib/include halves of patches 0602, 0603, 0604 and the NitroSystem 0302:
+public SDK headers cannot live in the per-library stacks (those apply under
+lib/NitroSDK and lib/NitroSystem), so they ride together here, one hunk per
+area. The DS text is unchanged: gcc-10 -E -P of each file without
+SDK_PORT_3DS (with -DSDK_ARM9) has 0 diff lines against the file before this
+patch. Each hunk is verified by the same suite as its source half.
+
+lib/include/nitro/os/common/timer_shared.h (with 0602, from Platinum 0013):
+OS_SetTimerCount calls NitroPort_TimerSetReload and OS_SetTimerControl calls
+NitroPort_TimerSetControl instead of writing the registers. HGSS keeps these
+inlines in timer_shared.h (Platinum patches timer.h) and has no SDK_ASSERT.
+
+lib/include/nitro/fs/overlay.h (with 0603, from Platinum 0010 and 0014):
+FS_EXTERN_OVERLAY declares the ID symbol as u8, so GCC does not fold
+comparisons against non-multiples of 4; FS_OVERLAY_ID is the
+SDK_PORT_OVERLAY_ID_<name> constant when the generated overlay-ids header is
+used (SDK_PORT_OVERLAY_IDS_H), else the symbol address as before.
+
+lib/include/nitro/gx/g3imm.h (with 0604, from Platinum 0024): all twelve G3_*
+immediate inlines call NitroPort_GxDirectWrite with the matching G3OP_*
+opcode instead of writing the register. u32 is unsigned long here and
+uint32_t on the port side; both are 32 bits passed by value, and no TU sees
+both declarations.
+
+lib/include/nitro/gx/g3x.h (with 0604, from Platinum 0025): HGSS has no
+SDK-side matrix-stack-error reset, so G3X_ResetMtxStackOverflow is provided
+under the macro, calling NitroPort_Gx3dClearStackError.
+
+lib/include/nitro/mi/uncompress.h (with 0604): MI_GetUncompressedSize is
+static inline under the macro. A bare inline leaves callers without a symbol
+at -O0 (undefined reference) and would emit duplicates with
+-fkeep-inline-functions; static inline is safe everywhere. The DS text keeps
+bare inline for MWCC.
+
+lib/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h (with
+NitroSystem 0302, from Platinum 0004): declares NNSi_GfdDoVramTransfer3D,
+which the vendored port_os.c already calls.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/include/nitro/fs/overlay.h                | 16 +++++
+ lib/include/nitro/gx/g3imm.h                  | 64 +++++++++++++++++++
+ lib/include/nitro/gx/g3x.h                    | 10 +++
+ lib/include/nitro/mi/uncompress.h             |  6 ++
+ lib/include/nitro/os/common/timer_shared.h    | 17 +++++
+ .../VramTransferMan/gfd_VramTransferManager.h |  4 ++
+ 6 files changed, 117 insertions(+)
+
+diff --git a/lib/include/nitro/fs/overlay.h b/lib/include/nitro/fs/overlay.h
+index 6415e48..8effb57 100644
+--- a/lib/include/nitro/fs/overlay.h
++++ b/lib/include/nitro/fs/overlay.h
+@@ -15,8 +15,24 @@ extern "C" {
+ 
+ typedef u32 FSOverlayID;
+ 
++#ifdef SDK_PORT_3DS
++/* The linker places this symbol at the overlay number. Declared as u32, GCC would
++ * assume its address is a multiple of 4 and fold comparisons such as
++ * FS_OVERLAY_ID(x) == n to false; as bytes it assumes nothing (Platinum 0010). */
++#define    FS_EXTERN_OVERLAY(name)    extern u8 SDK_OVERLAY_ ## name ## _ID[1]
++/* The port uses the number itself, a constant from the header generated from the
++ * linker spec (which defines SDK_PORT_OVERLAY_IDS_H): an address does not fit a
++ * 32-bit overlay ID on a 64-bit host (Platinum 0014). Without that header, fall
++ * back to the symbol address. */
++#ifdef SDK_PORT_OVERLAY_IDS_H
++#define    FS_OVERLAY_ID(name)    ((u32)SDK_PORT_OVERLAY_ID_ ## name)
++#else
++#define    FS_OVERLAY_ID(name)    ((u32)&(SDK_OVERLAY_ ## name ## _ID))
++#endif
++#else
+ #define    FS_EXTERN_OVERLAY(name)    extern u32 SDK_OVERLAY_ ## name ## _ID[1]
+ #define    FS_OVERLAY_ID(name)    ((u32)&(SDK_OVERLAY_ ## name ## _ID))
++#endif
+ 
+ typedef void (*FSOverlayInitFunc)(void);
+ 
+diff --git a/lib/include/nitro/gx/g3imm.h b/lib/include/nitro/gx/g3imm.h
+index afe73c5..c471f80 100644
+--- a/lib/include/nitro/gx/g3imm.h
++++ b/lib/include/nitro/gx/g3imm.h
+@@ -4,6 +4,14 @@
+ #include <nitro/hw/io_reg.h>
+ #include <nitro/gx/gxcommon.h>
+ #include <nitro/gx/g3.h>
++#ifdef SDK_PORT_3DS
++/* The 3DS has no DS geometry command ports. Model their write side effects
++ * (3ds_port/nitro/src/port_gx3d.c; Platinum NitroSDK 0024). unsigned int is
++ * uint32_t on every target here, matching the port declaration exactly (u32 is
++ * unsigned long under these headers and would conflict where both show). */
++void NitroPort_GxDirectWrite(int opcode, unsigned int parameter);
++#endif
++
+ 
+ typedef enum {
+     GX_SORTMODE_AUTO = 0,
+@@ -35,55 +43,111 @@ typedef enum {
+     ((u32)((addr) >> (4 - ((texFmt) == GX_TEXFMT_PLTT4))))
+ 
+ static inline void G3_SwapBuffers(GXSortMode am, GXBufferMode zw) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_SWAP_BUFFERS, GX_PACK_SWAPBUFFERS_PARAM(am, zw));
++#else
+     reg_G3_SWAP_BUFFERS = GX_PACK_SWAPBUFFERS_PARAM(am, zw);
++#endif
+ }
+ 
+ static inline void G3_ViewPort(int x1, int y1, int x2, int y2) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_VIEWPORT, GX_PACK_VIEWPORT_PARAM(x1, y1, x2, y2));
++#else
+     reg_G3_VIEWPORT = GX_PACK_VIEWPORT_PARAM(x1, y1, x2, y2);
++#endif
+ }
+ 
+ static inline void G3_MtxMode(GXMtxMode mode) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_MODE, GX_PACK_MTXMODE_PARAM(mode));
++#else
+     reg_G3_MTX_MODE = GX_PACK_MTXMODE_PARAM(mode);
++#endif
+ }
+ 
+ static inline void G3_PushMtx() {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_PUSH, 0);
++#else
+     reg_G3_MTX_PUSH = 0;
++#endif
+ }
+ 
+ static inline void G3_PopMtx(int num) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_POP, GX_PACK_POPMTX_PARAM(num));
++#else
+     reg_G3_MTX_POP = GX_PACK_POPMTX_PARAM(num);
++#endif
+ }
+ 
+ static inline void G3_TexImageParam(GXTexFmt texFmt, GXTexGen texGen, GXTexSizeS s, GXTexSizeT t, GXTexRepeat repeat, GXTexFlip flip, GXTexPlttColor0 pltt0, u32 addr) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_TEXIMAGE_PARAM, GX_PACK_TEXIMAGE_PARAM(texFmt, texGen, s, t, repeat, flip, pltt0, addr));
++#else
+     reg_G3_TEXIMAGE_PARAM = GX_PACK_TEXIMAGE_PARAM(texFmt, texGen, s, t, repeat, flip, pltt0, addr);
++#endif
+ }
+ 
+ static inline void G3_Identity() {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_IDENTITY, 0);
++#else
+     reg_G3_MTX_IDENTITY = 0;
++#endif
+ }
+ 
+ static inline void G3_TexPlttBase(u32 addr, GXTexFmt texfmt) {
+     u32 param = GX_PACK_TEXPLTTBASE_PARAM(addr, texfmt);
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_TEXPLTT_BASE, param);
++#else
+     reg_G3_TEXPLTT_BASE = param;
++#endif
+ }
+ 
+ static inline void G3_Translate(fx32 x, fx32 y, fx32 z) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)x);
++#else
+     reg_G3_MTX_TRANS = (u32)x;
++#endif
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)y);
++#else
+     reg_G3_MTX_TRANS = (u32)y;
++#endif
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)z);
++#else
+     reg_G3_MTX_TRANS = (u32)z;
++#endif
+ }
+ 
+ static inline void G3_MaterialColorDiffAmb(GXRgb diffuse, GXRgb ambient, BOOL IsSetVtxColor) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_DIF_AMB, GX_PACK_DIFFAMB_PARAM(diffuse, ambient, IsSetVtxColor));
++#else
+     reg_G3_DIF_AMB = GX_PACK_DIFFAMB_PARAM(diffuse, ambient, IsSetVtxColor);
++#endif
+ }
+ 
+ static inline void G3_MaterialColorSpecEmi(GXRgb specular, GXRgb emission, BOOL IsShininess) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_SPE_EMI, GX_PACK_SPECEMI_PARAM(specular, emission, IsShininess));
++#else
+     reg_G3_SPE_EMI = GX_PACK_SPECEMI_PARAM(specular, emission, IsShininess);
++#endif
+ }
+ 
+ static inline void G3_PolygonAttr(int light, GXPolygonMode polyMode, GXCull cullMode, int polygonID, int alpha, int misc) {
++#ifdef SDK_PORT_3DS
++    NitroPort_GxDirectWrite(G3OP_POLYGON_ATTR, GX_PACK_POLYGONATTR_PARAM(light, polyMode, cullMode, polygonID, alpha, misc));
++#else
+     reg_G3_POLYGON_ATTR = GX_PACK_POLYGONATTR_PARAM(light,
+                                                     polyMode, cullMode, polygonID, alpha, misc);
++#endif
+ }
+ 
+ #endif //NITRO_GX_G3IMM_H_
+diff --git a/lib/include/nitro/gx/g3x.h b/lib/include/nitro/gx/g3x.h
+index 6417793..b532cd3 100644
+--- a/lib/include/nitro/gx/g3x.h
++++ b/lib/include/nitro/gx/g3x.h
+@@ -92,5 +92,15 @@ static inline s32 G3X_IsGeometryBusy (void)
+ {
+     return (s32)(reg_G3X_GXSTAT & REG_G3X_GXSTAT_B_MASK);
+ }
++#ifdef SDK_PORT_3DS
++/* HGSS has no SDK-side reset for the matrix stack error; provide the DS-named inline
++ * for port and game code (Platinum NitroSDK 0025). */
++void NitroPort_Gx3dClearStackError(void);
++static inline void G3X_ResetMtxStackOverflow(void)
++{
++    NitroPort_Gx3dClearStackError();
++}
++#endif
++
+ 
+ #endif //NITRO_GX_G3X_H_
+diff --git a/lib/include/nitro/mi/uncompress.h b/lib/include/nitro/mi/uncompress.h
+index 2ed009d..dbaa8c8 100644
+--- a/lib/include/nitro/mi/uncompress.h
++++ b/lib/include/nitro/mi/uncompress.h
+@@ -3,7 +3,13 @@
+ 
+ void MI_UncompressLZ8(const void *srcp, void *destp);
+ 
++#ifdef SDK_PORT_3DS
++/* static: under -fgnu89-inline a bare inline emits an external symbol in every TU,
++ * which fails the link with multiple definitions. The DS text is unchanged. */
++static inline u32 MI_GetUncompressedSize(const void *srcp) {
++#else
+ inline u32 MI_GetUncompressedSize(const void *srcp) {
++#endif
+     return (*(u32 *)srcp >> 8);
+ }
+ 
+diff --git a/lib/include/nitro/os/common/timer_shared.h b/lib/include/nitro/os/common/timer_shared.h
+index 48d5485..8f58d46 100644
+--- a/lib/include/nitro/os/common/timer_shared.h
++++ b/lib/include/nitro/os/common/timer_shared.h
+@@ -19,6 +19,22 @@ typedef enum
+     OS_TIMER_3 = 3
+ } OSTimer;
+ 
++#ifdef SDK_PORT_3DS
++/* 3DS port: the timers are counted in software from a real clock
++ * (3ds_port/nitro/src/port_timer.c), which needs to see every write. */
++void NitroPort_TimerSetReload(int id, u16 count);
++void NitroPort_TimerSetControl(int id, u16 control);
++
++static inline void OS_SetTimerCount(OSTimer id, u16 count)
++{
++    NitroPort_TimerSetReload((int)id, count);
++}
++
++static inline void OS_SetTimerControl(OSTimer id, u16 control)
++{
++    NitroPort_TimerSetControl((int)id, control);
++}
++#else
+ static inline void OS_SetTimerCount(OSTimer id, u16 count)
+ {
+     *((REGType16 *)((u32)&reg_OS_TM0CNT_L + id * 4)) = count;
+@@ -28,5 +44,6 @@ static inline void OS_SetTimerControl(OSTimer id, u16 control)
+ {
+     *((REGType16 *)((u32)&reg_OS_TM0CNT_H + id * 4)) = control;
+ }
++#endif
+ 
+ #endif //NITRO_OS_TIMER_SHARED_H
+diff --git a/lib/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h b/lib/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h
+index cc17411..714e003 100644
+--- a/lib/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h
++++ b/lib/include/nnsys/gfd/VramTransferMan/gfd_VramTransferManager.h
+@@ -54,5 +54,9 @@ typedef struct NNSGfdVramTransferTask {
+ void NNS_GfdInitVramTransferManager (NNSGfdVramTransferTask* pTaskArray, u32 lengthOfArray);
+ BOOL NNS_GfdRegisterNewVramTransferTask (NNS_GFD_DST_TYPE type, u32 dstAddr, void* pSrc, u32 szByte);
+ void NNS_GfdDoVramTransfer(void);
++#if defined(SDK_PORT_3DS)
++/* The queued 3D transfers, done now (see gfd_vram_transfer_manager.c). */
++void NNSi_GfdDoVramTransfer3D(void);
++#endif
+ 
+ #endif //NNSYS_GFD_VRAMTRANSFERMAN_GFD_VRAMTRANSFERMANAGER_H_
+-- 
+2.43.0
+

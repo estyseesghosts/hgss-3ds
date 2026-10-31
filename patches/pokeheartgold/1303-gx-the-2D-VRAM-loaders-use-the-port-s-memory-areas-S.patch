@@ -1,0 +1,177 @@
+From 776eb6a6574d51f6964ef71394644582b3b13211 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 07:55:14 +0000
+Subject: [PATCH] gx: the 2D VRAM loaders use the port's memory areas
+ (SDK_PORT_3DS)
+
+GX_LoadBGPltt/GX_LoadOBJPltt/GX_LoadOAM and the extended-palette loaders wrote
+the raw DS addresses 0x05000000, 0x07000000, 0x06880000, ... straight into the
+DMA destination. Patches 1301/1302 remap the HW_* areas to the port's arrays,
+but these literals never went through them, so on the port the first palette
+load wrote into unmapped host memory (vendored test_nitro segfaulted in
+GX_LoadBGPltt before the first frame).
+
+Each literal becomes a named macro defined twice: the original literal for the
+Metrowerks build (so gcc -10 -E -P without SDK_PORT_3DS is byte-identical) and
+the corresponding HW_* area for the port. GXS_* (sub-engine) destinations use
+HW_DB_OAM / HW_DB_*_PLTT, which 1301 places after the main ones in the same
+port arrays.
+
+lib/NitroSDK/src/gx/gx_load3d.c is deliberately not touched: its 0x06800000>>12
+table entries are VRAM bank numbers written to GX_VRAMCNT (12-bit addresses,
+not host pointers), which the port's VRAM control already interprets, and
+sClrImgLCDCBlk is only reached by the clear-image path, which no port build
+exercises yet.
+
+Checked by the vendored test_nitro DMA section, which calls GX_LoadBGPltt and
+segfaulted before this patch.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/gx/gx_load2d.c | 66 +++++++++++++++++++++++++--------
+ 1 file changed, 51 insertions(+), 15 deletions(-)
+
+diff --git a/lib/NitroSDK/src/gx/gx_load2d.c b/lib/NitroSDK/src/gx/gx_load2d.c
+index 7010d6b..40b6a4e 100644
+--- a/lib/NitroSDK/src/gx/gx_load2d.c
++++ b/lib/NitroSDK/src/gx/gx_load2d.c
+@@ -4,6 +4,42 @@
+ 
+ extern u32 GXi_DmaId;
+ 
++#ifdef SDK_PORT_3DS
++/* SDK_PORT_3DS: patches 1301/1302 turn the HW_* areas into the port's arrays
++ * (lib/include/nitro/hw/ARM9/mmap.h). These loaders still wrote the raw DS
++ * addresses, so on the port they wrote into unmapped host memory: GX_LoadBGPltt
++ * segfaulted before the first frame. Names, not the macros directly, so the
++ * Metrowerks build expands them to the original literal tokens and gcc -E -P
++ * without the macro is byte-identical. */
++#define GX_2D_BG_PLTT         HW_BG_PLTT
++#define GX_2D_OBJ_PLTT        HW_OBJ_PLTT
++#define GX_2D_DB_BG_PLTT      HW_DB_BG_PLTT
++#define GX_2D_DB_OBJ_PLTT     HW_DB_OBJ_PLTT
++#define GX_2D_OAM             HW_OAM
++#define GX_2D_DB_OAM          HW_DB_OAM
++#define GX_2D_OBJ_VRAM        HW_OBJ_VRAM
++#define GX_2D_DB_OBJ_VRAM     HW_DB_OBJ_VRAM
++#define GX_2D_LCDC_80000      (HW_LCDC_VRAM + 0x80000)
++#define GX_2D_LCDC_94000      (HW_LCDC_VRAM + 0x94000)
++#define GX_2D_LCDC_90000      (HW_LCDC_VRAM + 0x90000)
++#define GX_2D_LCDC_98000      (HW_LCDC_VRAM + 0x98000)
++#define GX_2D_LCDC_A0000      (HW_LCDC_VRAM + 0xA0000)
++#else
++#define GX_2D_BG_PLTT         0x5000000
++#define GX_2D_OBJ_PLTT        0x5000200
++#define GX_2D_DB_BG_PLTT      0x5000400
++#define GX_2D_DB_OBJ_PLTT     0x5000600
++#define GX_2D_OAM             0x7000000
++#define GX_2D_DB_OAM          0x7000400
++#define GX_2D_OBJ_VRAM        0x6400000
++#define GX_2D_DB_OBJ_VRAM     0x6600000
++#define GX_2D_LCDC_80000      0x06880000
++#define GX_2D_LCDC_94000      0x06894000
++#define GX_2D_LCDC_90000      0x06890000
++#define GX_2D_LCDC_98000      0x06898000
++#define GX_2D_LCDC_A0000      0x068A0000
++#endif
++
+ static s32 sBGExtPltt = 0;
+ static u32 sBGExtPlttLCDCBlk = 0;
+ static u32 sBGExtPlttLCDCOffset = 0;
+@@ -13,34 +49,34 @@ static s32 sSubBGExtPltt = 0;
+ static s32 sSubOBJExtPltt = 0;
+ 
+ static inline void *_GX_OBJ_PTR() {
+-    return (void *)0x6400000;
++    return (void *)GX_2D_OBJ_VRAM;
+ }
+ static inline void *_GXS_OBJ_PTR() {
+-    return (void *)0x6600000;
++    return (void *)GX_2D_DB_OBJ_VRAM;
+ }
+ 
+ void GX_LoadBGPltt(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy16(GXi_DmaId, src, (void *)(0x5000000 + offset), size);
++    GXi_DmaCopy16(GXi_DmaId, src, (void *)(GX_2D_BG_PLTT + offset), size);
+ }
+ 
+ void GXS_LoadBGPltt(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy16(GXi_DmaId, src, (void *)(0x5000400 + offset), size);
++    GXi_DmaCopy16(GXi_DmaId, src, (void *)(GX_2D_DB_BG_PLTT + offset), size);
+ }
+ 
+ void GX_LoadOBJPltt(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy16(GXi_DmaId, src, (void *)(0x5000200 + offset), size);
++    GXi_DmaCopy16(GXi_DmaId, src, (void *)(GX_2D_OBJ_PLTT + offset), size);
+ }
+ 
+ void GXS_LoadOBJPltt(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy16(GXi_DmaId, src, (void *)(0x5000600 + offset), size);
++    GXi_DmaCopy16(GXi_DmaId, src, (void *)(GX_2D_DB_OBJ_PLTT + offset), size);
+ }
+ 
+ void GX_LoadOAM(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy32(GXi_DmaId, src, (void *)(0x7000000 + offset), size);
++    GXi_DmaCopy32(GXi_DmaId, src, (void *)(GX_2D_OAM + offset), size);
+ }
+ 
+ void GXS_LoadOAM(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy32(GXi_DmaId, src, (void *)(0x7000400 + offset), size);
++    GXi_DmaCopy32(GXi_DmaId, src, (void *)(GX_2D_DB_OAM + offset), size);
+ }
+ 
+ void GX_LoadOBJ(const void *src, u32 offset, u32 size) {
+@@ -139,16 +175,16 @@ void GX_BeginLoadBGExtPltt() {
+     case 0: // needed to match
+         break;
+     case 0x10:
+-        sBGExtPlttLCDCBlk = 0x06880000;
++        sBGExtPlttLCDCBlk = GX_2D_LCDC_80000;
+         sBGExtPlttLCDCOffset = 0x0;
+         break;
+     case 0x40:
+-        sBGExtPlttLCDCBlk = 0x06894000;
++        sBGExtPlttLCDCBlk = GX_2D_LCDC_94000;
+         sBGExtPlttLCDCOffset = 0x4000;
+         break;
+     case 0x20:
+     case 0x60:
+-        sBGExtPlttLCDCBlk = 0x06890000;
++        sBGExtPlttLCDCBlk = GX_2D_LCDC_90000;
+         sBGExtPlttLCDCOffset = 0x0;
+         break;
+     }
+@@ -172,10 +208,10 @@ void GX_BeginLoadOBJExtPltt() {
+     case 0: // needed to match
+         break;
+     case 0x40:
+-        sOBJExtPlttLCDCBlk = 0x06894000;
++        sOBJExtPlttLCDCBlk = GX_2D_LCDC_94000;
+         break;
+     case 0x20:
+-        sOBJExtPlttLCDCBlk = 0x06890000;
++        sOBJExtPlttLCDCBlk = GX_2D_LCDC_90000;
+         break;
+     }
+ }
+@@ -196,7 +232,7 @@ void GXS_BeginLoadBGExtPltt() {
+ }
+ 
+ void GXS_LoadBGExtPltt(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy32Async(GXi_DmaId, src, (void *)(0x06898000 + offset), size, NULL, NULL);
++    GXi_DmaCopy32Async(GXi_DmaId, src, (void *)(GX_2D_LCDC_98000 + offset), size, NULL, NULL);
+ }
+ 
+ void GXS_EndLoadBGExtPltt() {
+@@ -210,7 +246,7 @@ void GXS_BeginLoadOBJExtPltt() {
+ }
+ 
+ void GXS_LoadOBJExtPltt(const void *src, u32 offset, u32 size) {
+-    GXi_DmaCopy32Async(GXi_DmaId, src, (void *)(0x068A0000 + offset), size, NULL, NULL);
++    GXi_DmaCopy32Async(GXi_DmaId, src, (void *)(GX_2D_LCDC_A0000 + offset), size, NULL, NULL);
+ }
+ 
+ void GXS_EndLoadOBJExtPltt() {
+-- 
+2.43.0
+
