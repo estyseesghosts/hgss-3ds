@@ -9,8 +9,8 @@ Status: **in progress.** Phase 0 is complete (see `phase-0.md`). Nothing below i
 - Rebuild the patched tree from scratch: `python3 tools/bootstrap.py --clean` (applies `patches/**`
   in numeric order per stack, generates `fx_const.h`).
 - Measure: `python3 tools/sdk_compile_survey.py -j 10 --m32` (and without `--m32`). Baseline before any
-  patch: 243/284 files parse at 32-bit. Latest full run (patches 0101-0301): **265/284**.
-- Tests: `bash tests/sdk/<name>/run.sh build/upstream` for fx, small, nns_clz, os_system, card_spi_wait.
+  patch: 243/284 files parse at 32-bit. Latest full run (all 11 patches): **270/284**.
+- Tests: `bash tests/sdk/<name>/run.sh build/upstream` for fx, small, nns_clz, os_system, card_spi_wait, cp_context, irq_handler, port_hooks, math_qsort; layout: `PY=/work/venv/bin/python bash tests/layout_probe/run.sh` (venv with `unicorn pyelftools`).
 - DS-side gate (hard rule 3): `tools/.gate.sh`-style run = clone `build/upstream` to `/work/patched`,
   `tools/install-ds-toolchain.sh /work/patched`, `make patch_mwasmarm MWCCVER=2.0/sp2p3`,
   `tools/matching-build.sh /work/patched HEARTGOLD` (~18 min), expect ROM SHA1 `4fcded0e…`.
@@ -23,54 +23,58 @@ Status: **in progress.** Phase 0 is complete (see `phase-0.md`). Nothing below i
 
 ## Done (committed in the port repo)
 
-| Patch | What | Verified |
+From-scratch `bootstrap.py --clean` applies **11 patches** (NitroSDK 0101 0201 0301 0401 0501 0601 0701 0801 0901,
+NitroSystem 0301, pokeheartgold 1001). Survey: **270/284** files parse (32-bit GCC, `-DSDK_PORT_3DS`); baseline was 243.
+Every patch keeps the original MWCC text (`#ifdef SDK_PORT_3DS` ... `#else` original `#endif`); each was checked with
+`gcc -E -P` (without the define, output identical to unpatched) and a host test.
+
+| Patch | What | Verification |
 | --- | --- | --- |
-| NitroSDK 0101 | 14 fx matrix asm functions -> C | 428 host cases; asm interpreted independently (3011 checks); cpp identity |
-| NitroSDK 0201 | RtcWaitBusy, MicWaitBusy, OSi_WaitVCount0, OsCountZeroBits, OS_Halt, lock ids, GX FIFO sends, NOP clear | 54 host cases; cpp identity |
-| NitroSDK 0301 | os_thread linkage, `__declspec(noinline)`, OSi_AlarmHandler in os_alarm_irq_handler.c (the one in the ROM) | compile; cpp identity |
-| NitroSystem 0301 | 3 `CountLeadingZeros` helpers | host test |
-| NitroSDK 0401 | os_system.c CPSR functions on `OSi_PortCpsr` + raise-pending-IRQ-on-unmask | 29 host cases; cpp identity |
+| NitroSDK 0101 | 14 fx matrix asm functions | 428 cases; asm interpreted independently (3011 checks) |
+| NitroSDK 0201 | RtcWaitBusy, MicWaitBusy, OSi_WaitVCount0, OsCountZeroBits, OS_Halt, lock ids, GX FIFO sends, NOP clear | 54 cases |
+| NitroSDK 0301 + NNS 0301 | os_thread linkage, `__declspec(noinline)`, OSi_AlarmHandler (the copy in the ROM), 3 clz helpers | host test |
+| NitroSDK 0401 | os_system.c CPSR functions on `OSi_PortCpsr` + raise-pending-IRQ-on-unmask | 29 cases |
+| NitroSDK 0501 | CP_SaveContext/CPi_RestoreContext, OS_InitContext/Save/LoadContext, divider/sqrt hooks in fx_cp.c | 142 cases; port's HandOver already saves CP per thread, so Save/LoadContext skip it |
+| NitroSDK 0601 | IF write-1-to-clear emulation, software-DMA start hooks, matrix-result sync | 80 cases |
+| NitroSDK 0701 | `CARD_SpiWait*` stub (no IR peer, status 0xAA) | 19 cases |
+| NitroSDK 0801 | MATH_QSort C version | 11,202 cases; **465,985 comparator calls identical to the ORIGINAL ROM machine code** run in unicorn (`tools/qsort_rom_oracle.py`) |
+| NitroSDK 0901 | OS_IrqHandler, OS_IrqHandler_ThreadSwitch via `NitroPort_IrqThreadSwitch` | 10 cases |
+| pokeheartgold 1001 | `u64`/`s64` aligned(4) | layout probe, below |
 
-**DS-side gate: PASSED** for the tree with 0101+0201+0301(+NNS 0301): HeartGold ROM SHA1 `4fcded0e…`, 0 failed
-checks, 18m20s. Must be re-run once more at the end of Phase 1 with all patches (0401 and later were not in it).
+**Save layout (rule 4): verified.** `tools/layout_probe/run_probe.py` compares 804 `sizeof`/`offsetof` values covering all 45
+save-chunk root types and everything reachable from them, MWCC 2.0/sp2p2 (under Wine) vs GCC. Without 1001, devkitARM GCC and
+`-m32 -malign-double` differ in 55 values (POKEWALKER, PCStorage, BattleRecord: all hold a `u64`); with 1001, **0 differences**
+for host `-m32`, `-m32 -malign-double` and devkitARM. `tests/layout_probe/run.sh` fails on any difference. Note the port's
+`host32` flag `-malign-double` is only safe because of 1001.
 
-## Added after the checkpoint (reviewed, committed)
+**DS-side gate (rule 3).** PASSED for 0101+0201+0301(+NNS 0301): HeartGold SHA1 `4fcded0e…`, 0 failed checks. A second run
+over the clone with ALL patches up to 0901 was started (`/work/gate-hg.log`); it predates 1001. Re-run once at the end.
 
-| Patch | What | Verified |
-| --- | --- | --- |
-| NitroSDK 0701 | `CARD_SpiWait*` stub, no IR peer (status 0xAA, zero-length reads); Phase 9 replaces the bodies | 19 host cases (register page PROT_NONE, mutation-checked); cpp identity; callers checked line by line in the message |
+## Remaining SDK parse failures (14, all port-replaced; exclude from the HGSS source list, do not patch)
 
-From-scratch bootstrap with 0101-0701 + NNS 0301: 6 patches apply, survey **266/284**, all host suites pass.
-
-## Started but lost (rate limit hit; clones are clean, nothing to recover)
-
-- S4: `CP_context.c`, `os_context.c`, divider/sqrt hooks in `fx_cp.c` (brief: Platinum 0006/0002).
-- S5: IRQ-flag clear (`os_interrupt.c`, `os_tick.c`), software DMA hooks (`mi_dma.c`), matrix result sync (`g3x.c`).
-- S8: `MATH_QSort` C version (needs an exact comparator-call-order match; plan was a scratch ARM interpreter).
-Re-brief these from scratch; their original briefs are in the session history and follow the pattern above.
-
-## Remaining SDK parse failures (survey, 32-bit; 19 before 0401)
-
-Port-replaced, to be EXCLUDED from the HGSS source list rather than patched (14): `crt0.c`,
-`dgt_hash2_arm4_small.c`, `mi/mi_memory.c`, `mi/mi_swap.c`, `mi/mi_uncompress.c`, `os/os_cache.c`,
+`crt0.c`, `dgt_hash2_arm4_small.c`, `mi/mi_memory.c`, `mi/mi_swap.c`, `mi/mi_uncompress.c`, `os/os_cache.c`,
 `os/os_exception.c`, `os/os_protectionRegion.c`, `os/os_protectionUnit.c`, `os/os_reset_boot.c`,
 `os/os_reset_clear32.c`, `os/os_reset_system.c`, `os/os_tcm.c`, `os/os_alarm.c` (not in the ROM).
-Need patches (4 left after 0401): `cp/CP_context.c`, `os/os_context.c`, `os/os_irqHandler.c`
-(thread switch at end of IRQ: a redesign, Platinum 0012), `math/math_qsort.c`.
+Caveat: `mi_memory.c` also defines `MI_Copy32B/36B/48B/64B` that the port's `mi_memory.c` lacks; they need a home.
 
-## Not started
+## Not started / open
 
-- HGSS source list / build wiring for `3ds_port/nitro` (vendored Makefiles assume Platinum's tree; see
-  `docs/sdk-diff.md` §1 and the build-wiring explorer findings: missing `fx_const` generation, headers
-  `nitro/rtc/common/fifo.h`, `nitro/spi/common/type.h`, `nitro/cp/divider.h`..., PXI command encodings differ).
-- Header-level patches (lib/include): u64 4-byte alignment (Platinum 0016), timer hooks (0013), overlay ID bytes
-  (0010), memory map (0005, 0001 types).
-- Overlay patches (0014 overlay hooks, 0027 static initializers, 0011 libpak), 3D command forwarding (0024/0025/26).
-- ARM7 sound (Platinum 0018-0023): HGSS ARM7 driver is in `sub/lib/src/sound_*.c`; rewrite, not rebase.
-- NitroSystem patches 2-5 equivalents (GXFIFO stores in g3d_gecom.c/g3d_sbc.c, VRAM transfer at OS_Halt, OAM hide).
-- Layout probe run (generator `tools/layout_probe/gen_probe.py` written, untested).
-- Unit tests of the vendored port against HGSS libs (blocked on build wiring), `port.yml` (never run).
-- `docs/sdk-diff.md` still partial (RTC/TP/PM/MIC payloads, IRQ/thread structs).
+- **Build wiring for the vendored `3ds_port/nitro` tests** (the largest remaining item): the vendored Makefiles assume
+  Platinum's `libraries/<lib>/src` layout and symbols. Needs an HGSS source list (shim dir under `build/` + command-line
+  overrides, per the build-wiring explorer: `SDK=`, `SDK_SRCS=`, `SDK_INCLUDES=`, empty `ARM7_SOUND_SRCS=`), headers the port
+  includes that HGSS lacks (`nitro/rtc/common/fifo.h`, `nitro/spi/common/type.h`, `nitro/cp/divider.h`, `sqrt.h`,
+  `nitro/ioreg.h`, `nitro/hw/ARM9/mmap_global.h`, ...), PXI command encodings for RTC/TP/PM (HGSS ARM9 sends literal words
+  the port's virtual ARM7 does not decode), `port_card.c` includes `card_common.h` (HGSS: `CARD_common.h`), and `OS_IrqHandler()`
+  must be called with an argument.
+- More DIV/SQRT writers needing the 0501 hook: `fx_vec*.c`, `fx_mtx44_ortho.c`, `fx_mtx44_perspective.c`, `tp.c`.
+- Header-level patches (lib/include): timer hooks (Platinum 0013), overlay ID symbols as bytes (0010), memory map / I/O
+  remap (0005; `HW_IOREG` is still 0x04000000), `g2d_CellTransferManager.h:24` implicit int (blocks devkitARM 16), the
+  generated `fx_const.h` include guard contains `-`.
+- Overlay patches (Platinum 0014 hooks, 0027 static initializers, 0011 libpak), 3D command forwarding (0024/0025), G3 FIFO
+  sends through the port's translator (0201 uses plain stores).
+- ARM7 sound (Platinum 0018-0023): rewrite against `sub/lib/src/sound_*.c`.
+- NitroSystem equivalents of Platinum 0003 (GXFIFO stores in g3d_gecom.c, g3d_sbc.c), 0004 (VRAM transfer at OS_Halt), 0005 (OAM).
+- `port.yml` never run; `docs/sdk-diff.md` still partial; final report and checklist.
 
 ## Decisions / facts worth keeping
 
