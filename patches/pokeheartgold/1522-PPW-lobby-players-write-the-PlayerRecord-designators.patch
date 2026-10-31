@@ -1,0 +1,42 @@
+From b5addce6e55e28100bf3c9a7e752b8e9a178a4f2 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:30:19 +0000
+Subject: [PATCH] PPW lobby players: write the PlayerRecord designators in
+ declaration order
+
+src/lobby/ppw_lobby_players_update_states.cpp:46 builds a PlayerRecord with
+`(PlayerRecord) { .channel = ..., .timeLow = ..., .timeHigh = ... }`. The
+struct declares `u32 timeLow, timeHigh; int channel;` (:12-15), so the
+designators are out of order, and GCC's C++ designated-initializer support
+requires declaration order: "designator order for field 'PlayerRecord::timeLow'
+does not match declaration order". MWCC accepted the C form.
+
+Under SDK_PORT_3DS list .timeLow, .timeHigh, .channel; each field has an
+explicit designator, so the values and the resulting record are identical.
+The #else keeps the original order for the DS build.
+
+gcc-10 -E -P without SDK_PORT_3DS: byte-identical (36305 bytes both).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/lobby/ppw_lobby_players_update_states.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/lobby/ppw_lobby_players_update_states.cpp b/src/lobby/ppw_lobby_players_update_states.cpp
+index 8d09461..4c2d169 100644
+--- a/src/lobby/ppw_lobby_players_update_states.cpp
++++ b/src/lobby/ppw_lobby_players_update_states.cpp
+@@ -43,7 +43,13 @@ void PPWLobbyPlayers_UpdateStates(PPWLobbyPlayers *players) {
+                 player->systemProfileChanged = notChanged;
+                 profilePlayer = PlayerAt(it);
+                 profilePlayer->userProfileChanged = notChanged;
++#ifdef SDK_PORT_3DS
++                // C++ designated initializers must follow declaration order
++                // (timeLow, timeHigh, channel); the values are unchanged.
++                const PlayerRecord &recordRef = (PlayerRecord) { .timeLow = ((u32 *)&player->systemProfile.time)[0], .timeHigh = ((u32 *)&player->systemProfile.time)[1], .channel = player->systemProfile.channel };
++#else
+                 const PlayerRecord &recordRef = (PlayerRecord) { .channel = player->systemProfile.channel, .timeLow = ((u32 *)&player->systemProfile.time)[0], .timeHigh = ((u32 *)&player->systemProfile.time)[1] };
++#endif
+                 PlayerRecord record = recordRef;
+                 userProfileSize = profilePlayer->userProfile.size;
+                 id = PlayerAt(it)->id;

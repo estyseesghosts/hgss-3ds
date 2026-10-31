@@ -1,0 +1,48 @@
+From 1545065b30df946feaf881b018196e656d2dff7c Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:21:01 +0000
+Subject: [PATCH] pokeathlon_box_graphics: copy the medal row table instead of
+ assigning it
+
+src/pokeathlon/pokeathlon_box_graphics.c:298 does
+`medalSlots = sPokeathlonBoxMonSpriteRows`, where both sides are u8[5]. C has
+no array assignment, so GCC reports "assignment to expression with array
+type". MWCC accepted the assignment and copied the five bytes. Under
+SDK_PORT_3DS memcpy the same five bytes from the same static table (1503's
+approach); the loop that follows reads the identical values. The #include
+<string.h> is port-only as well. The DS text is unchanged: 0 diff lines with
+gcc-10 -E -P without SDK_PORT_3DS.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/pokeathlon/pokeathlon_box_graphics.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/pokeathlon/pokeathlon_box_graphics.c b/src/pokeathlon/pokeathlon_box_graphics.c
+index e7256e5..25c16b9 100644
+--- a/src/pokeathlon/pokeathlon_box_graphics.c
++++ b/src/pokeathlon/pokeathlon_box_graphics.c
+@@ -12,6 +12,10 @@
+ #include "sprite_transfer.h"
+ #include "text.h"
+ 
++#ifdef SDK_PORT_3DS
++#include <string.h>
++#endif
++
+ static void PokeathlonBox_DeleteSprites(PokeathlonBox_SubGraphics *subGraphics);
+ static void PokeathlonBox_LoadBgGraphics(BgConfig *bgConfig, enum HeapID heapID);
+ static void PokeathlonBox_InitBgFromTemplates(BgConfig *bgConfig);
+@@ -295,7 +299,12 @@ static void PokeathlonBox_ShowMonSprites(PokeathlonBox_Graphics *graphics, Pokea
+     PokeathlonBox_TransferMonPic(&graphics->sub);
+     Sprite_SetDrawFlag(graphics->sub.monPicSprite, TRUE);
+     PokeathlonBox_ShowStatStars(&graphics->sub, mon);
++#ifdef SDK_PORT_3DS
++    // An array is not assignable in C; copy the same bytes instead.
++    memcpy(medalSlots, sPokeathlonBoxMonSpriteRows, sizeof(medalSlots));
++#else
+     medalSlots = sPokeathlonBoxMonSpriteRows;
++#endif
+     for (i = 0; i < 5; i++) {
+         if (mon->medals[medalSlots[i]] != 0) {
+             Sprite_SetDrawFlag(sub->sprites[medalSlots[i]], TRUE);

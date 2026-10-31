@@ -1,0 +1,51 @@
+From 45141e1ee01e2b963af933d2e38df0afacf5747f Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:19:35 +0000
+Subject: [PATCH] battle_main: register the overlay's static initializer with a
+ section attribute
+
+src/battle/battle_main.c:1087-1091 repeats the inline static-initializer
+pattern of lib/dsprot/include/static_init.h: the MWCC `#pragma define_section
+SINIT` and `#pragma section SINIT` bracketing a
+`SDK_FORCE_EXPORT static void (*NitroStaticInit_[])(void)` array. GCC does not
+know `__declspec(force_export)` (it parses it as a function declaration named
+__declspec), so the array declaration becomes a parameter and the rest of the
+file is swallowed: 17 errors ending in "expected '{' at end of input".
+
+Under SDK_PORT_3DS use `__attribute__((section(".sinit"), used))`, exactly as
+1401 did for the same pattern in lib/dsprot/include/static_init.h (Platinum
+0027); the game build already gathers each overlay's .sinit section into a
+pointer table. The original pragmas stay under #else. battle_main.c and
+ball_capsule_editor.c were the only two game files with the inline pattern;
+ball_capsule_editor is outside this batch.
+
+gcc-10 -E -P without SDK_PORT_3DS: byte-identical (633336 bytes both).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/battle/battle_main.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/battle/battle_main.c b/src/battle/battle_main.c
+index 41eee8d..c2d6746 100644
+--- a/src/battle/battle_main.c
++++ b/src/battle/battle_main.c
+@@ -1084,10 +1084,18 @@ static void Battle_StaticInit(void) {
+ }
+ 
+ // The overlay's single static initializer entry.
++#ifdef SDK_PORT_3DS
++/* GCC section attribute instead of the MWCC section pragmas, as 1401 does in
++ * lib/dsprot/include/static_init.h (Platinum 0027). The game build gathers the
++ * overlay's pointers into a table of its own. */
++__attribute__((section(".sinit"), used))
++static void (*NitroStaticInit_[])(void) = { Battle_StaticInit };
++#else
+ #pragma define_section SINIT ".sinit" abs32 RWX
+ #pragma section SINIT begin
+ SDK_FORCE_EXPORT static void (*NitroStaticInit_[])(void) = { Battle_StaticInit };
+ #pragma section SINIT end
++#endif
+ 
+ void Battle_LinkInit(OverlayManager *man, BattleSetup *setup) {
+     GraphicsBanks banks;

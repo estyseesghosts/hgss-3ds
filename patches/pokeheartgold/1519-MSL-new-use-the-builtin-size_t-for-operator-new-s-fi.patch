@@ -1,0 +1,97 @@
+From 1333d5d68114b7a86df5ed9f2776bd715f3ea058 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:21:55 +0000
+Subject: [PATCH] MSL new: use the builtin size_t for operator new's first
+ parameter
+
+src/to91_msl_array_new.cpp and src/to91_msl_scalar_new.cpp define the MSL
+operator new/delete replacements for the Metrowerks C library. Their first
+parameter is `unsigned long` (the DS's MSL size_t). GCC requires that
+parameter to be exactly the builtin size_t, which is `unsigned int` on i386
+and ARM, so all six declarations in the array file and the three in the
+scalar file are rejected: "'operator new' takes type 'size_t' ('unsigned int')
+as first parameter".
+
+Under SDK_PORT_3DS, array_new expands MSL_SIZE_T to __SIZE_TYPE__ and
+scalar_new typedefs its own size_t to it. The #else keeps `unsigned long`, so
+the preprocessed DS text is unchanged (the macro expands to the original
+token, so gcc-10 -E -P without SDK_PORT_3DS is byte-identical: 6988 and 7555
+bytes).
+
+The scalar file also has `try { ... } catch (...) { ... }` in the nothrow
+overload; the port's C++ build adds -fno-exceptions, so GCC reports
+"exception handling disabled". Under SDK_PORT_3DS return ::operator new's
+pointer directly, as that operator already loops on the new handler; the
+original try/catch stays for the DS.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/to91_msl_array_new.cpp  | 19 +++++++++++++------
+ src/to91_msl_scalar_new.cpp | 12 ++++++++++++
+ 2 files changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/src/to91_msl_array_new.cpp b/src/to91_msl_array_new.cpp
+index 5e7cd13..0b9f41d 100644
+--- a/src/to91_msl_array_new.cpp
++++ b/src/to91_msl_array_new.cpp
+@@ -11,13 +11,20 @@
+ #define MSL_THROW_BAD_ALLOC throw(std::bad_alloc)
+ #define MSL_THROW_NOTHING throw()
+ #endif
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// GCC requires the first parameter of operator new to be the builtin size_t
++// (unsigned int on i386/ARM), not unsigned long.
++#define MSL_SIZE_T __SIZE_TYPE__
++#else
++#define MSL_SIZE_T unsigned long
++#endif
+ 
+ namespace std { class bad_alloc; struct nothrow_t {}; }
+-void*operator new(unsigned long) MSL_THROW_BAD_ALLOC;
+-void*operator new(unsigned long,const std::nothrow_t&) MSL_THROW_NOTHING;
+-void*operator new[](unsigned long) MSL_THROW_BAD_ALLOC;
+-void*operator new[](unsigned long,const std::nothrow_t&) MSL_THROW_NOTHING;
++void*operator new(MSL_SIZE_T) MSL_THROW_BAD_ALLOC;
++void*operator new(MSL_SIZE_T,const std::nothrow_t&) MSL_THROW_NOTHING;
++void*operator new[](MSL_SIZE_T) MSL_THROW_BAD_ALLOC;
++void*operator new[](MSL_SIZE_T,const std::nothrow_t&) MSL_THROW_NOTHING;
+ // @fn _Znam
+-void*operator new[](unsigned long count) MSL_THROW_BAD_ALLOC {return operator new(count);}
++void*operator new[](MSL_SIZE_T count) MSL_THROW_BAD_ALLOC {return operator new(count);}
+ // @fn _ZnamRKSt9nothrow_t
+-void*operator new[](unsigned long count,const std::nothrow_t&tag) MSL_THROW_NOTHING {return operator new(count,tag);}
++void*operator new[](MSL_SIZE_T count,const std::nothrow_t&tag) MSL_THROW_NOTHING {return operator new(count,tag);}
+diff --git a/src/to91_msl_scalar_new.cpp b/src/to91_msl_scalar_new.cpp
+index 5c21db3..e68e14b 100644
+--- a/src/to91_msl_scalar_new.cpp
++++ b/src/to91_msl_scalar_new.cpp
+@@ -10,7 +10,13 @@
+ #define MSL_THROW_NOTHING throw()
+ #endif
+ 
++#ifdef SDK_PORT_3DS
++// GCC requires operator new's first parameter to be the builtin size_t
++// (unsigned int on i386/ARM), not unsigned long.
++typedef __SIZE_TYPE__ size_t;
++#else
+ typedef unsigned long size_t;
++#endif
+ extern "C" void *malloc(size_t);
+ namespace std {
+ class exception {
+@@ -46,9 +52,15 @@ void *operator new(size_t size) MSL_THROW_BAD_ALLOC {
+     return pointer;
+ }
+ void *operator new(size_t size, const std::nothrow_t &) MSL_THROW_NOTHING {
++#ifdef SDK_PORT_3DS
++    // The port's C++ build uses -fno-exceptions, so the failure path of the
++    // throwing operator new cannot be caught here. Keep its pointer result.
++    return ::operator new(size);
++#else
+     try {
+         return ::operator new(size);
+     } catch (...) {
+         return 0;
+     }
++#endif
+ }

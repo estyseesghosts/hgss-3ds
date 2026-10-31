@@ -1,0 +1,51 @@
+From 340a7f4aca8b45adb7ed3cb027e50d555a3ebf1e Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:20:42 +0000
+Subject: [PATCH] battle_command: use the port's hooked square-root helpers
+
+src/battle/battle_command.c:7149-7177 defines seven static inline CP_*
+square-root helpers. The port's hgss/compat/include/nitro/cp/sqrt.h, reached
+through <nitro.h>, already defines the same seven with identical bodies
+except that every operand write also calls CPi_PortUpdateSqrt (there is no
+square-root hardware on the port). GCC reports a redefinition of each:
+
+  CP_SetSqrtImm32_NS_, CP_SetSqrtImm32, CP_SetSqrt32, CP_IsSqrtBusy,
+  CP_WaitSqrt, CP_GetSqrtResultImm32, CP_GetSqrtResult32.
+
+MWCC has no sqrt.h, so it compiles the local bodies. Under SDK_PORT_3DS skip
+them and let the compat header's hooked versions be used; this is also the
+correct behaviour for the port, since the local bodies never notified the
+software square-root model. The #ifndef keeps the original text for MWCC.
+
+gcc-10 -E -P without SDK_PORT_3DS: byte-identical (956447 bytes both; the
+label hunk from 1510 is guarded too).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/battle/battle_command.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/battle/battle_command.c b/src/battle/battle_command.c
+index 912c20f..2d005a4 100644
+--- a/src/battle/battle_command.c
++++ b/src/battle/battle_command.c
+@@ -7146,6 +7146,11 @@ extern u16 sMoonBallPokemon[14];
+ 
+ #define CP_SQRT_32BIT_MODE (0UL << REG_CP_SQRTCNT_MODE_SHIFT)
+ 
++// nitro/cp/sqrt.h declares these same helpers and calls CPi_PortUpdateSqrt
++// after every operand write, because the port has no sqrt hardware. Skip the
++// local copies under the port so the calls reach the hooked versions; MWCC's
++// include path has no sqrt.h.
++#ifndef SDK_PORT_3DS
+ static inline void CP_SetSqrtImm32_NS_(u32 param) {
+     *((REGType32 *)REG_SQRT_PARAM_ADDR) = param;
+ }
+@@ -7176,6 +7181,7 @@ static inline u32 CP_GetSqrtResult32(void) {
+     CP_WaitSqrt();
+     return CP_GetSqrtResultImm32();
+ }
++#endif
+ 
+ static u32 BattleSystem_CalculateBallShakes(BattleSystem *bsys, BattleContext *ctx) {
+     s32 catchRate;

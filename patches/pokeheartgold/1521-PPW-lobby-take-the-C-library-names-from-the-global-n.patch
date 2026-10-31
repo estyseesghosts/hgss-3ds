@@ -1,0 +1,106 @@
+From 53ee69613101be40a5b547ddf53dfb5b67199265 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:30:19 +0000
+Subject: [PATCH] PPW lobby: take the C library names from the global namespace
+ on the port
+
+src/lobby/ppw_lobby.cpp includes <stdarg.h> and <string.h> and then does
+`using std::va_list` and `using std::memcmp/memcpy/memmove/memset/strlen`; a
+second `using std::memcmp` sits inside namespace OnEnterMainChannel (:1711),
+and ppw_lobby_process.cpp does `using std::memcmp`. Metrowerks' MSL headers put
+these names in namespace std, so the DS build is fine. The port's include
+order lets the system headers win (-idirafter lib/include), and glibc declares
+them only in the global namespace, so GCC reports "'memcmp' has not been
+declared in 'std'" (and the same for the others), plus the std::memset call at
+ppw_lobby.cpp:1552 fails.
+
+Under SDK_PORT_3DS use `using ::name` (also inside OnEnterMainChannel) and
+call memset unqualified at that one site. The #else keeps the original
+using-declarations. gcc-10 -E -P without SDK_PORT_3DS is byte-identical for
+both files.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/lobby/ppw_lobby.cpp         | 22 ++++++++++++++++++++++
+ src/lobby/ppw_lobby_process.cpp |  5 +++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/src/lobby/ppw_lobby.cpp b/src/lobby/ppw_lobby.cpp
+index e38127e..31f0373 100644
+--- a/src/lobby/ppw_lobby.cpp
++++ b/src/lobby/ppw_lobby.cpp
+@@ -12,7 +12,13 @@
+ #include <size_t.h>
+ #include <stdarg.h>
+ #include <string.h>
++#ifdef SDK_PORT_3DS
++// The host C library declares these in the global namespace only; MSL also
++// puts them in std. The code below uses both spellings.
++using ::va_list;
++#else
+ using std::va_list;
++#endif
+ extern "C" {
+ #include <nitro/os/printf.h>
+ }
+@@ -27,11 +33,19 @@ extern "C" {
+ #include "ppw_lobby_work.h"
+ 
+ #include "../../lib/NitroDWC/src/tree-iterator4.h"
++#ifdef SDK_PORT_3DS
++using ::memcmp;
++using ::memcpy;
++using ::memmove;
++using ::memset;
++using ::strlen;
++#else
+ using std::memcmp;
+ using std::memcpy;
+ using std::memmove;
+ using std::memset;
+ using std::strlen;
++#endif
+ 
+ inline void *operator new(std::size_t, void *p) {
+     return p;
+@@ -1549,7 +1563,11 @@ extern "C" void PPWLobby_OnGetSchedule(BOOL success, u8 *response, u32 responseS
+     }
+     const PPWLobbyUserProfile *p = GetUserProfile(gPPWLobbyWork);
+     int ret = 0;
++#ifdef SDK_PORT_3DS
++    memset(&body, 0, sizeof(body));
++#else
+     std::memset(&body, 0, sizeof(body));
++#endif
+     const PPWLobbyUserProfile *userProfile = GetUserProfile(gPPWLobbyWork);
+     header.userId = gPPWLobbyWork->userId;
+     header.one = 1;
+@@ -1690,7 +1708,11 @@ void PPWLobby_OnSubmitQuestionnaire(BOOL status, u8 *data, u32 size, void *param
+ }
+ 
+ namespace OnEnterMainChannel {
++#ifdef SDK_PORT_3DS
++using ::memcmp;
++#else
+ using std::memcmp;
++#endif
+ 
+ extern "C" void DWC_GetDateTime(RTCDate *date, RTCTime *time);
+ 
+diff --git a/src/lobby/ppw_lobby_process.cpp b/src/lobby/ppw_lobby_process.cpp
+index 20f5102..9902b32 100644
+--- a/src/lobby/ppw_lobby_process.cpp
++++ b/src/lobby/ppw_lobby_process.cpp
+@@ -20,7 +20,12 @@ extern "C" {
+ #include "../../lib/NitroDWC/src/tree-iterator4.h"
+ 
+ #include <string.h>
++#ifdef SDK_PORT_3DS
++// The host C library declares memcmp in the global namespace only.
++using ::memcmp;
++#else
+ using std::memcmp;
++#endif
+ 
+ // A system profile value with the flag that it must be uploaded.
+ struct ProfileValue {

@@ -1,0 +1,41 @@
+From d352b0c3ee177749770e2c847f430880c0d7462a Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:20:19 +0000
+Subject: [PATCH] comm_state: drop const from the linkedStates copy destination
+
+CommState_IsLinked declares `void (*const linkedStates[3])(void)` and fills it
+with ARRAY_ASSIGN. That macro (include/global.h:29-30) casts the destination
+to `struct tmp *` and assigns a whole struct; since the element type is const,
+GCC reports "assignment of read-only location '*(struct tmp *)&linkedStates'".
+MWCC accepted the assignment. The array is written once by the macro and only
+read afterwards.
+
+Under SDK_PORT_3DS drop the const qualifier on this local only. The copy and
+every later read are unchanged. gcc-10 -E -P without SDK_PORT_3DS: byte-
+identical (439338 bytes both; the label hunk from 1510 is guarded too).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/comm_state.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/comm_state.c b/src/comm_state.c
+index 5b50456..efaa127 100644
+--- a/src/comm_state.c
++++ b/src/comm_state.c
+@@ -257,7 +257,15 @@ void CommState_SetEntry(u32 enabled) {
+ }
+ 
+ s32 CommState_IsLinked(void) {
++#ifdef SDK_PORT_3DS
++    // ARRAY_ASSIGN assigns through a struct pointer, and a const element type
++    // makes that assignment ill-formed in GCC (global.h:30). MWCC accepted it.
++    // The array is filled once here and never written again, so dropping const
++    // changes no behaviour.
++    void (*linkedStates[3])(void);
++#else
+     void (*const linkedStates[3])(void);
++#endif
+     ARRAY_ASSIGN(linkedStates, gCommLinkedStates);
+     void (*func)(void) = sCommState->stateFunc;
+     if (!sCommState) {

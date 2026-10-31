@@ -1,0 +1,224 @@
+From 2ae0242f2bacf46446af1c2276111f2d953a0255 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:18:38 +0000
+Subject: [PATCH] Use the port headers' types for the SDK functions the files
+ redeclare
+
+Eight game files repeat SDK prototypes locally with types that differ from
+the header the port's <nitro.h> already includes. MWCC allowed the duplicate
+because the two declarations were never in one translation unit, or because
+its enums and pointer types were compatible enough; GCC rejects them with
+"conflicting types":
+
+  agb_cartridge.c:20    int CTRDG_IdentifyAgbBackup(int) vs u16 (...,
+                        CTRDGBackupType) in nitro/ctrdg.h
+  pokewalker_ir.c:17    int MI_CompressLZImpl(const void *, u32, void *, int)
+                        vs u32 (...) in nitro/mi/compress.h
+  pokewalker_ir.c:21/22 int RTC_GetTime/RTC_GetDate vs RTCResult (...) in
+                        nitro/rtc/ARM9/api.h
+  pokewalker_link.c:46  void RTC_GetDateTime vs RTCResult in the same header
+  game_stats_request.c:7 int strncmp(const char *, const char *, u32) vs
+                        size_t (a different type from u32 on the host)
+  lobby_tree_nodes.c:10 char * vs const char * in lib/include/assert.h
+  save_fashion.c:82/83  u32 *table vs MATHCRC32Table * in nitro/math/crc.h;
+                        the calls at :548/:549 and :553/:554 pass the array,
+                        which is the same 256-word object (cast there)
+  screen_fade_effects.c:25/1169 static inline int GX_IsHBlank vs the compat
+                        header's s32 form (same DISPSTAT read)
+  wifi_setup_app.c:15   int brightness vs s32 in nitro/gx/gx.h
+
+Under SDK_PORT_3DS keep only the header declaration (or, for save_fashion's
+local array, cast at the four calls); the #else keeps the original text, so
+the MWCC build is unchanged. gcc-10 -E -P without SDK_PORT_3DS is
+byte-identical for all eight files.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/application/main_menu/agb_cartridge.c    |  4 ++++
+ src/application/pokewalker/pokewalker_ir.c   | 12 ++++++++++++
+ src/application/pokewalker/pokewalker_link.c |  4 ++++
+ src/game_stats_request.c                     |  5 +++++
+ src/lobby/lobby_tree_nodes.c                 |  4 ++++
+ src/save_fashion.c                           | 15 +++++++++++++++
+ src/screen_fade_effects.c                    |  4 ++++
+ src/wifi_setup/wifi_setup_app.c              |  4 ++++
+ 8 files changed, 52 insertions(+)
+
+diff --git a/src/application/main_menu/agb_cartridge.c b/src/application/main_menu/agb_cartridge.c
+index 6499fd9..46a4584 100644
+--- a/src/application/main_menu/agb_cartridge.c
++++ b/src/application/main_menu/agb_cartridge.c
+@@ -17,7 +17,11 @@ BOOL CTRDG_IsAgbCartridge(void);
+ u32 CTRDG_GetAgbGameCode(void);
+ void CTRDG_Enable(BOOL enable);
+ void CTRDG_CpuCopy32(const void *src, void *dest, u32 size);
++#ifdef SDK_PORT_3DS
++// nitro/ctrdg.h declares u16 CTRDG_IdentifyAgbBackup(CTRDGBackupType); use it.
++#else
+ int CTRDG_IdentifyAgbBackup(int type);
++#endif
+ void CTRDG_ReadAgbFlash(u16 sector, u32 offset, void *dest, u32 size);
+ void CTRDG_WriteAndVerifyAgbFlashAsync(u8 sector, void *src, u32 verifySize, CTRDG_TASK_FUNC callback);
+ 
+diff --git a/src/application/pokewalker/pokewalker_ir.c b/src/application/pokewalker/pokewalker_ir.c
+index 4b4e239..9ab68e8 100644
+--- a/src/application/pokewalker/pokewalker_ir.c
++++ b/src/application/pokewalker/pokewalker_ir.c
+@@ -14,12 +14,24 @@ extern void CARD_SetSpiWriteWaitCycles(u32 cycles);
+ extern void CARD_SetSpiReadWaitCycles(u32 cycles);
+ extern u32 CARD_SpiWaitReadRange(void *dst);
+ extern void CARD_SpiWaitWriteRange(void *src, u32 len);
++#ifdef SDK_PORT_3DS
++// nitro/mi/compress.h declares u32 MI_CompressLZImpl(const u8 *, u32, u8 *, int).
++#else
+ extern int MI_CompressLZImpl(const void *src, u32 size, void *dst, int unk);
++#endif
+ extern float _f_ulltof(u64 value);
+ extern float _fdiv(float a, float b);
+ extern u64 _ll_udiv(u64 a, u64 b);
++#ifdef SDK_PORT_3DS
++// nitro/rtc/ARM9/api.h declares RTCResult RTC_GetTime(RTCTime *).
++#else
+ extern int RTC_GetTime(RTCTime *time);
++#endif
++#ifdef SDK_PORT_3DS
++// nitro/rtc/ARM9/api.h declares RTCResult RTC_GetDate(RTCDate *).
++#else
+ extern int RTC_GetDate(RTCDate *date);
++#endif
+ 
+ #define TICKS_TO_MS(ticks) (((ticks) << 6) / 0x82EA)
+ 
+diff --git a/src/application/pokewalker/pokewalker_link.c b/src/application/pokewalker/pokewalker_link.c
+index b7b4c94..ab99d55 100644
+--- a/src/application/pokewalker/pokewalker_link.c
++++ b/src/application/pokewalker/pokewalker_link.c
+@@ -43,7 +43,11 @@ extern const s32 gCourseMenuCursorPositions[];
+ #include "system.h"
+ #include "text.h"
+ 
++#ifdef SDK_PORT_3DS
++// nitro/rtc/ARM9/api.h declares RTCResult RTC_GetDateTime(RTCDate *, RTCTime *).
++#else
+ void RTC_GetDateTime(RTCDate *date, RTCTime *time);
++#endif
+ 
+ #define LINK_MOTION(app) ((PokewalkerAppMotion *)(app)->unk_1F2C0)
+ 
+diff --git a/src/game_stats_request.c b/src/game_stats_request.c
+index 424a528..1023343 100644
+--- a/src/game_stats_request.c
++++ b/src/game_stats_request.c
+@@ -4,7 +4,12 @@
+ 
+ #include "global.h"
+ 
++#ifdef SDK_PORT_3DS
++// <string.h> already declares strncmp with size_t; u32 is a different type on
++// the host (unsigned long vs unsigned int).
++#else
+ extern int strncmp(const char *a, const char *b, u32 n);
++#endif
+ extern int sprintf(char *dest, const char *format, ...);
+ 
+ static void GameStats_SeedRandom(u32 seed);
+diff --git a/src/lobby/lobby_tree_nodes.c b/src/lobby/lobby_tree_nodes.c
+index a6e57fc..331e409 100644
+--- a/src/lobby/lobby_tree_nodes.c
++++ b/src/lobby/lobby_tree_nodes.c
+@@ -7,7 +7,11 @@
+ #include <nitro/code32.h>
+ #define P(p, o) (*(void **)((char *)(p) + (o)))
+ 
++#ifdef SDK_PORT_3DS
++// lib/include/assert.h (force-included) declares this with const char *.
++#else
+ extern void __msl_assertion_failed(char *, char *, char *, int);
++#endif
+ extern char gLobbyStr_DataNeNULL[];
+ extern char gLobbyStr_ChatCallbacksC[];
+ extern char gLobbyStr_ciCallbacksArrayElementFreeFn[];
+diff --git a/src/save_fashion.c b/src/save_fashion.c
+index 28ed591..2a1c415 100644
+--- a/src/save_fashion.c
++++ b/src/save_fashion.c
+@@ -79,8 +79,13 @@ static BOOL FashionEntryLarge_IsSaved(SaveFashionDataSub3FC *entry_);
+ static void FashionMon_GetSecondText(SaveFashionMon *mon, String *string);
+ static BOOL Save_FashionData_IsNewEntry(SaveFashionData *fashionData, SaveFashionDataSub *candidate);
+ 
++#ifdef SDK_PORT_3DS
++// nitro/math/crc.h declares these with MATHCRC32Table, which is exactly one
++// u32[256] member; the local table keeps its type and the calls cast below.
++#else
+ void MATHi_CRC32InitTableRev(u32 *table, u32 polynomial);
+ u32 MATH_CalcCRC32(const u32 *table, const void *data, u32 size);
++#endif
+ 
+ static BOOL IsValidFashionMagic(u32 value) {
+     if (value == FASHION_ENTRY_MAGIC_EMPTY || value == FASHION_ENTRY_MAGIC_SAVED) {
+@@ -545,13 +550,23 @@ static BOOL Save_FashionData_IsNewEntry(SaveFashionData *fashionData, SaveFashio
+     u32 crc;
+     int i;
+     if (FashionEntry_IsSaved(candidate) == TRUE) {
++#ifdef SDK_PORT_3DS
++        MATHi_CRC32InitTableRev((MATHCRC32Table *)table, MATH_CRC32_STANDARD_POLY);
++        crc = MATH_CalcCRC32((const MATHCRC32Table *)table, candidate, sizeof(SaveFashionDataSub));
++#else
+         MATHi_CRC32InitTableRev(table, MATH_CRC32_STANDARD_POLY);
+         crc = MATH_CalcCRC32(table, candidate, sizeof(SaveFashionDataSub));
++#endif
+         for (i = 0; i < FASHION_ENTRY_COUNT; i++) {
+             SaveFashionDataSub *entry = Save_FashionData_GetEntry(fashionData, i);
+             u32 other;
++#ifdef SDK_PORT_3DS
++            MATHi_CRC32InitTableRev((MATHCRC32Table *)table, MATH_CRC32_STANDARD_POLY);
++            other = MATH_CalcCRC32((const MATHCRC32Table *)table, entry, sizeof(SaveFashionDataSub));
++#else
+             MATHi_CRC32InitTableRev(table, MATH_CRC32_STANDARD_POLY);
+             other = MATH_CalcCRC32(table, entry, sizeof(SaveFashionDataSub));
++#endif
+             if (other == crc) {
+                 result = FALSE;
+                 break;
+diff --git a/src/screen_fade_effects.c b/src/screen_fade_effects.c
+index 225cd57..44fae40 100644
+--- a/src/screen_fade_effects.c
++++ b/src/screen_fade_effects.c
+@@ -22,7 +22,9 @@ typedef struct BrightnessTransition {
+ 
+ static BOOL BrightnessTransition_Step(BrightnessTransition *transition);
+ static inline void ApplyScanlineSpan(WipeScanlineBuffer *buffer, int line, ScreenWipeScanlines *scanlines);
++#ifndef SDK_PORT_3DS
+ static inline int GX_IsHBlank(void);
++#endif
+ static inline void SetOutsidePlane(int planes, BOOL effect, int screen);
+ static inline void SetInsidePlane(int planes, BOOL effect, int window, int screen);
+ static inline void ApplyLine(LineMask *mask, int line, int index);
+@@ -1166,9 +1168,11 @@ static void LineMask_CommitTask(SysTask *task, void *data) {
+ 
+ #define GX_BLEND_ALL 0x3F
+ 
++#ifndef SDK_PORT_3DS
+ static inline int GX_IsHBlank(void) {
+     return reg_GX_DISPSTAT & REG_GX_DISPSTAT_HBLK_MASK;
+ }
++#endif
+ 
+ static inline void SetOutsidePlane(int planes, BOOL effect, int screen) {
+     if (screen == SCREEN_MAIN) {
+diff --git a/src/wifi_setup/wifi_setup_app.c b/src/wifi_setup/wifi_setup_app.c
+index 3a15327..4d096c1 100644
+--- a/src/wifi_setup/wifi_setup_app.c
++++ b/src/wifi_setup/wifi_setup_app.c
+@@ -12,7 +12,11 @@
+ // Access-point setup screens, application core: the setup client request, the entry point and its main loop, text
+ // banks and the session started from the screens.
+ 
++#ifdef SDK_PORT_3DS
++// nitro/gx/gx.h declares GXx_SetMasterBrightness_(vu16 *, s32).
++#else
+ extern void GXx_SetMasterBrightness_(vu16 *reg, int brightness);
++#endif
+ 
+ static void *WifiSetupApp_AossClientAlloc(u32 size);
+ static void WifiSetupApp_AossClientFree(void *ptr);

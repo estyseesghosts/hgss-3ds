@@ -1,0 +1,43 @@
+From 4e32d265181be33edb4d68210cdd4a6664f8f7f0 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:21:28 +0000
+Subject: [PATCH] battle_hp_bar: include the data header from beside the file
+
+src/battle/battle_hp_bar.c:450 includes "battle/battle_hp_bar_data.h", but
+that header lives in src/battle/, not include/, and the port harness's include
+path (like every other game source's) has no src/ entry. The decomp's own
+makefile adds -Isrc, which is why MWCC finds it. GCC reports the fatal error
+"battle/battle_hp_bar_data.h: No such file or directory" and compiles no body.
+
+Under SDK_PORT_3DS include "battle_hp_bar_data.h", which is found relative to
+the including file in both builds; the #else keeps the original spelling.
+This is the only game header a source reaches through a src/-relative path.
+
+Identity: with -I build/upstream/src added (the decomp's makefile path, needed
+for the original spelling to resolve at all), gcc-10 -E -P without
+SDK_PORT_3DS is byte-identical: 471771 bytes both, the #else branch includes
+the same file.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/battle/battle_hp_bar.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/battle/battle_hp_bar.c b/src/battle/battle_hp_bar.c
+index a9b5fbd..1fead12 100644
+--- a/src/battle/battle_hp_bar.c
++++ b/src/battle/battle_hp_bar.c
+@@ -447,7 +447,13 @@ static const ManagedSpriteTemplate sSpriteTemplate_HpBarSafariOrPark = {
+     .vramTransfer = 0
+ };
+ 
++#ifdef SDK_PORT_3DS
++// The data header sits next to this file; the port's include path does not
++// add src/ (the decomp's own makefile does).
++#include "battle_hp_bar_data.h"
++#else
+ #include "battle/battle_hp_bar_data.h"
++#endif
+ 
+ static void BattleHpBar_LoadBoxResources(SpriteSystem *spriteSystem, SpriteManager *spriteManager, NARC *narc, PaletteData *plttData, int barType) {
+     const ManagedSpriteTemplate *pRes = BattleHpBar_Util_GetHpBoxSpriteTemplate(barType);

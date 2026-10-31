@@ -1,0 +1,102 @@
+From c6eed64726438fe07dcdee19d7be9061ba28b7ba Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:19:10 +0000
+Subject: [PATCH] WiFi Plaza: drop static where the internal header declares
+ the function
+
+wifi_plaza_internal.h declares WiFiPlazaHistory_RemoveOldest,
+WiFiPlazaHistory_UpdateChecksum, WiFiPlazaHistory_CheckChecksum
+(:733/:736/:737) and WiFiPlaza_GetLongitude (:977) without static. The two .c
+files repeat those declarations and definitions as static, so GCC rejects them
+with "static declaration ... follows non-static declaration". MWCC accepted
+the file-scope symbols and kept them local. Same fix as 1502: under
+SDK_PORT_3DS a file-scope macro expands to nothing so the definitions match
+the header; on the DS it expands to static, so the preprocessed text is
+unchanged. gcc-10 -E -P without SDK_PORT_3DS: byte-identical for both files.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/wifi_plaza/wifi_plaza_history.c   | 21 +++++++++++++++------
+ src/wifi_plaza/wifi_plaza_time_zone.c | 13 +++++++++++--
+ 2 files changed, 26 insertions(+), 8 deletions(-)
+
+diff --git a/src/wifi_plaza/wifi_plaza_history.c b/src/wifi_plaza/wifi_plaza_history.c
+index 4ca4c99..3330ef0 100644
+--- a/src/wifi_plaza/wifi_plaza_history.c
++++ b/src/wifi_plaza/wifi_plaza_history.c
+@@ -2,9 +2,18 @@
+ 
+ #include "wifi_plaza/wifi_plaza_internal.h"
+ 
+-static u8 WiFiPlazaHistory_RemoveOldest(WiFiPlazaHistory *history);
+-static void WiFiPlazaHistory_UpdateChecksum(WiFiPlazaHistory *history);
+-static void WiFiPlazaHistory_CheckChecksum(WiFiPlazaHistory *history);
++// wifi_plaza_internal.h declares these three without static; GCC rejects a
++// static definition that follows the non-static declaration. MWCC keeps its
++// file-scope symbols static on the DS.
++#ifdef SDK_PORT_3DS
++#define WIFI_PLAZA_HISTORY_FILE_SCOPE
++#else
++#define WIFI_PLAZA_HISTORY_FILE_SCOPE static
++#endif
++
++WIFI_PLAZA_HISTORY_FILE_SCOPE u8 WiFiPlazaHistory_RemoveOldest(WiFiPlazaHistory *history);
++WIFI_PLAZA_HISTORY_FILE_SCOPE void WiFiPlazaHistory_UpdateChecksum(WiFiPlazaHistory *history);
++WIFI_PLAZA_HISTORY_FILE_SCOPE void WiFiPlazaHistory_CheckChecksum(WiFiPlazaHistory *history);
+ 
+ // The last activities of the own player (WiFiPlazaPlayer.slots / slotData), a ring of 13 entries kept with a CRC.
+ 
+@@ -50,7 +59,7 @@ BOOL WiFiPlazaHistory_ReplaceValue(WiFiPlazaHistory *history, s32 oldValue, s32
+ }
+ 
+ // Removes the oldest entry and returns its id (24 if there is none).
+-static u8 WiFiPlazaHistory_RemoveOldest(WiFiPlazaHistory *history) {
++WIFI_PLAZA_HISTORY_FILE_SCOPE u8 WiFiPlazaHistory_RemoveOldest(WiFiPlazaHistory *history) {
+     u8 id;
+ 
+     WiFiPlazaHistory_CheckChecksum(history);
+@@ -91,11 +100,11 @@ s32 WiFiPlazaHistory_GetValue(WiFiPlazaHistory *history, u32 index) {
+     return history->values[slot];
+ }
+ 
+-static void WiFiPlazaHistory_UpdateChecksum(WiFiPlazaHistory *history) {
++WIFI_PLAZA_HISTORY_FILE_SCOPE void WiFiPlazaHistory_UpdateChecksum(WiFiPlazaHistory *history) {
+     history->crc = SaveArray_CalcCRC16(history->save, history, offsetof(WiFiPlazaHistory, save));
+ }
+ 
+-static void WiFiPlazaHistory_CheckChecksum(WiFiPlazaHistory *history) {
++WIFI_PLAZA_HISTORY_FILE_SCOPE void WiFiPlazaHistory_CheckChecksum(WiFiPlazaHistory *history) {
+     u16 crc = SaveArray_CalcCRC16(history->save, history, offsetof(WiFiPlazaHistory, save));
+ 
+     if (crc != history->crc) {
+diff --git a/src/wifi_plaza/wifi_plaza_time_zone.c b/src/wifi_plaza/wifi_plaza_time_zone.c
+index 376e0ab..8aa0e98 100644
+--- a/src/wifi_plaza/wifi_plaza_time_zone.c
++++ b/src/wifi_plaza/wifi_plaza_time_zone.c
+@@ -5,7 +5,16 @@
+ #include "gf_gfx_loader.h"
+ #include "location_gmm_dat.h"
+ 
+-static void WiFiPlaza_GetLongitude(NARC *narc, enum HeapID heapID, int country, u16 region, s32 *longitude);
++// wifi_plaza_internal.h declares this without static; GCC rejects a static
++// definition that follows the non-static declaration. MWCC keeps its
++// file-scope symbol static on the DS.
++#ifdef SDK_PORT_3DS
++#define WIFI_PLAZA_TIME_ZONE_FILE_SCOPE
++#else
++#define WIFI_PLAZA_TIME_ZONE_FILE_SCOPE static
++#endif
++
++WIFI_PLAZA_TIME_ZONE_FILE_SCOPE void WiFiPlaza_GetLongitude(NARC *narc, enum HeapID heapID, int country, u16 region, s32 *longitude);
+ 
+ // Local time of a player's country / region: `time` shifted by the longitude difference to country 219 region 3.
+ WiFiPlazaTime WiFiPlaza_GetLocalTime(int country, u16 region, u32 time, enum HeapID heapID) {
+@@ -33,7 +42,7 @@ WiFiPlazaTime WiFiPlaza_GetLocalTime(int country, u16 region, u32 time, enum Hea
+ }
+ 
+ // Longitude (y angle) of a country (file 18 of the earth place NARC) or, for countries with regions, of a region.
+-static void WiFiPlaza_GetLongitude(NARC *narc, enum HeapID heapID, int country, u16 region, s32 *longitude) {
++WIFI_PLAZA_TIME_ZONE_FILE_SCOPE void WiFiPlaza_GetLongitude(NARC *narc, enum HeapID heapID, int country, u16 region, s32 *longitude) {
+     BOOL found = FALSE;
+     u32 size;
+     u32 regionSize;

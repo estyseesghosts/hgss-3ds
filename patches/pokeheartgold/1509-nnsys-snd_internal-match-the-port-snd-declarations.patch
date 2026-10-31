@@ -1,0 +1,77 @@
+From 8c90909394d86926a8696b34c439c15101ca541d Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:16:54 +0000
+Subject: [PATCH] nnsys/snd_internal: match the port snd declarations
+
+lib/include/nnsys/snd_internal.h:34/39/46/59 repeat the flat NitroSDK
+declarations of SND_RecvCommandReply, SND_ReadDriverInfo,
+SND_SetMasterVolume and SND_PrepareSeq with different types. Under the port,
+<nitro.h> also pulls hgss/compat/include/nitro/snd/common/command.h
+(SND_command.h) and nitro/snd/ARM9/interface.h, so GCC sees two incompatible
+declarations of each: const void * vs const struct SNDCommand *,
+SndDriverInfo * vs void *, s32 vs int, and void * vs struct SNDBankData *.
+MWCC compiled HGSS's copies one at a time and never compared them.
+
+Under SDK_PORT_3DS repeat the compat headers' exact types. This fixes the eight
+game translation units that include this header and <nitro.h>: sound_gb,
+sound_playback, sound_system, voice_chat, voice_chat_conference,
+wifi_connection, wifi_setup_access_points and wifi_setup_local_wireless. It
+also contributes to the NitroSystem unity-file fix.
+
+gcc-10 -E -P without SDK_PORT_3DS: byte-identical (174344 bytes both).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/include/nnsys/snd_internal.h | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/lib/include/nnsys/snd_internal.h b/lib/include/nnsys/snd_internal.h
+index b42cc92..add57cd 100644
+--- a/lib/include/nnsys/snd_internal.h
++++ b/lib/include/nnsys/snd_internal.h
+@@ -31,19 +31,33 @@ typedef struct SndDriverInfo {
+ #define SND_CMD_FLAG_BLOCK   0x1
+ 
+ void SND_Init(void);
++#ifdef SDK_PORT_3DS
++// The port's compat headers declare these too (SND_command.h and
++// nitro/snd/ARM9/interface.h). Repeat their exact types so the two sets agree.
++const struct SNDCommand *SND_RecvCommandReply(u32 flags);
++#else
+ const void *SND_RecvCommandReply(u32 flags);
++#endif
+ BOOL SND_FlushCommand(u32 flags);
+ void SND_WaitForCommandProc(u32 tag);
+ u32 SND_GetCurrentCommandTag(void);
+ BOOL SND_IsFinishedCommandTag(u32 tag);
++#ifdef SDK_PORT_3DS
++void SND_ReadDriverInfo(void *info);
++#else
+ void SND_ReadDriverInfo(SndDriverInfo *info);
++#endif
+ BOOL SND_ReadChannelInfo(const SndDriverInfo *driverInfo, int chNo, SNDChannelInfo *chInfo);
+ BOOL SND_ReadTrackInfo(const SndDriverInfo *driverInfo, int playerNo, int trackNo, SNDTrackInfo *trackInfo);
+ u32 SND_GetPlayerStatus(void);
+ u16 SND_GetChannelStatus(void);
+ int SND_GetPlayerLocalVariable(u32 playerNo, int varNo);
+ u16 SND_CalcChannelVolume(s32 decibel);
++#ifdef SDK_PORT_3DS
++void SND_SetMasterVolume(int volume);
++#else
+ void SND_SetMasterVolume(s32 volume);
++#endif
+ void SND_SetMasterPan(s32 pan);
+ void SND_ResetMasterPan(void);
+ void SND_SetOutputSelector(s32 left, s32 right, s32 channel1, s32 channel3);
+@@ -56,7 +70,11 @@ void SND_SetupChannelPcm(s32 chNo, s32 format, const void *data, s32 loopMode, s
+ void SND_SetChannelTimer(u32 chBitMask, s32 timer);
+ void SND_SetChannelVolume(u32 chBitMask, s32 volume, s32 shift);
+ void SND_SetChannelPan(u32 chBitMask, s32 pan);
++#ifdef SDK_PORT_3DS
++void SND_PrepareSeq(s32 playerNo, const void *seqBase, u32 seqOffset, struct SNDBankData *bank);
++#else
+ void SND_PrepareSeq(s32 playerNo, const void *seqBase, u32 seqOffset, void *bank);
++#endif
+ void SND_StartPreparedSeq(s32 playerNo);
+ void SND_StopSeq(s32 playerNo);
+ void SND_PauseSeq(s32 playerNo, BOOL flag);

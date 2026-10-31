@@ -1,0 +1,44 @@
+From fea4ef50e21f4758985512a8ad60cb12dd27d26a Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:20:01 +0000
+Subject: [PATCH] comm_state_private: take MATHRandContext32 from the port's
+ rand.h
+
+src/comm_state_private.h:75 repeats the MATHRandContext32 definition that the
+port's hgss/compat/include/nitro/math/rand.h also provides. global.h includes
+<nitro.h> before the private header's copy, so GCC sees two definitions of the
+struct, and because the two are separate types "comm_state.c:79: conflicting
+types for MATHRandContext32". MWCC never sees rand.h (HGSS has no such
+header), so its single copy is fine on the DS.
+
+Under SDK_PORT_3DS skip the local copy and use rand.h's, the same fix 1201
+applied to the CRC structs. The #else keeps the original text.
+
+gcc-10 -E -P of the header without SDK_PORT_3DS: byte-identical (371822 bytes
+both). comm_state.c is checked with 1515, which finishes its other errors.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/comm_state_private.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/comm_state_private.h b/src/comm_state_private.h
+index 6efa0aa..cb3a026 100644
+--- a/src/comm_state_private.h
++++ b/src/comm_state_private.h
+@@ -72,11 +72,15 @@ void Comm_EnableKeySync(void);
+ u16 Comm_GetLocalNetId(void);
+ BOOL Comm_HasLinkError(void);
+ 
++#ifndef SDK_PORT_3DS
++// HGSS keeps its own copy; the port's nitro/math/rand.h declares the same
++// struct and global.h includes <nitro.h> before this line.
+ typedef struct {
+     u64 x;
+     u64 mul;
+     u64 add;
+ } MATHRandContext32;
++#endif
+ 
+ void CommRandom_Init(MATHRandContext32 *seed);
+ void Comm_FreeCommandTable(void);

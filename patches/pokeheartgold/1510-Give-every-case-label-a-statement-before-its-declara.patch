@@ -1,0 +1,594 @@
+From 528e08a6a02c352ee3b411d417198a1e65d687da Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:17:57 +0000
+Subject: [PATCH] Give every case label a statement before its declaration
+
+GCC rejects a declaration directly under a case label with "a label can only
+be part of a statement and a declaration is not a statement" (C99 6.8.1
+labeled-statement is `identifier : statement`). Metrowerks accepted the
+declaration as a statement, so the HGSS sources put locals there, and the
+error also hides the declarations after it: weather_manager.c:2245,
+launch_application.c:956, overlay_03/pokeathlon_records.c:219 and
+wifi_club_app.c:1006 then report their locals undeclared.
+
+Under SDK_PORT_3DS insert an empty statement after each label. It is a
+statement, so the declarations that follow are legal and keep exactly the
+same scope, initialisation and order. 38 sites in 15 files, all reached from
+the host32 build's per-file logs:
+  battle/battle_command.c:7215, battle/party_gauge.c:248/299/393/496/566,
+  comm_state.c:1820, field/event_cutscene_celebi.c:144,
+  field/event_cutscene_shaymin.c:99, field/weather_manager.c:735/741/1706/
+  1749/1869/1911/2050/2090/2189/2211/2244/2271, field2d/field2d_view.c:
+  535/555, field_take_photo.c:618, launch_application.c:955/1047/1079/1083/
+  1087/1097/1118, map_preview_graphic.c:911, overlay_03/pokeathlon_records.c:
+  218, pokeathlon/pokeathlon_box.c:99, render_text.c:131,
+  scrcmd_link_sync.c:124, wifi_club/wifi_club_app.c:938/1005.
+
+gcc-10 -E -P without SDK_PORT_3DS is byte-identical for all 15 files.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/battle/battle_command.c         |  6 +++
+ src/battle/party_gauge.c            | 30 ++++++++++++
+ src/comm_state.c                    |  6 +++
+ src/field/event_cutscene_celebi.c   |  6 +++
+ src/field/event_cutscene_shaymin.c  |  6 +++
+ src/field/weather_manager.c         | 72 +++++++++++++++++++++++++++++
+ src/field2d/field2d_view.c          | 12 +++++
+ src/field_take_photo.c              |  6 +++
+ src/launch_application.c            | 42 +++++++++++++++++
+ src/map_preview_graphic.c           |  6 +++
+ src/overlay_03/pokeathlon_records.c |  6 +++
+ src/pokeathlon/pokeathlon_box.c     |  6 +++
+ src/render_text.c                   |  6 +++
+ src/scrcmd_link_sync.c              |  6 +++
+ src/wifi_club/wifi_club_app.c       | 12 +++++
+ 15 files changed, 228 insertions(+)
+
+diff --git a/src/battle/battle_command.c b/src/battle/battle_command.c
+index 4da1920..912c20f 100644
+--- a/src/battle/battle_command.c
++++ b/src/battle/battle_command.c
+@@ -7212,6 +7212,12 @@ static u32 BattleSystem_CalculateBallShakes(BattleSystem *bsys, BattleContext *c
+             }
+             break;
+         case ITEM_NEST_BALL:
++#ifdef SDK_PORT_3DS
++            // C99 6.8.1: a label must be followed by a statement, not a
++            // declaration; MWCC accepted the declaration. The empty
++            // statement changes no behaviour.
++            ;
++#endif
+             u8 level = ctx->battleMons[ctx->battlerIdTarget].level;
+             if (level < 40) {
+                 // Up to a 40/10 multiplier (x4).
+diff --git a/src/battle/party_gauge.c b/src/battle/party_gauge.c
+index 2636db3..b1bca6a 100644
+--- a/src/battle/party_gauge.c
++++ b/src/battle/party_gauge.c
+@@ -245,6 +245,12 @@ static void Task_ShowArrow(SysTask *task, void *data) {
+ 
+     switch (arrow->state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         s16 x, y;
+         ManagedSprite_GetPositionXY(arrow->managedSprite, &x, &y);
+         arrow->x = x << 8;
+@@ -296,6 +302,12 @@ static void Task_HidePartyArrow(SysTask *task, void *data) {
+ 
+     switch (arrow->state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         s16 x, y;
+ 
+         ManagedSprite_GetPositionXY(arrow->managedSprite, &x, &y);
+@@ -390,6 +402,12 @@ static void Task_ShowPokeballs_StartOfBattle(SysTask *task, void *data) {
+ 
+     switch (pokeballs->state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         s16 x, y;
+         ManagedSprite_GetPositionXY(pokeballs->managedSprite, &x, &y);
+         pokeballs->xStart = x << 8;
+@@ -493,6 +511,12 @@ static void Task_ShowPokeballs_MidBattle(SysTask *task, void *data) {
+ 
+     switch (pokeballs->state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         s16 x, y;
+         ManagedSprite_GetPositionXY(pokeballs->managedSprite, &x, &y);
+         pokeballs->xStart = x << 8;
+@@ -563,6 +587,12 @@ static void Task_HidePokeballs_StartOfBattle(SysTask *task, void *data) {
+ 
+     switch (pokeballs->state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         s16 x, y;
+ 
+         ManagedSprite_GetPositionXY(pokeballs->managedSprite, &x, &y);
+diff --git a/src/comm_state.c b/src/comm_state.c
+index 0f5a241..5b50456 100644
+--- a/src/comm_state.c
++++ b/src/comm_state.c
+@@ -1817,6 +1817,12 @@ BOOL Comm_SyncedSave(SaveData *saveData, s32 arg1, s32 *state) {
+         }
+         break;
+     case 2:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         s32 result = Save_WriteFileAsync(saveData);
+         GF_ASSERT(result != 2);
+         if (result == 1) {
+diff --git a/src/field/event_cutscene_celebi.c b/src/field/event_cutscene_celebi.c
+index 2acb195..b340a0c 100644
+--- a/src/field/event_cutscene_celebi.c
++++ b/src/field/event_cutscene_celebi.c
+@@ -141,6 +141,12 @@ static void Task_CelebiCutsceneSwirl(SysTask *task, void *_data) {
+     CelebiTimeTravelCutsceneTaskData *data = _data;
+     switch (data->swirlTaskState) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         CelebiSwirlParams swirlParams = { 0xFFFF0000, 0xB4, 0x500 };
+         swirlParams.perspective = Camera_GetPerspectiveAngle(data->fieldSystem->camera);
+         CelebiCutscene_InitSwirlData(data, &swirlParams);
+diff --git a/src/field/event_cutscene_shaymin.c b/src/field/event_cutscene_shaymin.c
+index aae50dc..7e314e6 100644
+--- a/src/field/event_cutscene_shaymin.c
++++ b/src/field/event_cutscene_shaymin.c
+@@ -96,6 +96,12 @@ static BOOL Task_RevertShayminToLandForm(TaskManager *taskMan) {
+         }
+         break;
+     case 4:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         u32 var = 0;
+         if (env->formChange == NULL) {
+             var = 1;
+diff --git a/src/field/weather_manager.c b/src/field/weather_manager.c
+index dfc432f..2653b27 100644
+--- a/src/field/weather_manager.c
++++ b/src/field/weather_manager.c
+@@ -732,12 +732,24 @@ static BOOL WeatherSystem_Process(WeatherSystem *weatherSystem, enum WeatherSyst
+         WeatherSystem_Unload(weatherSystem, weather);
+         break;
+     case WEATHER_SYS_PROC_RESUME_SE:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         WeatherEntry *playEntry = &weatherSystem->entries[weather];
+         if (playEntry->work && playEntry->work->loopSEPlaying == TRUE) {
+             PlaySE(playEntry->work->sndSeq);
+         }
+         break;
+     case WEATHER_SYS_PROC_STOP_SE:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         WeatherEntry *stopEntry = &weatherSystem->entries[weather];
+         if (stopEntry->work && stopEntry->work->loopSEPlaying == TRUE) {
+             StopSE(stopEntry->work->sndSeq, 0);
+@@ -1703,6 +1715,12 @@ static void WeatherTask_Rain(SysTask *task, void *data) {
+         work->state = WEATHER_STATE_FADE_IN;
+         break;
+     case WEATHER_STATE_FADE_IN:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int rampDone = WeatherSpawnRamp_Update(&taskData->spawnRamp);
+         if (taskData->fogDelay > 0) {
+             taskData->fogDelay--;
+@@ -1746,6 +1764,12 @@ static void WeatherTask_Rain(SysTask *task, void *data) {
+         }
+         break;
+     case WEATHER_STATE_FADE_OUT:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int ret = WeatherSpawnRamp_Update(&taskData->spawnRamp);
+         if (taskData->fogDelay > 0) {
+             taskData->fogDelay--;
+@@ -1866,6 +1890,12 @@ static void WeatherTask_Snow(SysTask *task, void *data) {
+         work->state = WEATHER_STATE_FADE_IN;
+         break;
+     case WEATHER_STATE_FADE_IN:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int rampDone = WeatherSpawnRamp_Update(&taskData->spawnRamp);
+         if (taskData->fogDelay > 0) {
+             taskData->fogDelay--;
+@@ -1908,6 +1938,12 @@ static void WeatherTask_Snow(SysTask *task, void *data) {
+         }
+         break;
+     case WEATHER_STATE_FADE_OUT:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int ret = WeatherSpawnRamp_Update(&taskData->spawnRamp);
+         if (taskData->fogDelay > 0) {
+             taskData->fogDelay--;
+@@ -2047,6 +2083,12 @@ static void WeatherTask_DiamondDust(SysTask *task, void *data) {
+         work->state = WEATHER_STATE_FADE_IN;
+         break;
+     case WEATHER_STATE_FADE_IN:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int rampDone = WeatherSpawnRamp_Update(&taskData->spawnRamp);
+         if (taskData->fogDelay > 0) {
+             taskData->fogDelay--;
+@@ -2087,6 +2129,12 @@ static void WeatherTask_DiamondDust(SysTask *task, void *data) {
+         }
+         break;
+     case WEATHER_STATE_FADE_OUT:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int ret = WeatherSpawnRamp_Update(&taskData->spawnRamp);
+         if (taskData->fogDelay > 0) {
+             taskData->fogDelay--;
+@@ -2186,6 +2234,12 @@ static void WeatherTask_RunFogOnly(WeatherWork *work, WeatherFogTaskData *taskDa
+         work->state = WEATHER_STATE_FADE_IN;
+         break;
+     case WEATHER_STATE_FADE_IN:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         BOOL fogDone = WeatherFog_Update(&taskData->fogChange, &taskData->fogTableFade, work->fogMode);
+         if (fogDone == TRUE) {
+             work->state = WEATHER_STATE_RUNNING;
+@@ -2208,6 +2262,12 @@ static void WeatherTask_RunFogOnly(WeatherWork *work, WeatherFogTaskData *taskDa
+         }
+         break;
+     case WEATHER_STATE_FADE_OUT:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         BOOL ret;
+         if (work->fogMode != WEATHER_FOG_NONE) {
+             ret = WeatherFogTableFade_Update(&taskData->fogTableFade);
+@@ -2241,6 +2301,12 @@ static void WeatherTask_Mist(SysTask *task, void *data) {
+         work->state = WEATHER_STATE_FADE_IN;
+         break;
+     case WEATHER_STATE_FADE_IN:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         BOOL fogDone = WeatherFogTableFade_Update(&taskData->fogTableFade);
+         BOOL blendDone = WeatherLerp_Step(&taskData->blendLerp);
+         Weather_SetBlendAlpha(taskData->blendLerp.value, 16 - taskData->blendLerp.value);
+@@ -2268,6 +2334,12 @@ static void WeatherTask_Mist(SysTask *task, void *data) {
+         }
+         break;
+     case WEATHER_STATE_FADE_OUT:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         BOOL fogOutDone;
+         if (work->fogMode != WEATHER_FOG_NONE) {
+             fogOutDone = WeatherFogTableFade_Update(&taskData->fogTableFade);
+diff --git a/src/field2d/field2d_view.c b/src/field2d/field2d_view.c
+index 7becc92..e7908c0 100644
+--- a/src/field2d/field2d_view.c
++++ b/src/field2d/field2d_view.c
+@@ -532,6 +532,12 @@ void *Field2DBgLayer_GetScreenBlock(void *buffer, u8 blockX, u8 blockY, u8 layou
+         blockSize->y = height;
+         return buffer;
+     case SCREEN_BLOCKS_WIDE:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int blockWidth;
+         if (((blockX + 1) << 5) <= width) {
+             blockWidth = 32;
+@@ -552,6 +558,12 @@ void *Field2DBgLayer_GetScreenBlock(void *buffer, u8 blockX, u8 blockY, u8 layou
+         blockSize->y = blockHeight;
+         return buffer + blockY * ((s16)(width << 6));
+     case SCREEN_BLOCKS_2X2:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int extent;
+         if (((blockX + 1) << 5) <= width) {
+             extent = 32;
+diff --git a/src/field_take_photo.c b/src/field_take_photo.c
+index da95857..4b91d20 100644
+--- a/src/field_take_photo.c
++++ b/src/field_take_photo.c
+@@ -615,6 +615,12 @@ static BOOL FieldTask_TakePhoto(TaskManager *taskManager) {
+         takePhoto->state = TAKE_PHOTO_STATE_ADJUST_PLAYER_FACING_VEC;
+         break;
+     case TAKE_PHOTO_STATE_ADJUST_PLAYER_FACING_VEC:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         u8 profileGender = PlayerProfile_GetTrainerGender(Save_PlayerData_GetProfile(FieldSystem_GetSaveData(fieldSystem)));
+         TakePhoto_RestorePlayerSprite(fieldSystem->playerAvatar, takePhoto->pPhoto->avatarStateBak, profileGender);
+         {
+diff --git a/src/launch_application.c b/src/launch_application.c
+index 36da3b6..3ecd0ac 100644
+--- a/src/launch_application.c
++++ b/src/launch_application.c
+@@ -952,6 +952,12 @@ static BOOL Task_WirelessTrade(TaskManager *taskman) {
+         data->state = WIRELESS_TRADE_STATE_5;
+         break;
+     case WIRELESS_TRADE_STATE_5:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int heldItem = GetMonData(data->wirelessTradeSelectMon.receivedMon, MON_DATA_HELD_ITEM, NULL);
+         int species = GetMonEvolution(NULL, data->wirelessTradeSelectMon.receivedMon, EVOCTX_TRADE, heldItem, (int *)&evolutionCondition);
+         if (species != SPECIES_NONE) {
+@@ -1044,6 +1050,12 @@ static BOOL Task_NamingScreen(TaskManager *taskman) {
+         data->state++;
+         break;
+     case 3:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         NamingScreenArgs *args = data->args;
+         if (args->kind == 1) {
+             if (String_Compare(args->nameInputString, data->defaultName) == 0) {
+@@ -1076,14 +1088,32 @@ static void SetName(TaskManager *taskman) {
+     NamingScreenData *data = TaskManager_GetEnvironment(taskman);
+     switch (data->args->kind) {
+     case NAME_SCREEN_PLAYER:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         PlayerProfile *profile = Save_PlayerData_GetProfile(fieldSystem->saveData);
+         Save_Profile_PlayerName_Set(profile, data->args->nameInputFlat);
+         break;
+     case NAME_SCREEN_RIVAL:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         SAVE_MISC_DATA *miscData = Save_Misc_Get(fieldSystem->saveData);
+         Save_Misc_RivalName_Set(miscData, data->args->nameInputString);
+         break;
+     case NAME_SCREEN_POKEMON:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         Pokemon *mon;
+         if (data->partyIdx == 0xff) {
+             BugContest *contest = FieldSystem_BugContest_Get(fieldSystem);
+@@ -1094,6 +1124,12 @@ static void SetName(TaskManager *taskman) {
+         SetMonData(mon, MON_DATA_NICKNAME_FLAT_COMPARE, data->args->nameInputFlat);
+         break;
+     case NAME_SCREEN_GROUP:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         SAV_FRIEND_GRP *friendGroup = Save_FriendGroup_Get(fieldSystem->saveData);
+         Save_FriendGroup_SetName(friendGroup, 0, 0, data->args->nameInputString);
+         break;
+@@ -1115,6 +1151,12 @@ void CallTask_NamingScreen(TaskManager *taskman, NameScreenType type, int specie
+ 
+     switch (type) {
+     case NAME_SCREEN_POKEMON:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         Pokemon *mon;
+         if (partyIdx == 0xff) {
+             BugContest *contest = FieldSystem_BugContest_Get(fieldSystem);
+diff --git a/src/map_preview_graphic.c b/src/map_preview_graphic.c
+index 8c943de..cc694eb 100644
+--- a/src/map_preview_graphic.c
++++ b/src/map_preview_graphic.c
+@@ -908,6 +908,12 @@ static int MapPreviewGraphic_RunPlayerDropIn(MapPreviewGraphicWork *unk, FieldSy
+         unkSub->state++;
+         break;
+     case 1:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         VecFx32 pos;
+         player = PlayerAvatar_GetMapObject(fsys->playerAvatar);
+         unkSub->frame++;
+diff --git a/src/overlay_03/pokeathlon_records.c b/src/overlay_03/pokeathlon_records.c
+index e093d21..cbac4f3 100644
+--- a/src/overlay_03/pokeathlon_records.c
++++ b/src/overlay_03/pokeathlon_records.c
+@@ -215,6 +215,12 @@ static u32 PokeathlonRecords_GetValue(PokeathlonStatistics *pokeathlonStruct, in
+     case 3:
+         return pokeathlonStruct->bonusesEarned;
+     case 4:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int i;
+         int var_r3 = 0;
+         for (i = 0; i < 10; i++) {
+diff --git a/src/pokeathlon/pokeathlon_box.c b/src/pokeathlon/pokeathlon_box.c
+index b214710..ea47e6a 100644
+--- a/src/pokeathlon/pokeathlon_box.c
++++ b/src/pokeathlon/pokeathlon_box.c
+@@ -96,6 +96,12 @@ BOOL PokeathlonBox_Main(OverlayManager *manager, int *state) {
+         break;
+ 
+     case BOX_STATE_SELECT:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int res = BoxMonSelector_Run(data->monSelector);
+         if (res == BOX_MON_SELECTOR_DONE) {
+             data->cancelled = FALSE;
+diff --git a/src/render_text.c b/src/render_text.c
+index 0a3ebc6..f3acd93 100644
+--- a/src/render_text.c
++++ b/src/render_text.c
+@@ -128,6 +128,12 @@ RenderResult RenderText(TextPrinter *printer) {
+             printer->template.currentChar.raw--;
+             switch ((u16)MsgArray_GetControlCode(printer->template.currentChar.raw)) {
+             case 0xFF00:
++#ifdef SDK_PORT_3DS
++                // C99 6.8.1: a label must be followed by a statement, not a
++                // declaration; MWCC accepted the declaration. The empty
++                // statement changes no behaviour.
++                ;
++#endif
+                 u16 field = MsgArray_ControlCodeGetField(
+                     printer->template.currentChar.raw, 0);
+                 if (field == 0xff) {
+diff --git a/src/scrcmd_link_sync.c b/src/scrcmd_link_sync.c
+index fd72e39..d45db7c 100644
+--- a/src/scrcmd_link_sync.c
++++ b/src/scrcmd_link_sync.c
+@@ -121,6 +121,12 @@ static BOOL Task_BallCapsuleEditor(TaskManager *taskManager) {
+         }
+         break;
+     case 3:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         PartyMenuArgs *partyMenu = taskData->partyMenu;
+         partyMenu->party = editorArgs->party;
+         partyMenu->bag = Save_Bag_Get(taskData->saveData);
+diff --git a/src/wifi_club/wifi_club_app.c b/src/wifi_club/wifi_club_app.c
+index bba0999..aaff050 100644
+--- a/src/wifi_club/wifi_club_app.c
++++ b/src/wifi_club/wifi_club_app.c
+@@ -935,6 +935,12 @@ void WifiClub_PaletteCycleTask(s32 task, WifiClubPaletteCycle *paletteCycle) {
+ BOOL WifiClub_Init(OverlayManager *man, int *state) {
+     switch (*state) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         WifiClubArgs *overlayArgs = OverlayManager_GetArgs(man);
+         if (CommState_IsWifi()) {
+             switch (overlayArgs->choice) {
+@@ -1002,6 +1008,12 @@ BOOL WifiClub_Main(OverlayManager *man, int *state) {
+         }
+         break;
+     case WIFI_CLUB_MAIN_RUN:
++#ifdef SDK_PORT_3DS
++        // C99 6.8.1: a label must be followed by a statement, not a
++        // declaration; MWCC accepted the declaration. The empty
++        // statement changes no behaviour.
++        ;
++#endif
+         int curState = data->state;
+         WifiClubStateFunc stateFunc = sWifiClubStateFuncs[curState];
+         if (stateFunc != NULL) {

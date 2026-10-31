@@ -1,0 +1,114 @@
+From e1765703d379cca66bea664ae1873e7182a3ad0c Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds-bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 17:22:11 +0000
+Subject: [PATCH] Lobby placement new: use the builtin size_t for the first
+ parameter
+
+The four small lobby translation units each define a placement new for the
+lobby containers:
+
+  lobby_channel_map_insert_node.cpp:7, lobby_chat_split_string.cpp:5,
+  lobby_event_deque_capacity.cpp:7, lobby_user_id_set_copy_nodes.cpp:9
+
+with `inline void *operator new(unsigned long, void *p)`. GCC requires the
+first parameter to be the builtin size_t, which is `unsigned int` on i386 and
+ARM, so each is rejected with "'operator new' takes type 'size_t'
+('unsigned int') as first parameter". MWCC's DS size_t is unsigned long.
+
+Under SDK_PORT_3DS LOBBY_SIZE_T expands to __SIZE_TYPE__; under #else it stays
+unsigned long, which is the original token, so the DS preprocessed text is
+unchanged. gcc-10 -E -P without SDK_PORT_3DS: byte-identical for all four
+files.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/lobby/lobby_channel_map_insert_node.cpp | 10 +++++++++-
+ src/lobby/lobby_chat_split_string.cpp       | 10 +++++++++-
+ src/lobby/lobby_event_deque_capacity.cpp    | 10 +++++++++-
+ src/lobby/lobby_user_id_set_copy_nodes.cpp  | 10 +++++++++-
+ 4 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/src/lobby/lobby_channel_map_insert_node.cpp b/src/lobby/lobby_channel_map_insert_node.cpp
+index 1e34162..a66c16c 100644
+--- a/src/lobby/lobby_channel_map_insert_node.cpp
++++ b/src/lobby/lobby_channel_map_insert_node.cpp
+@@ -4,7 +4,15 @@
+ 
+ #include "lobby_mem.h"
+ 
+-inline void *operator new(unsigned long, void *p) {
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// GCC requires the first parameter of operator new to be the builtin size_t
++// (unsigned int on i386/ARM), not unsigned long.
++#define LOBBY_SIZE_T __SIZE_TYPE__
++#else
++#define LOBBY_SIZE_T unsigned long
++#endif
++
++inline void *operator new(LOBBY_SIZE_T, void *p) {
+     return p;
+ }
+ 
+diff --git a/src/lobby/lobby_chat_split_string.cpp b/src/lobby/lobby_chat_split_string.cpp
+index a4eaa6f..c998d36 100644
+--- a/src/lobby/lobby_chat_split_string.cpp
++++ b/src/lobby/lobby_chat_split_string.cpp
+@@ -2,7 +2,15 @@
+ 
+ #include <nitro/code32.h>
+ 
+-inline void *operator new(unsigned long, void *p) {
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// GCC requires the first parameter of operator new to be the builtin size_t
++// (unsigned int on i386/ARM), not unsigned long.
++#define LOBBY_SIZE_T __SIZE_TYPE__
++#else
++#define LOBBY_SIZE_T unsigned long
++#endif
++
++inline void *operator new(LOBBY_SIZE_T, void *p) {
+     return p;
+ }
+ 
+diff --git a/src/lobby/lobby_event_deque_capacity.cpp b/src/lobby/lobby_event_deque_capacity.cpp
+index 8a999a0..8d45c70 100644
+--- a/src/lobby/lobby_event_deque_capacity.cpp
++++ b/src/lobby/lobby_event_deque_capacity.cpp
+@@ -4,7 +4,15 @@
+ 
+ #include <nitro/code32.h>
+ 
+-inline void *operator new(unsigned long, void *p) {
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// GCC requires the first parameter of operator new to be the builtin size_t
++// (unsigned int on i386/ARM), not unsigned long.
++#define LOBBY_SIZE_T __SIZE_TYPE__
++#else
++#define LOBBY_SIZE_T unsigned long
++#endif
++
++inline void *operator new(LOBBY_SIZE_T, void *p) {
+     return p;
+ }
+ 
+diff --git a/src/lobby/lobby_user_id_set_copy_nodes.cpp b/src/lobby/lobby_user_id_set_copy_nodes.cpp
+index 321a0bd..f0474eb 100644
+--- a/src/lobby/lobby_user_id_set_copy_nodes.cpp
++++ b/src/lobby/lobby_user_id_set_copy_nodes.cpp
+@@ -6,7 +6,15 @@
+ 
+ #include "lobby_mem.h"
+ 
+-inline void *operator new(unsigned long, void *p) {
++#if defined(__cplusplus) && defined(SDK_PORT_3DS)
++// GCC requires the first parameter of operator new to be the builtin size_t
++// (unsigned int on i386/ARM), not unsigned long.
++#define LOBBY_SIZE_T __SIZE_TYPE__
++#else
++#define LOBBY_SIZE_T unsigned long
++#endif
++
++inline void *operator new(LOBBY_SIZE_T, void *p) {
+     return p;
+ }
+ 
