@@ -70,11 +70,18 @@ LINK_EXCLUDED_PREFIXES = ("lib/MSL_C/", "lib/NitroDWC/", "lib/NitroWiFi/",
                           "lib/asm/msl_")
 
 # Pure-data objects from a stubbed library that the game's own link needs:
-# the lobby chat protocol tables, format strings and vtable/assert data.
-# Their functions remain stubbed (hgss/game/stubs); only the blobs are linked,
-# because the lobby code reads them directly. main.lsf names both.
-LINK_DATA_EXCEPTIONS = ("lib/NitroDWC/asm/dwc_lobby_chat_data.o",
-                        "lib/NitroDWC/asm/dwc_lobby_data.o")
+# the lobby chat protocol tables, the wifi_setup screens/keypad tables and
+# their bss. Every lib/NitroDWC/asm object is data (no T symbols); the DWC
+# functions themselves live in lib/NitroDWC/src and remain stubbed, so only
+# the asm data objects are allowed through the NitroDWC exclusion.
+LINK_DATA_EXCEPTION_PREFIXES = ("lib/NitroDWC/asm/",)
+# ...except the DWC-internal libc state: these reference MSL/glibc's errno
+# as an ordinary symbol, which clashes with glibc's TLS definition at link
+# time. Every DWC function is stubbed, so nothing in the game reads them.
+LINK_DATA_EXCLUDED = ("lib/NitroDWC/asm/dwc_gamespy_bss.o",
+                      "lib/NitroDWC/asm/dwc_lib_bss.o",
+                      "lib/NitroDWC/asm/dwc_lib_data.o",
+                      "lib/NitroDWC/asm/dwc_lib_rodata.o")
 
 PORT_DEFINES = ["-DSDK_ARM9", "-DSDK_TS", "-DSDK_4M", "-DSDK_CODE_ARM",
                 "-DSDK_FINALROM", "-DNNS_FINALROM", "-DSDK_PORT_3DS"]
@@ -231,7 +238,8 @@ def link_objects(objects: list[Path], data: dict, out: Path) -> list[Path]:
         rel = obj.relative_to(out / "obj").as_posix()
         if rel not in allowed:
             continue
-        if rel in LINK_DATA_EXCEPTIONS:
+        if any(rel.startswith(prefix) for prefix in LINK_DATA_EXCEPTION_PREFIXES) \
+                and rel not in LINK_DATA_EXCLUDED:
             result.append(obj)
             continue
         if any(rel.startswith(prefix) for prefix in LINK_EXCLUDED_PREFIXES):

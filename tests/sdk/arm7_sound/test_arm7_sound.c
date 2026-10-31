@@ -342,8 +342,8 @@ static void CheckInit(void)
     CHECK(SNDi_Work.alarms[3].id == 0, "alarm id not cleared");
     CHECK(SNDi_SharedWork == NULL, "shared work touched");
     /* Enable, output selector (0,0,0,0) and master volume 127 in the registers. */
-    EQU32("master enable", NitroPort_SoundRegisters[0x101], 0x80);
-    EQU32("master vol", NitroPort_SoundRegisters[0x100], 127);
+    EQU32("master enable", NitroPort_SoundRegisters[0x501], 0x80);
+    EQU32("master vol", NitroPort_SoundRegisters[0x500], 127);
     /* Once only. */
     SNDi_Work.channels[1].flags.syncFlag = 7;
     SND_Init(5);
@@ -397,16 +397,16 @@ static void CheckCommandProc(void)
     EQU32("command tag", sharedWork.finishedCommandTag, 2);
     CHECK(chStartCalls == 2, "channel starts %d, want 2", chStartCalls);
     CHECK(chStartCh[0] == 0 && chStartCh[1] == 1, "channel start order");
-    EQU32("ch0 enable", NitroPort_SoundRegisters[3], 0x80);
-    EQU32("ch1 enable", NitroPort_SoundRegisters[0x13], 0x80);
-    EQU32("cap0", NitroPort_SoundRegisters[0x108], 0x80);
-    EQU32("cap1", NitroPort_SoundRegisters[0x109], 0x80);
+    EQU32("ch0 enable", NitroPort_SoundRegisters[0x403], 0x80);
+    EQU32("ch1 enable", NitroPort_SoundRegisters[0x413], 0x80);
+    EQU32("cap0", NitroPort_SoundRegisters[0x508], 0x80);
+    EQU32("cap1", NitroPort_SoundRegisters[0x509], 0x80);
 
     /* A PCM setup keeps all 32 pointer bits (the DS mask is 27). */
     popList[0] = &cmdPcm;
     popCount = 1;
     SND_CommandProc();
-    EQU32("pcm src", *(u32 *)&NitroPort_SoundRegisters[2 * 16 + 4], 0x08FFFFFF);
+    EQU32("pcm src", *(u32 *)&NitroPort_SoundRegisters[0x400 + 2 * 16 + 4], 0x08FFFFFF);
     EQU32("command tag2", sharedWork.finishedCommandTag, 3);
 
     /* A second start on running channels does not restart them. */
@@ -420,8 +420,8 @@ static void CheckCommandProc(void)
     popList[0] = &cmdStop;
     popCount = 1;
     SND_CommandProc();
-    EQU32("ch0 stopped", NitroPort_SoundRegisters[3], 0);
-    EQU32("ch1 stopped", NitroPort_SoundRegisters[0x13], 0);
+    EQU32("ch0 stopped", NitroPort_SoundRegisters[0x403], 0);
+    EQU32("ch1 stopped", NitroPort_SoundRegisters[0x413], 0);
     EQU32("command tag3", sharedWork.finishedCommandTag, 5);
 }
 

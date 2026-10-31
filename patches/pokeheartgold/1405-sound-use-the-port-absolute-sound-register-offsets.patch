@@ -1,0 +1,176 @@
+From f1f4dae1f0b7de61c3f77700359839cb83980e86 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 19:19:15 +0000
+Subject: [PATCH] sound: use the port's absolute sound-register offsets
+ (SDK_PORT_3DS)
+
+NitroPort_SoundRegisters is the DS address space's low 12 bits: the mixer in
+3ds_port/nitro/src/port_sound_chip.c reads SOUNDCNT at 0x500, a channel's
+control at 0x400 + channel * 16, captures at 0x508/0x510 and so on. Patch
+1401's ARM7 register redirects instead treated the array as relative to
+0x04000400: R32(c, o) subtracted 0x400, and the direct writes used
+channelOffset by itself. Every channel, master-volume and capture register
+therefore landed 0x400 below the register the mixer reads (channel 4 at 0x40
+instead of 0x440), and the mixer saw all-zero channel and master state. The
+vendored test_sound_sequence was the first test to drive the real ARM7 driver
+through to the mixer, and mixed silence.
+
+Map the DS low 16-bit addresses onto the array unchanged: R{\8,16,32}(c, o)
+become array[(c << 4) + o] (o already carries 0x400+), and the direct array
+indexes gain the missing 0x400. Only the SDK_PORT_3DS branches change; the
+Metrowerks text in the #else branches is untouched, so gcc-10 -E -P without
+SDK_PORT_3DS is byte-identical for all five files.
+
+Checked by vendored test_sound_sequence (12 checks, 0 failures; it mixed
+silence before) and test_arm7/test_sound_chip.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ sub/lib/src/sound_channel.c    | 16 ++++++++--------
+ sub/lib/src/sound_command.c    |  4 ++--
+ sub/lib/src/sound_driver.c     |  8 ++++----
+ sub/lib/src/sound_ex_channel.c |  2 +-
+ sub/lib/src/sound_main.c       |  8 ++++----
+ 5 files changed, 19 insertions(+), 19 deletions(-)
+
+diff --git a/sub/lib/src/sound_channel.c b/sub/lib/src/sound_channel.c
+index 3b88cd8..e6a5202 100644
+--- a/sub/lib/src/sound_channel.c
++++ b/sub/lib/src/sound_channel.c
+@@ -14,9 +14,9 @@ extern volatile u8 NitroPort_SoundRegisters[];
+ #undef R8
+ #undef R16
+ #undef R32
+-#define R8(c, o)  (*(volatile u8 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o) - 0x400]))
+-#define R16(c, o) (*(volatile u16 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o) - 0x400]))
+-#define R32(c, o) (*(volatile u32 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o) - 0x400]))
++#define R8(c, o)  (*(volatile u8 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o)]))
++#define R16(c, o) (*(volatile u16 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o)]))
++#define R32(c, o) (*(volatile u32 *)(&NitroPort_SoundRegisters[((u32)(c) << 4) + (o)]))
+ #endif
+ 
+ typedef struct SoundChannelRegisters {
+@@ -96,13 +96,13 @@ void SND_SetupChannelPsg(int c, int duty, int volume, int shift, int timer, int
+     {
+         u32 control = ((u32)duty << 24) | 0x60000000u | ((u32)pan << 16) | ((u32)shift << 8);
+ #ifdef SDK_PORT_3DS
+-        *(volatile u32 *)&NitroPort_SoundRegisters[channelOffset] = (u32)volume | control;
++        *(volatile u32 *)&NitroPort_SoundRegisters[0x400 + channelOffset] = (u32)volume | control;
+ #else
+         *(volatile u32 *)(0x04000400u + channelOffset) = (u32)volume | control;
+ #endif
+     }
+ #ifdef SDK_PORT_3DS
+-    *(volatile u16 *)&NitroPort_SoundRegisters[8 + channelOffset] = 0x10000u - (u32)timer;
++    *(volatile u16 *)&NitroPort_SoundRegisters[0x408 + channelOffset] = 0x10000u - (u32)timer;
+ #else
+     *(volatile u16 *)(0x04000408u + channelOffset) = 0x10000u - (u32)timer;
+ #endif
+@@ -141,7 +141,7 @@ void SND_StopChannel(int c, int flags) {
+ #ifdef SDK_PORT_3DS
+     /* Same read-modify-write on the channel control word, without the struct overlay
+      * (which is addressed from 0x04000000, outside the sound block). */
+-    volatile u32 *reg = (volatile u32 *)&NitroPort_SoundRegisters[offset];
++    volatile u32 *reg = (volatile u32 *)&NitroPort_SoundRegisters[0x400 + offset];
+     u32 value = *reg & ~0x80000000u;
+     if (flags & 1) {
+         value |= 0x8000;
+@@ -210,13 +210,13 @@ u32 SND_GetChannelControl(int c) {
+ static inline void ApplyChannelSurroundDecay(int i, const u8 *volume) {
+     u32 offset = (u32)i << 4;
+ #ifdef SDK_PORT_3DS
+-    int pan = NitroPort_SoundRegisters[offset + 2u];
++    int pan = NitroPort_SoundRegisters[0x400 + offset + 2u];
+ #else
+     int pan = *(volatile u8 *)(0x04000000u + offset + 0x402u);
+ #endif
+     int value = CalcSurroundDecay(volume[i], pan);
+ #ifdef SDK_PORT_3DS
+-    NitroPort_SoundRegisters[offset] = value;
++    NitroPort_SoundRegisters[0x400 + offset] = value;
+ #else
+     *(volatile u8 *)(0x04000000u + offset + 0x400u) = value;
+ #endif
+diff --git a/sub/lib/src/sound_command.c b/sub/lib/src/sound_command.c
+index 30d4452..cb0f2a5 100644
+--- a/sub/lib/src/sound_command.c
++++ b/sub/lib/src/sound_command.c
+@@ -79,7 +79,7 @@ void SND_CommandProc(void) {
+ #ifdef SDK_PORT_3DS
+     const struct SNDCommand *command_p;
+     while ((command_p = NitroPort_SoundPopCommand()) != NULL) {
+-        volatile u8 *cap1 = &NitroPort_SoundRegisters[0x109], *cap0 = cap1 - 1;
++        volatile u8 *cap1 = &NitroPort_SoundRegisters[0x509], *cap0 = cap1 - 1;
+         struct SNDCommand *list = (struct SNDCommand *)command_p;
+ #else
+     OSMessage message;
+@@ -136,7 +136,7 @@ void SND_CommandProc(void) {
+                 for (i = 0; i < 16 && channels; i++, channels >>= 1) {
+                     if (channels & 1) {
+ #ifdef SDK_PORT_3DS
+-                        volatile u8 *ctrl = &NitroPort_SoundRegisters[3 + (u32)i * 16];
++                        volatile u8 *ctrl = &NitroPort_SoundRegisters[0x403 + (u32)i * 16];
+                         if (!(*ctrl & 128)) {
+                             NitroPort_SoundChannelStart(i);
+                         }
+diff --git a/sub/lib/src/sound_driver.c b/sub/lib/src/sound_driver.c
+index 990390e..d68057a 100644
+--- a/sub/lib/src/sound_driver.c
++++ b/sub/lib/src/sound_driver.c
+@@ -16,10 +16,10 @@ extern volatile u8 NitroPort_SoundRegisters[];
+ #undef REG_SOUNDCNT_CTRL
+ #undef REG_SNDCAP0CNT
+ #undef REG_SNDCAP1CNT
+-#define REG_SOUNDCNT_VOL  (*(volatile u8 *)&NitroPort_SoundRegisters[0x100])
+-#define REG_SOUNDCNT_CTRL (*(volatile u8 *)&NitroPort_SoundRegisters[0x101])
+-#define REG_SNDCAP0CNT    (*(volatile u8 *)&NitroPort_SoundRegisters[0x108])
+-#define REG_SNDCAP1CNT    (*(volatile u8 *)&NitroPort_SoundRegisters[0x109])
++#define REG_SOUNDCNT_VOL  (*(volatile u8 *)&NitroPort_SoundRegisters[0x500])
++#define REG_SOUNDCNT_CTRL (*(volatile u8 *)&NitroPort_SoundRegisters[0x501])
++#define REG_SNDCAP0CNT    (*(volatile u8 *)&NitroPort_SoundRegisters[0x508])
++#define REG_SNDCAP1CNT    (*(volatile u8 *)&NitroPort_SoundRegisters[0x509])
+ #endif
+ 
+ #define SOUND_MASTER_ENABLE 0x80
+diff --git a/sub/lib/src/sound_ex_channel.c b/sub/lib/src/sound_ex_channel.c
+index c64838a..3a70f6d 100644
+--- a/sub/lib/src/sound_ex_channel.c
++++ b/sub/lib/src/sound_ex_channel.c
+@@ -118,7 +118,7 @@ void SND_UpdateExChannel(void) {
+         if (sync) {
+             if (sync & SND_CHN_SYNC_START) {
+ #ifdef SDK_PORT_3DS
+-                volatile u8 *enable = &NitroPort_SoundRegisters[3 + (u32)i * 16];
++                volatile u8 *enable = &NitroPort_SoundRegisters[0x403 + (u32)i * 16];
+                 if (!(*enable & 0x80)) {
+                     NitroPort_SoundChannelStart(i);
+                 }
+diff --git a/sub/lib/src/sound_main.c b/sub/lib/src/sound_main.c
+index 8083cd5..bc9e240 100644
+--- a/sub/lib/src/sound_main.c
++++ b/sub/lib/src/sound_main.c
+@@ -148,9 +148,9 @@ void SND_SetupCapture(int capture, int format, u32 dest, int length, BOOL loop,
+     int offset = capture * 8;
+     SNDCaptureRepeat repeat = loop ? SND_CAPTURE_REPEAT : SND_CAPTURE_ONESHOT;
+ #ifdef SDK_PORT_3DS
+-    NitroPort_SoundRegisters[0x108 + capture] = (u8)((format << 3) | (repeat << 2) | (in << 1) | out);
+-    *(vu32 *)&NitroPort_SoundRegisters[0x110 + offset] = dest;
+-    *(vu16 *)&NitroPort_SoundRegisters[0x114 + offset] = (u16)length;
++    NitroPort_SoundRegisters[0x508 + capture] = (u8)((format << 3) | (repeat << 2) | (in << 1) | out);
++    *(vu32 *)&NitroPort_SoundRegisters[0x510 + offset] = dest;
++    *(vu16 *)&NitroPort_SoundRegisters[0x514 + offset] = (u16)length;
+ #else
+     *(vu8 *)(0x04000508 + capture) = (u8)((format << 3) | (repeat << 2) | (in << 1) | out);
+     *(vu32 *)(0x04000510 + offset) = dest;
+@@ -160,7 +160,7 @@ void SND_SetupCapture(int capture, int format, u32 dest, int length, BOOL loop,
+ 
+ int SND_IsCaptureActive(u32 capture) {
+ #ifdef SDK_PORT_3DS
+-    return (NitroPort_SoundRegisters[capture + 0x108] & 0x80) != 0;
++    return (NitroPort_SoundRegisters[capture + 0x508] & 0x80) != 0;
+ #else
+     return (*(volatile u8 *)(capture + 0x04000508) & 0x80) != 0;
+ #endif
+-- 
+2.43.0
+

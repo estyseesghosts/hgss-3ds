@@ -142,17 +142,18 @@ class LinkSelectionTests(unittest.TestCase):
                                "src/field/unlinked.o",
                                "lib/NitroSDK/src/os/os_thread.o"])
 
-    def test_link_objects_keeps_only_the_nitrodwc_lobby_data_blobs(self):
-        # The lobby chat protocol tables are pure data the game reads; the
-        # rest of NitroDWC stays stubbed and unlinked.
+    def test_link_objects_keeps_the_nitrodwc_data_but_not_its_code(self):
+        # NitroDWC asm objects are pure data the game reads, except the
+        # libc-state blobs that reference a non-TLS errno; DWC functions
+        # (lib/NitroDWC/src) stay stubbed and unlinked.
         data = {"overlay_map": [{"objects": [
             {"object": "lib/NitroDWC/asm/dwc_lobby_chat_data.o"},
-            {"object": "lib/NitroDWC/asm/dwc_lobby_data.o"},
+            {"object": "lib/NitroDWC/asm/wifi_setup_ui_system_bss.o"},
             {"object": "lib/NitroDWC/asm/dwc_gamespy_bss.o"},
             {"object": "lib/NitroDWC/src/dwc_main.o"}]}]}
         out = Path("/out")
         rels = ("lib/NitroDWC/asm/dwc_lobby_chat_data.o",
-                "lib/NitroDWC/asm/dwc_lobby_data.o",
+                "lib/NitroDWC/asm/wifi_setup_ui_system_bss.o",
                 "lib/NitroDWC/asm/dwc_gamespy_bss.o",
                 "lib/NitroDWC/src/dwc_main.o")
         got = [p.relative_to(out / "obj").as_posix()

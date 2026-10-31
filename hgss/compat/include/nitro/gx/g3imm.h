@@ -28,24 +28,43 @@ void G3_MultMtx33(const MtxFx33 *mtx);
 
 static inline void G3_StoreMtx(int num)
 {
+#ifdef SDK_PORT_3DS
+    NitroPort_GxDirectWrite(G3OP_MTX_STORE, GX_PACK_STOREMTX_PARAM(num));
+#else
     reg_G3_MTX_STORE = GX_PACK_STOREMTX_PARAM(num);
+#endif
 }
 
 static inline void G3_RestoreMtx(int num)
 {
+#ifdef SDK_PORT_3DS
+    NitroPort_GxDirectWrite(G3OP_MTX_RESTORE, GX_PACK_RESTOREMTX_PARAM(num));
+#else
     reg_G3_MTX_RESTORE = GX_PACK_RESTOREMTX_PARAM(num);
+#endif
 }
 
 static inline void G3_Scale(fx32 x, fx32 y, fx32 z)
 {
+#ifdef SDK_PORT_3DS
+    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)x);
+    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)y);
+    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)z);
+#else
     reg_G3_MTX_SCALE = (u32)x;
     reg_G3_MTX_SCALE = (u32)y;
     reg_G3_MTX_SCALE = (u32)z;
+#endif
 }
 
 static inline void G3_TexCoord(fx32 s, fx32 t)
 {
+#ifdef SDK_PORT_3DS
+    NitroPort_GxDirectWrite(G3OP_TEXCOORD,
+                            (u32)(u16)(s >> 8) | ((u32)(u16)(t >> 8) << 16));
+#else
     reg_G3_TEXCOORD = (u32)(u16)(s >> 8) | ((u32)(u16)(t >> 8) << 16);
+#endif
 }
 
 #ifdef __cplusplus

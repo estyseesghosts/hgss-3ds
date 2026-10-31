@@ -1,0 +1,78 @@
+From e2b0ec4cd9ee0d9ac5d3c09913fa7e3cae8a7a67 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 19:34:54 +0000
+Subject: [PATCH] gx: load 3D textures into the port's VRAM array
+ (SDK_PORT_3DS)
+
+HGSS's ARM9 GX_LoadTex/GX_LoadTexPltt copy to the DS LCDC VRAM view at
+0x06800000 + offset; the port has ordinary arrays instead
+(NitroPort_LcdcVram in 3ds_port/nitro/src/port_memory.c). Leaving the table's
+raw addresses in place made the first queued 3D texture transfer write to the
+unmapped DS address and crash as soon as OS_Halt ran the transfers queued for
+the frame (the vendored test_vram_transfer's NNS_GfdDoVramTransfer3D path).
+
+Under SDK_PORT_3DS, GX_BeginLoadTex and GX_BeginLoadTexPltt turn the table's
+LCDC page addresses into pointers into NitroPort_LcdcVram; a zero table entry
+stays zero, since the loader uses it to mean "no second texture block". The
+copy expressions themselves are unchanged, and the Metrowerks text remains in
+the #else branches, so gcc-10 -E -P without SDK_PORT_3DS is byte-identical.
+
+Checked by vendored test_vram_transfer (24 checks, 0 failures; it segfaulted
+before) and the rest of the nitro subproject.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ lib/NitroSDK/src/gx/gx_load3d.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/lib/NitroSDK/src/gx/gx_load3d.c b/lib/NitroSDK/src/gx/gx_load3d.c
+index 70184a4..ff003a7 100644
+--- a/lib/NitroSDK/src/gx/gx_load3d.c
++++ b/lib/NitroSDK/src/gx/gx_load3d.c
+@@ -1,6 +1,17 @@
+ #include <nitro/code32.h>
+ 
+ #include "gx_load3d_private.h"
++#ifdef SDK_PORT_3DS
++/* VRAM is an ordinary array on the port (3ds_port/nitro/src/port_memory.c);
++ * the LCDC view of 0x06800000 is NitroPort_LcdcVram. Keep the loader's address
++ * fields as real host addresses so the copy expressions stay the DS ones. */
++extern u8 NitroPort_LcdcVram[];
++
++/* Zero means "this block is not mapped"; keep it zero, not array-0x06800000. */
++static u32 LcdcAddress(u32 address) {
++    return address ? (u32)(NitroPort_LcdcVram + (address - 0x06800000u)) : 0;
++}
++#endif
+ 
+ static u32 sTexLCDCBlk1 = 0;
+ static u32 sSzTexBlk1 = 0;
+@@ -51,8 +62,13 @@ static u32 sClrImgLCDCBlk = 0;
+ void GX_BeginLoadTex() {
+     u32 temp = GX_ResetBankForTex();
+     sTex = (GXVRamTex)temp;
++#ifdef SDK_PORT_3DS
++    sTexLCDCBlk1 = LcdcAddress((u32)(sTexStartAddrTable[temp].blk1 << 0xC));
++    sTexLCDCBlk2 = LcdcAddress((u32)(sTexStartAddrTable[temp].blk2 << 0xC));
++#else
+     sTexLCDCBlk1 = (u32)(sTexStartAddrTable[temp].blk1 << 0xC);
+     sTexLCDCBlk2 = (u32)(sTexStartAddrTable[temp].blk2 << 0xC);
++#endif
+     sSzTexBlk1 = (u32)(sTexStartAddrTable[temp].szBlk1 << 0xC);
+ }
+ 
+@@ -89,7 +105,11 @@ void GX_EndLoadTex() {
+ void GX_BeginLoadTexPltt() {
+     GXVRamTexPltt temp = GX_ResetBankForTexPltt();
+     sTexPltt = temp;
++#ifdef SDK_PORT_3DS
++    sTexPlttLCDCBlk = LcdcAddress((u32)(sTexPlttStartAddrTable[temp >> 4] << 0xC));
++#else
+     sTexPlttLCDCBlk = (u32)(sTexPlttStartAddrTable[temp >> 4] << 0xC);
++#endif
+ }
+ 
+ void GX_LoadTexPltt(void *src, u32 offset, u32 size) {
+-- 
+2.43.0
+
