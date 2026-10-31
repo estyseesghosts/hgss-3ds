@@ -1,6 +1,6 @@
 # Dev container
 
-All building and testing happens in one amd64 Ubuntu 22.04 container defined in
+All building and testing happens in one amd64 Ubuntu 24.04 container defined in
 `.devcontainer/`. Emulators (melonDS, Azahar), BizHawk, the 3DS and anything
 with a GUI stay native on the host.
 
@@ -18,16 +18,20 @@ with a GUI stay native on the host.
 
 ### Rosetta vs QEMU
 
-Wine's 32-bit (i386) code can fail under Rosetta. If MWCC crashes or `host32`
-binaries won't run, switch the runtime to QEMU amd64 emulation (slower, works).
-**Which one worked is recorded in `docs/progress/phase-0.md`.**
+Measured on an M1 Pro with OrbStack: **Rosetta works** for WineHQ 10.0 (MWCC, SDK tools),
+the full matching builds and 32-bit `host32` binaries; it prints harmless
+`rosetta error: invalid gdt selector` lines. WineHQ 11.0 aborts under both Rosetta and
+QEMU, and Ubuntu's distro Wine 9.0 cannot load the Nitro SDK tools, hence the pinned
+10.0 (`docs/decisions.md`). QEMU (`orbctl config set rosetta false`) was only tried with
+the failing Wines. Details: `docs/progress/phase-0.md`.
 
 ## Private folder (`~/hgss-private`, mounted read-only at `/private`)
 
 ```
 ~/hgss-private/
   mwccarm/                 license.dat, 1.2/, 2.0/{base,sp1,sp1p5,sp2,sp2p2,sp2p3,...}/
-  NitroSDK/                extracted SDK: tools/bin/, include/nitro/specfiles/*.template
+  NitroSDK/                extracted NitroSDK-3_2-060901 (SHA256 of the archive 0ee935e3...): tools/bin/, include/nitro/specfiles/*.template
+  heartgold-retail.nds     optional: your retail ROM, used to diagnose matching failures
   roms/pokeheartgold.us.nds   pokesoulsilver.us.nds
   saves/*.sav
 ```
@@ -66,8 +70,7 @@ also go through ftpd from the Mac.
 
 ## devkitPro
 
-Copied from `devkitpro/devkitarm:latest` (`COPY --from`). `verify-devkitpro.sh`
-fails the image build if `3dsxtool`, `smdhtool`, `3dslink`, `tex3ds`,
-`picasso`, libctru, citro3d or citro2d are missing; the fallback is devkitPro's
-Debian pacman and `dkp-pacman -S 3ds-dev`. Which path was used is in
-`docs/progress/phase-0.md`.
+Installed with devkitPro's apt repo and `dkp-pacman -S 3ds-dev` (the `COPY --from=devkitpro/devkitarm`
+route does not work: its binaries need glibc 2.36). `apt.devkitpro.org` rejects the default
+User-Agent with a Cloudflare 403, so the Dockerfile fetches the key with `wget -U "dkp apt"`.
+`verify-devkitpro.sh` runs the tools and fails the image build if any is missing or does not run.

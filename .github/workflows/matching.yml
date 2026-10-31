@@ -1,5 +1,6 @@
 # Byte-matching DS build of the pinned decomp. DISABLED: see docs/ci.md.
 #
+# Uses tools/matching-build.sh (keeps five sections the linker strips; see its header).
 # Needs MWCC and the Nitro SDK, which are proprietary and must never be in a
 # public image, a public runner or an artifact. It runs only on a self-hosted
 # runner labelled `hgss-matching` that has the user's private folder at
@@ -37,12 +38,12 @@ jobs:
       - name: Build and verify HeartGold (US)
         working-directory: ${{ runner.temp }}/decomp
         run: |
-          make -j"$(nproc)"
+          "$GITHUB_WORKSPACE/tools/matching-build.sh" "$PWD" HEARTGOLD
           echo "4fcded0e2713dc03929845de631d0932ea2b5a37  build/heartgold.us/pokeheartgold.us.nds" | sha1sum -c -
 
       - name: Build and verify SoulSilver (US)
         working-directory: ${{ runner.temp }}/decomp
         run: |
-          make GAME_VERSION=SOULSILVER -j"$(nproc)"
+          "$GITHUB_WORKSPACE/tools/matching-build.sh" "$PWD" SOULSILVER
           echo "f8dc38ea20c17541a43b58c5e6d18c1732c7e582  build/soulsilver.us/pokesoulsilver.us.nds" | sha1sum -c -
       # Deliberately no upload-artifact step: ROMs and ELFs contain game code.
