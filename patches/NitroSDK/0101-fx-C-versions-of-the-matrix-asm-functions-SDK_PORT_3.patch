@@ -1,0 +1,403 @@
+From 5519a1e9ac97ab394bc063d8c39a286ca2de6a10 Mon Sep 17 00:00:00 2001
+From: impl <impl@invalid>
+Date: Sat, 31 Oct 2026 02:30:21 +0000
+Subject: [PATCH] fx: C versions of the matrix asm functions (SDK_PORT_3DS)
+
+The MWCC inline asm (`asm void`) in lib/NitroSDK/src/fx/fx_mtx22.c,
+fx_mtx33_identity.c, fx_mtx33_rot_yz.c, fx_mtx43_identity.c, fx_mtx43_rot.c,
+fx_mtx43_scale.c, fx_mtx44_identity.c and fx_mtx44_rot.c does not parse under
+GCC, so these eight files fail the port's GCC build. Each of the 14 functions
+gets a plain C version under #ifdef SDK_PORT_3DS, placed before the original
+asm, which stays unchanged under #else. The DS (MWCC) build does not define
+SDK_PORT_3DS and keeps the asm.
+
+What each C version reproduces (decoded from the HGSS asm at the pin, 8cbb4a1):
+
+- MTX_Identity22_, MTX_Identity33_, MTX_Identity43_, MTX_Identity44_:
+  identity matrix, 1.0 as FX32_ONE on the diagonal, zero elsewhere, including
+  the zero translation row of the 4x3 form.
+- MTX_Copy43To44_(src r0, dst r1): copies the 4x3 into the first three columns
+  of the 4x4. Fourth column is 0, except row 3, which is FX32_ONE.
+- MTX_Copy44To43_(src r0, dst r1): copies the first three columns of each row,
+  dropping column 3.
+- MTX_RotX43_, MTX_RotY43_, MTX_RotX44_, MTX_RotY44_, MTX_RotZ44_,
+  MTX_RotY33_, MTX_RotZ33_ (sin r1, cos r2): rotation in NitroSDK's row-vector
+  convention. -sin is computed as 0u - (u32)sin, so INT32_MIN stays INT32_MIN,
+  as the asm's neg does.
+- MTX_Scale43_(x r1, y r2, z r3): diagonal (x, y, z), zero translation row.
+
+Each asm function stores every element of its destination, and so do the C
+versions. There are no multiplies or rounding steps: the asm stores, copies
+and negates values only.
+
+DS output is unchanged. Without SDK_PORT_3DS the preprocessed output
+(gcc -E -P) of each of the eight files is identical to HEAD, and the diff
+removes no line. The asm is kept byte-for-byte under #else.
+
+Cross-check: Platinum's pokeplatinum-3ds patches/NitroSDK/0003 has C versions
+of the same-named functions (different SDK revision). They agree with the
+decoded HGSS asm. Platinum guards with SDK_CW/__MWERKS__; this patch uses
+SDK_PORT_3DS, as the port's rule requires.
+
+Verified with tests/sdk/fx/run.sh (host test, GCC -m32, 428 cases against the
+definitions and literal outputs), and with an interpreter for the asm subset
+(3011 checks against the definitions, including INT32_MIN/MAX inputs).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/fx/fx_mtx22.c          |  9 +++++++++
+ src/fx/fx_mtx33_identity.c | 10 ++++++++++
+ src/fx/fx_mtx33_rot_yz.c   | 19 +++++++++++++++++++
+ src/fx/fx_mtx43_identity.c | 25 +++++++++++++++++++++++++
+ src/fx/fx_mtx43_rot.c      | 21 +++++++++++++++++++++
+ src/fx/fx_mtx43_scale.c    | 11 +++++++++++
+ src/fx/fx_mtx44_identity.c | 27 +++++++++++++++++++++++++++
+ src/fx/fx_mtx44_rot.c      | 31 +++++++++++++++++++++++++++++++
+ 8 files changed, 153 insertions(+)
+
+diff --git a/src/fx/fx_mtx22.c b/src/fx/fx_mtx22.c
+index 2df2d9c..183c01f 100644
+--- a/src/fx/fx_mtx22.c
++++ b/src/fx/fx_mtx22.c
+@@ -8,6 +8,14 @@ void MTX_ScaleApply22(const MtxFx22 *mtx, MtxFx22 *dst, fx32 x, fx32 y);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Identity22_(MtxFx22 *mtx) {
++    mtx->_00 = FX32_ONE; mtx->_01 = 0;
++    mtx->_10 = 0;        mtx->_11 = FX32_ONE;
++}
++#else
+ asm void MTX_Identity22_(MtxFx22 *mtx) {
+     mov r1, #0x0
+     mov r2, #0x1000
+@@ -16,6 +24,7 @@ asm void MTX_Identity22_(MtxFx22 *mtx) {
+     stmia r0!, {r1-r2}
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ #pragma force_active on
+diff --git a/src/fx/fx_mtx33_identity.c b/src/fx/fx_mtx33_identity.c
+index c0b145f..778f07d 100644
+--- a/src/fx/fx_mtx33_identity.c
++++ b/src/fx/fx_mtx33_identity.c
+@@ -6,6 +6,15 @@ void MTX_Identity33_(register MtxFx33 *pDst);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Identity33_(register MtxFx33 *pDst) {
++    pDst->_00 = FX32_ONE; pDst->_01 = 0;        pDst->_02 = 0;
++    pDst->_10 = 0;        pDst->_11 = FX32_ONE; pDst->_12 = 0;
++    pDst->_20 = 0;        pDst->_21 = 0;        pDst->_22 = FX32_ONE;
++}
++#else
+ asm void MTX_Identity33_(register MtxFx33 *pDst) {
+     mov r2, #0x1000
+     str r2, [r0, #0x20]
+@@ -17,4 +26,5 @@ asm void MTX_Identity33_(register MtxFx33 *pDst) {
+     stmia r0!, {r1, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/fx/fx_mtx33_rot_yz.c b/src/fx/fx_mtx33_rot_yz.c
+index 759507e..a70f635 100644
+--- a/src/fx/fx_mtx33_rot_yz.c
++++ b/src/fx/fx_mtx33_rot_yz.c
+@@ -7,6 +7,15 @@ void MTX_RotZ33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32 cos
+ #include <nitro/code16.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotY33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = cosVal; pDst->_01 = 0;        pDst->_02 = (fx32)(0u - (u32)sinVal);
++    pDst->_10 = 0;      pDst->_11 = FX32_ONE; pDst->_12 = 0;
++    pDst->_20 = sinVal; pDst->_21 = 0;        pDst->_22 = cosVal;
++}
++#else
+ asm void MTX_RotY33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     str r2, [r0]
+     str r2, [r0, #0x20]
+@@ -23,9 +32,18 @@ asm void MTX_RotY33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32
+     str r3, [r0, #0x10]
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotZ33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = cosVal;  pDst->_01 = sinVal;  pDst->_02 = 0;
++    pDst->_10 = (fx32)(0u - (u32)sinVal);   pDst->_11 = cosVal;  pDst->_12 = 0;
++    pDst->_20 = 0;       pDst->_21 = 0;       pDst->_22 = FX32_ONE;
++}
++#else
+ asm void MTX_RotZ33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     stmia r0!, {r2}
+     mov r3, #0
+@@ -40,4 +58,5 @@ asm void MTX_RotZ33_(register MtxFx33 *pDst, register fx32 sinVal, register fx32
+     str r1, [r0, #0xc]
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/fx/fx_mtx43_identity.c b/src/fx/fx_mtx43_identity.c
+index 9c43f06..b263254 100644
+--- a/src/fx/fx_mtx43_identity.c
++++ b/src/fx/fx_mtx43_identity.c
+@@ -7,6 +7,16 @@ void MTX_Copy43To44_(register const MtxFx43 *pSrc, register MtxFx44 *pDst);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Identity43_(register MtxFx43 *pDst) {
++    pDst->_00 = FX32_ONE; pDst->_01 = 0;        pDst->_02 = 0;
++    pDst->_10 = 0;        pDst->_11 = FX32_ONE; pDst->_12 = 0;
++    pDst->_20 = 0;        pDst->_21 = 0;        pDst->_22 = FX32_ONE;
++    pDst->_30 = 0;        pDst->_31 = 0;        pDst->_32 = 0;
++}
++#else
+ asm void MTX_Identity43_(register MtxFx43 *pDst) {
+     mov r2, #0x1000
+     mov r3, #0
+@@ -19,9 +29,23 @@ asm void MTX_Identity43_(register MtxFx43 *pDst) {
+     stmia r0!, {r1, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Copy43To44_(register const MtxFx43 *pSrc, register MtxFx44 *pDst) {
++    int r, c;
++
++    for (r = 0; r < 4; r++) {
++        for (c = 0; c < 3; c++) {
++            pDst->m[r][c] = pSrc->m[r][c];
++        }
++        pDst->m[r][3] = (r == 3) ? FX32_ONE : 0;
++    }
++}
++#else
+ asm void MTX_Copy43To44_(register const MtxFx43 *pSrc, register MtxFx44 *pDst) {
+     stmdb sp!, {r4}
+     mov r12, #0
+@@ -37,4 +61,5 @@ asm void MTX_Copy43To44_(register const MtxFx43 *pSrc, register MtxFx44 *pDst) {
+     ldmia sp!, {r4}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/fx/fx_mtx43_rot.c b/src/fx/fx_mtx43_rot.c
+index 1dead3f..76b359f 100644
+--- a/src/fx/fx_mtx43_rot.c
++++ b/src/fx/fx_mtx43_rot.c
+@@ -7,6 +7,16 @@ void MTX_RotY43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32 cos
+ #include <nitro/code16.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotX43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = FX32_ONE; pDst->_01 = 0;       pDst->_02 = 0;
++    pDst->_10 = 0;        pDst->_11 = cosVal;  pDst->_12 = sinVal;
++    pDst->_20 = 0;        pDst->_21 = (fx32)(0u - (u32)sinVal);   pDst->_22 = cosVal;
++    pDst->_30 = 0;        pDst->_31 = 0;       pDst->_32 = 0;
++}
++#else
+ asm void MTX_RotX43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     str r1, [r0, #0x14]
+     neg r1, r1
+@@ -24,9 +34,19 @@ asm void MTX_RotX43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32
+     stmia r0!, {r1, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotY43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = cosVal; pDst->_01 = 0;        pDst->_02 = (fx32)(0u - (u32)sinVal);
++    pDst->_10 = 0;      pDst->_11 = FX32_ONE; pDst->_12 = 0;
++    pDst->_20 = sinVal; pDst->_21 = 0;        pDst->_22 = cosVal;
++    pDst->_30 = 0;      pDst->_31 = 0;        pDst->_32 = 0;
++}
++#else
+ asm void MTX_RotY43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     str r1, [r0, #0x18]
+     mov r3, #0
+@@ -42,4 +62,5 @@ asm void MTX_RotY43_(register MtxFx43 *pDst, register fx32 sinVal, register fx32
+     stmia r0!, {r1, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/fx/fx_mtx43_scale.c b/src/fx/fx_mtx43_scale.c
+index d33086c..4395b9c 100644
+--- a/src/fx/fx_mtx43_scale.c
++++ b/src/fx/fx_mtx43_scale.c
+@@ -6,6 +6,16 @@ void MTX_Scale43_(register MtxFx43 *pDst, register fx32 x, register fx32 y, regi
+ #include <nitro/code16.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Scale43_(register MtxFx43 *pDst, register fx32 x, register fx32 y, register fx32 z) {
++    pDst->_00 = x; pDst->_01 = 0; pDst->_02 = 0;
++    pDst->_10 = 0; pDst->_11 = y; pDst->_12 = 0;
++    pDst->_20 = 0; pDst->_21 = 0; pDst->_22 = z;
++    pDst->_30 = 0; pDst->_31 = 0; pDst->_32 = 0;
++}
++#else
+ asm void MTX_Scale43_(register MtxFx43 *pDst, register fx32 x, register fx32 y, register fx32 z) {
+     stmia r0!, {r1}
+     mov r1, #0
+@@ -19,4 +29,5 @@ asm void MTX_Scale43_(register MtxFx43 *pDst, register fx32 x, register fx32 y,
+     stmia r0!, {r1, r2, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/fx/fx_mtx44_identity.c b/src/fx/fx_mtx44_identity.c
+index 7c29a4a..8cd4b49 100644
+--- a/src/fx/fx_mtx44_identity.c
++++ b/src/fx/fx_mtx44_identity.c
+@@ -7,6 +7,19 @@ void MTX_Copy44To43_(register const MtxFx44 *pSrc, register MtxFx43 *pDst);
+ #include <nitro/code32.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Identity44_(register MtxFx44 *pDst) {
++    int r, c;
++
++    for (r = 0; r < 4; r++) {
++        for (c = 0; c < 4; c++) {
++            pDst->m[r][c] = (r == c) ? FX32_ONE : 0;
++        }
++    }
++}
++#else
+ asm void MTX_Identity44_(register MtxFx44 *pDst) {
+     mov r2, #0x1000
+     mov r3, #0
+@@ -20,9 +33,22 @@ asm void MTX_Identity44_(register MtxFx44 *pDst) {
+     stmia r0!, {r1, r2}
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_Copy44To43_(register const MtxFx44 *pSrc, register MtxFx43 *pDst) {
++    int r, c;
++
++    for (r = 0; r < 4; r++) {
++        for (c = 0; c < 3; c++) {
++            pDst->m[r][c] = pSrc->m[r][c];
++        }
++    }
++}
++#else
+ asm void MTX_Copy44To43_(register const MtxFx44 *pSrc, register MtxFx43 *pDst) {
+     ldmia r0!, {r2, r3, r12}
+     add r0, r0, #4
+@@ -38,4 +64,5 @@ asm void MTX_Copy44To43_(register const MtxFx44 *pSrc, register MtxFx43 *pDst) {
+     stmia r1!, {r2, r3, r12}
+     bx lr
+ }
++#endif
+ // clang-format on
+diff --git a/src/fx/fx_mtx44_rot.c b/src/fx/fx_mtx44_rot.c
+index a1dbad0..b3c0125 100644
+--- a/src/fx/fx_mtx44_rot.c
++++ b/src/fx/fx_mtx44_rot.c
+@@ -8,6 +8,16 @@ void MTX_RotZ44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cos
+ #include <nitro/code16.h>
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++#include <nitro/fx/fx_const.h>
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotX44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = FX32_ONE; pDst->_01 = 0;       pDst->_02 = 0;                   pDst->_03 = 0;
++    pDst->_10 = 0;        pDst->_11 = cosVal;  pDst->_12 = sinVal;              pDst->_13 = 0;
++    pDst->_20 = 0;        pDst->_21 = (fx32)(0u - (u32)sinVal); pDst->_22 = cosVal;  pDst->_23 = 0;
++    pDst->_30 = 0;        pDst->_31 = 0;       pDst->_32 = 0;                   pDst->_33 = FX32_ONE;
++}
++#else
+ asm void MTX_RotX44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     str r2, [r0, #0x14]
+     str r2, [r0, #0x28]
+@@ -28,9 +38,19 @@ asm void MTX_RotX44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32
+     str r1, [r0]
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotY44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = cosVal; pDst->_01 = 0;        pDst->_02 = (fx32)(0u - (u32)sinVal); pDst->_03 = 0;
++    pDst->_10 = 0;      pDst->_11 = FX32_ONE; pDst->_12 = 0;                   pDst->_13 = 0;
++    pDst->_20 = sinVal; pDst->_21 = 0;        pDst->_22 = cosVal;              pDst->_23 = 0;
++    pDst->_30 = 0;      pDst->_31 = 0;        pDst->_32 = 0;                   pDst->_33 = FX32_ONE;
++}
++#else
+ asm void MTX_RotY44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     str r2, [r0]
+     str r2, [r0, #0x28]
+@@ -51,9 +71,19 @@ asm void MTX_RotY44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32
+     stmia r0!, {r1, r2, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+ 
+ // clang-format off
++#ifdef SDK_PORT_3DS
++/* GCC version (SDK_PORT_3DS). Same stores as the MWCC asm below, which the DS build keeps. */
++void MTX_RotZ44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal) {
++    pDst->_00 = cosVal; pDst->_01 = sinVal;   pDst->_02 = 0;                   pDst->_03 = 0;
++    pDst->_10 = (fx32)(0u - (u32)sinVal); pDst->_11 = cosVal;   pDst->_12 = 0;         pDst->_13 = 0;
++    pDst->_20 = 0;      pDst->_21 = 0;        pDst->_22 = FX32_ONE;            pDst->_23 = 0;
++    pDst->_30 = 0;      pDst->_31 = 0;        pDst->_32 = 0;                   pDst->_33 = FX32_ONE;
++}
++#else
+ asm void MTX_RotZ44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32 cosVal) {
+     str r2, [r0]
+     str r2, [r0, #0x14]
+@@ -73,4 +103,5 @@ asm void MTX_RotZ44_(register MtxFx44 *pDst, register fx32 sinVal, register fx32
+     stmia r0!, {r1, r2, r3}
+     bx lr
+ }
++#endif
+ // clang-format on
+-- 
+2.43.0
+
