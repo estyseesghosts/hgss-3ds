@@ -1,0 +1,107 @@
+From b398b55466787b8b6718add698faa7f808ceeaad Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <bootstrap@invalid>
+Date: Sat, 31 Oct 2026 03:33:13 +0000
+Subject: [PATCH] os: C versions of OS_IrqHandler and
+ OS_IrqHandler_ThreadSwitch (SDK_PORT_3DS)
+
+lib/NitroSDK/src/os/os_irqHandler.c has two MWCC asm functions the port cannot
+run. Under SDK_PORT_3DS:
+
+OS_IrqHandler (asm lines 28-61): returns if IME is 0 or IE & IF is 0 (the asm's
+`ldmeqia sp!, {pc}` exits, which skip the thread switch); otherwise the least
+significant pending enabled flag has the highest priority (the ARM9 clz loop
+isolates the lowest set bit), its flag is acknowledged (a write of 1 to IF on
+the DS; here `IF &= ~bit`, since the port's IF is plain memory), and the
+OS_IRQTable handler runs; the asm loads lr with OS_IrqHandler_ThreadSwitch so
+the thread switch runs after the handler returns, which the C does explicitly.
+The CPU mode and CPSR handling around the call is the port's NitroPort_RaiseIrq
+loop (port_os.c:60-85).
+
+OS_IrqHandler_ThreadSwitch (asm lines 63-146): wakes every thread in
+OSi_IrqThreadQueue (OS_WaitIrq sleepers; os_wait_irq.c:17), sets
+isNeedRescheduling, and if it is set switches to the highest-priority ready
+thread, saving and restoring CP state. NitroPort_IrqThreadSwitch
+(3ds_port/nitro/src/port_thread.c:283) implements exactly this on the port's
+thread model, so the C version calls it. Same split as pokeplatinum-3ds
+NitroSDK 0006+0012.
+
+The forward declaration `asm void OS_IrqHandler_ThreadSwitch(void);` at the top
+of the file is guarded with #ifndef SDK_PORT_3DS so GCC does not see it.
+
+Port follow-up (not in this patch): HGSS's public prototype is
+OS_IrqHandler(register OSIrqMask irq) (lib/include/nitro/os/irqHandler.h:6)
+whereas Platinum's is (void); port_os.c calls OS_IrqHandler() with no
+argument and must pass 0 against HGSS headers.
+
+The DS build is unchanged: gcc -E -P of the file without SDK_PORT_3DS is
+identical to the unpatched file (SDK_ARM9 and SDK_ARM7). Test:
+tests/sdk/irq_handler/run.sh (10 checks: IME gate, enable mask, priority,
+IF clear, call order, bit 31).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/os/os_irqHandler.c | 36 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/src/os/os_irqHandler.c b/src/os/os_irqHandler.c
+index f0b02c4..3824973 100644
+--- a/src/os/os_irqHandler.c
++++ b/src/os/os_irqHandler.c
+@@ -6,7 +6,9 @@
+ #include <nitro/os/context.h>
+ 
+ extern OSThreadQueue OSi_IrqThreadQueue;
++#ifndef SDK_PORT_3DS
+ asm void OS_IrqHandler_ThreadSwitch(void);
++#endif
+ 
+ 
+ #ifdef SDK_ARM9
+@@ -23,6 +25,39 @@ OSThreadQueue OSi_IrqThreadQueue = {NULL, NULL};
+ #include <nitro/itcm_begin.h>
+ #endif //SDK_ARM9
+ 
++#ifdef SDK_PORT_3DS
++extern void NitroPort_IrqThreadSwitch(void);
++
++// SDK_PORT_3DS: the port's emulated hardware calls this when an interrupt is raised
++// (NitroPort_RaiseIrq, port_os.c) with the CPU already in IRQ mode. Same rules as the asm below:
++// nothing happens unless IME is on and an enabled interrupt is pending; the least significant
++// pending flag has the highest priority, is acknowledged, and its OS_IRQTable handler runs; then
++// the thread switch runs. The early exits skip the thread switch, as the asm's `ldmeqia sp!, {pc}` do.
++void OS_IrqHandler(OSIrqMask irq) {
++    u32 pending;
++    u32 bit;
++
++    (void)irq;
++    if (reg_OS_IME == 0) {
++        return;
++    }
++    pending = reg_OS_IE & reg_OS_IF;
++    if (pending == 0) {
++        return;
++    }
++    bit = (u32)__builtin_ctz(pending);
++    reg_OS_IF &= ~(1u << bit); // hardware clears a flag by writing 1 to it; the port's IF is plain memory
++    OS_IRQTable[bit]();
++    OS_IrqHandler_ThreadSwitch();
++}
++
++// The asm wakes every thread in OSi_IrqThreadQueue (OS_WaitIrq sleepers), then, if rescheduling was
++// requested, switches to the highest-priority ready thread. The port implements exactly that in
++// port_thread.c (NitroPort_IrqThreadSwitch).
++void OS_IrqHandler_ThreadSwitch(void) {
++    NitroPort_IrqThreadSwitch();
++}
++#else
+ asm void OS_IrqHandler(register OSIrqMask irq) {
+     stmdb sp!, {lr}
+     mov r12, #HW_REG_BASE
+@@ -159,3 +194,4 @@ asm void OS_IrqHandler_ThreadSwitch(void) {
+     stmda sp!, {r0-r3, r12, lr}
+     ldmia sp!, {pc}
+ }
++#endif
+-- 
+2.43.0
+
