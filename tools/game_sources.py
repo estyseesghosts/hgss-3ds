@@ -176,10 +176,18 @@ def _nitro_excluded(rel: str) -> bool:
 
 def port_lib_sources(root: Path, variables: dict[str, str] | None = None) -> list[str]:
     """--lib-sources minus port-replaced SDK files, stubbed libraries
-    (Wi-Fi/DWC/VCT/CPS/dsprot) and newlib-replaced MSL_C."""
+    (Wi-Fi/DWC/VCT/CPS/dsprot), newlib-replaced MSL_C and the DS secure-area
+    images."""
     kept = []
     for source in lib_sources(root, variables):
         if source.startswith("lib/MSL_C/"):
+            continue
+        # lib/syscall/Makefile compiles exactly one _secure_$(GAME_CODE).c per
+        # game: an embedded MWCC asm image of the DS secure area, with SVC
+        # aliases the matching build adds afterwards. Nothing in the game or
+        # SDK references it, GCC cannot parse it, and emitting the firmware
+        # bytes into a PC/3DS binary would be both unused and wrong.
+        if source.startswith("lib/syscall/src/_secure_"):
             continue
         if any(source == r or source.startswith(r + "/") for r in STUBBED_LIB_ROOTS):
             continue

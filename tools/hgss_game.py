@@ -69,6 +69,13 @@ LINK_EXCLUDED_PREFIXES = ("lib/MSL_C/", "lib/NitroDWC/", "lib/NitroWiFi/",
                           "lib/libCPS/", "lib/libVCT/", "lib/dsprot/",
                           "lib/asm/msl_")
 
+# Pure-data objects from a stubbed library that the game's own link needs:
+# the lobby chat protocol tables, format strings and vtable/assert data.
+# Their functions remain stubbed (hgss/game/stubs); only the blobs are linked,
+# because the lobby code reads them directly. main.lsf names both.
+LINK_DATA_EXCEPTIONS = ("lib/NitroDWC/asm/dwc_lobby_chat_data.o",
+                        "lib/NitroDWC/asm/dwc_lobby_data.o")
+
 PORT_DEFINES = ["-DSDK_ARM9", "-DSDK_TS", "-DSDK_4M", "-DSDK_CODE_ARM",
                 "-DSDK_FINALROM", "-DNNS_FINALROM", "-DSDK_PORT_3DS"]
 
@@ -223,6 +230,9 @@ def link_objects(objects: list[Path], data: dict, out: Path) -> list[Path]:
     for obj in objects:
         rel = obj.relative_to(out / "obj").as_posix()
         if rel not in allowed:
+            continue
+        if rel in LINK_DATA_EXCEPTIONS:
+            result.append(obj)
             continue
         if any(rel.startswith(prefix) for prefix in LINK_EXCLUDED_PREFIXES):
             continue

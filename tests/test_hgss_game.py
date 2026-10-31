@@ -142,6 +142,23 @@ class LinkSelectionTests(unittest.TestCase):
                                "src/field/unlinked.o",
                                "lib/NitroSDK/src/os/os_thread.o"])
 
+    def test_link_objects_keeps_only_the_nitrodwc_lobby_data_blobs(self):
+        # The lobby chat protocol tables are pure data the game reads; the
+        # rest of NitroDWC stays stubbed and unlinked.
+        data = {"overlay_map": [{"objects": [
+            {"object": "lib/NitroDWC/asm/dwc_lobby_chat_data.o"},
+            {"object": "lib/NitroDWC/asm/dwc_lobby_data.o"},
+            {"object": "lib/NitroDWC/asm/dwc_gamespy_bss.o"},
+            {"object": "lib/NitroDWC/src/dwc_main.o"}]}]}
+        out = Path("/out")
+        rels = ("lib/NitroDWC/asm/dwc_lobby_chat_data.o",
+                "lib/NitroDWC/asm/dwc_lobby_data.o",
+                "lib/NitroDWC/asm/dwc_gamespy_bss.o",
+                "lib/NitroDWC/src/dwc_main.o")
+        got = [p.relative_to(out / "obj").as_posix()
+               for p in hg.link_objects([out / "obj" / r for r in rels], data, out)]
+        self.assertEqual(got, list(rels[:2]))
+
 
 class AppSourceTests(unittest.TestCase):
     def test_host_program_uses_the_pc_main(self):
@@ -184,7 +201,16 @@ class CommandTests(unittest.TestCase):
         self.assertIn("-Iup/include", cmd)
 
     def test_asm_flags_have_no_c_standard(self):
-        flags = hg.asm_flags("host32", Path("/up"), Path("/out"))
+        # include_flags() calls make_shim(), which creates symlinks under
+        # hgss_nitro.BUILD; keep them in a temp tree so a test run never
+        # re-points the real build/hgss-sdk at this fake checkout.
+        with tempfile.TemporaryDirectory() as tmp:
+            build = hg.nitro.BUILD
+            hg.nitro.BUILD = Path(tmp)
+            try:
+                flags = hg.asm_flags("host32", Path("/up"), Path("/out"))
+            finally:
+                hg.nitro.BUILD = build
         self.assertNotIn("-std=gnu99", flags)
         self.assertIn("-DSDK_PORT_3DS", flags)
         self.assertIn("-m32", flags)
