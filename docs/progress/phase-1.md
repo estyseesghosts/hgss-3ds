@@ -99,10 +99,11 @@ Caveat: `mi_memory.c` also defines `MI_Copy32B/36B/48B/64B` that the port's `mi_
 
 ## DS-side matching (rule 3)
 
-The tree with NitroSDK 0101+0201+0301 and NNS 0301 builds the HeartGold ROM `4fcded0e…` (0 failed checks). A rebuild with
-patches through 0901 is running (`/work/gate-hg.log`); result recorded below when it finished. Patch 1001 is not in
-that run: its text is inside `#ifdef SDK_PORT_3DS` and `gcc -E -P` of `types.h` without the macro is identical to the
-unpatched header (checked), but a full rebuild including it has not been run.
+**PASSED with the full SDK stack.** The tree with NitroSDK 0101-0901 and NNS 0301 (10 patches) builds the HeartGold ROM
+with SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37`, 0 failed checks, 18m43s (`/work/gate-hg.log`), so the patches do not
+change the DS build. Patch 1001 is not in that run: its text is inside `#ifdef SDK_PORT_3DS` and `gcc -E -P` of `types.h`
+without the macro is identical to the unpatched header (checked), but a full rebuild including it has not been run.
+SoulSilver was not re-run against the patched tree.
 
 ## Deviations from the plan and why
 
