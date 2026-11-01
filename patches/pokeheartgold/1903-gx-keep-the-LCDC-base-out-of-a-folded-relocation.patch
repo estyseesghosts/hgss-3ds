@@ -1,0 +1,40 @@
+From 94bff623303e991c3d93353bcf846fb160df281d Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sun, 1 Nov 2026 15:22:55 +0000
+Subject: [PATCH] gx: keep the LCDC base out of a folded relocation
+
+LcdcAddress() was written as NitroPort_LcdcVram + (address - 0x06800000). GCC reassociates it to (NitroPort_LcdcVram - 0x06800000) + address and emits the folded constant as a literal-pool word: an ABS32 relocation with addend -0x06800000. 3dsxtool treats any relocated word >= the image base as an absolute pointer, so the .3dsx holds 0xFA607000 there and the console loader rejects the file; the vendored 3dsxdump reports the same (return 7, Cannot write segment data). Read the base through a noinline call so the subtraction cannot fold. Port-only; the DS text is unchanged.
+---
+ lib/NitroSDK/src/gx/gx_load3d.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/lib/NitroSDK/src/gx/gx_load3d.c b/lib/NitroSDK/src/gx/gx_load3d.c
+index ff003a7..7b996bd 100644
+--- a/lib/NitroSDK/src/gx/gx_load3d.c
++++ b/lib/NitroSDK/src/gx/gx_load3d.c
+@@ -7,9 +7,21 @@
+  * fields as real host addresses so the copy expressions stay the DS ones. */
+ extern u8 NitroPort_LcdcVram[];
+ 
++/* The base is read through a noinline call on purpose. Written as
++ * NitroPort_LcdcVram + (address - 0x06800000), GCC reassociates it to
++ * (NitroPort_LcdcVram - 0x06800000) + address and folds the constant into a
++ * literal-pool word: an ABS32 relocation whose addend is -0x06800000. 3dsxtool
++ * takes every relocated word >= the image base for an absolute pointer, so the
++ * packed word becomes 0xFA607000 and the console loader rejects the .3dsx (the
++ * vendored 3dsxdump fails the same check). Keeping the subtraction on the far
++ * side of a call stops the fold; this runs once per bank load, not per pixel. */
++static __attribute__((noinline)) u32 LcdcBase(void) {
++    return (u32)NitroPort_LcdcVram;
++}
++
+ /* Zero means "this block is not mapped"; keep it zero, not array-0x06800000. */
+ static u32 LcdcAddress(u32 address) {
+-    return address ? (u32)(NitroPort_LcdcVram + (address - 0x06800000u)) : 0;
++    return address ? LcdcBase() + (address - 0x06800000u) : 0;
+ }
+ #endif
+ 
+-- 
+2.43.0
+

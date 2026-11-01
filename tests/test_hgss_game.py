@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from tools import hgss_game as hg  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
+
+# A .3dsx with no segments and no relocations: what a fake 3dsxtool writes so
+# the packaging step's validation has something sound to accept.
+MINIMAL_3DSX = (struct.pack("<IHHIIIIII", 0x58534433, 0x20, 8, 0, 0, 0, 0, 0, 0)
+                + bytes(24))
+
+
+def fake_3dsx_tool_script(payload: bytes) -> str:
+    """A stand-in 3dsxtool that writes `payload` to argv[2]."""
+    return ("#!/usr/bin/env python3\n"
+            "import pathlib, sys\n"
+            f"pathlib.Path(sys.argv[2]).write_bytes({payload!r})\n")
+
+
+def one_word_3dsx(code_word: int) -> bytes:
+    """A .3dsx whose code segment is one word, marked as an absolute reloc."""
+    header = struct.pack("<IHHIIIIII", 0x58534433, 0x20, 8, 0, 0, 4, 0, 0, 0)
+    heads = struct.pack("<II", 1, 0) + struct.pack("<II", 0, 0) + struct.pack("<II", 0, 0)
+    return header + heads + struct.pack("<I", code_word) + struct.pack("<HH", 0, 1)
 
 DATA = {
     "c_sources": ["src/main.c", "src/battle/foo.c"],
@@ -626,7 +646,7 @@ class ThreeDsxTests(unittest.TestCase):
             tool = root / "tools" / "bin" / "3dsxtool"
             smdh_tool = root / "tools" / "bin" / "smdhtool"
             tool.parent.mkdir(parents=True)
-            tool.write_text("#!/bin/sh\nprintf 'dsx' > \"$2\"\n")
+            tool.write_text(fake_3dsx_tool_script(MINIMAL_3DSX))
             tool.chmod(0o755)
             smdh_tool.write_text(
                 "#!/bin/sh\nfor a in \"$@\"; do last=$a; done\nprintf 'smdh' > \"$last\"\n")
@@ -643,7 +663,7 @@ class ThreeDsxTests(unittest.TestCase):
                 else:
                     os.environ["DEVKITPRO"] = old
             self.assertEqual(dsx, root / "pokeheartgold.3dsx")
-            self.assertEqual(dsx.read_bytes(), b"dsx")
+            self.assertEqual(dsx.read_bytes(), MINIMAL_3DSX)
             self.assertEqual((root / "pokeheartgold-3ds.smdh").read_bytes(), b"smdh")
 
     def test_packages_next_to_the_elf_without_the_3ds_suffix(self):
@@ -651,7 +671,7 @@ class ThreeDsxTests(unittest.TestCase):
             root = Path(tmp)
             tool = root / "tools" / "bin" / "3dsxtool"
             tool.parent.mkdir(parents=True)
-            tool.write_text("#!/bin/sh\nprintf 'dsx' > \"$2\"\n")
+            tool.write_text(fake_3dsx_tool_script(MINIMAL_3DSX))
             tool.chmod(0o755)
             elf = root / "pokeheartgold-3ds.elf"
             elf.write_bytes(b"elf")
@@ -665,7 +685,68 @@ class ThreeDsxTests(unittest.TestCase):
                 else:
                     os.environ["DEVKITPRO"] = old
             self.assertEqual(dsx, root / "pokeheartgold.3dsx")
-            self.assertEqual(dsx.read_bytes(), b"dsx")
+            self.assertEqual(dsx.read_bytes(), MINIMAL_3DSX)
+
+
+class ThreeDsxValidationTests(unittest.TestCase):
+    """The check that caught the folded -0x06800000 relocation."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def write(self, name, payload):
+        path = self.root / name
+        path.write_bytes(payload)
+        return path
+
+    def test_clean_file_has_no_problems(self):
+        self.assertEqual(hg.validate_3dsx(self.write("a.3dsx", MINIMAL_3DSX)), [])
+
+    def test_absolute_word_outside_the_image_is_reported(self):
+        # 0xfa607000 is exactly what NitroPort_LcdcVram - 0x06800000 packs to.
+        path = self.write("bad.3dsx", one_word_3dsx(0xFA607000))
+        problems = hg.validate_3dsx(path)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("0xfa607000", problems[0])
+        self.assertIn("absolute", problems[0])
+
+    def test_an_ordinary_pointer_is_accepted(self):
+        self.assertEqual(hg.validate_3dsx(self.write("ok.3dsx", one_word_3dsx(0x00123456))), [])
+
+    def test_relative_word_with_a_bad_subtype_is_reported(self):
+        header = struct.pack("<IHHIIIIII", 0x58534433, 0x20, 8, 0, 0, 4, 0, 0, 0)
+        heads = struct.pack("<II", 0, 1) + struct.pack("<II", 0, 0) + struct.pack("<II", 0, 0)
+        path = self.write("rel.3dsx", header + heads + struct.pack("<I", 0x20000000)
+                          + struct.pack("<HH", 0, 1))
+        problems = hg.validate_3dsx(path)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("relative", problems[0])
+
+    def test_garbage_is_not_a_3dsx(self):
+        with self.assertRaisesRegex(ValueError, "magic"):
+            hg.validate_3dsx(self.write("x.3dsx", b"dsx"))
+
+    def test_packaging_refuses_a_file_the_loader_would_reject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tool = root / "tools" / "bin" / "3dsxtool"
+            tool.parent.mkdir(parents=True)
+            tool.write_text(fake_3dsx_tool_script(one_word_3dsx(0xFA607000)))
+            tool.chmod(0o755)
+            elf = root / "pokeheartgold-3ds.elf"
+            elf.write_bytes(b"elf")
+            old = os.environ.get("DEVKITPRO")
+            os.environ["DEVKITPRO"] = str(root)
+            try:
+                with self.assertRaises(hg.ThreeDsxError):
+                    hg.package_three_dsx(elf, "3ds")
+            finally:
+                if old is None:
+                    os.environ.pop("DEVKITPRO", None)
+                else:
+                    os.environ["DEVKITPRO"] = old
 
 
 class RomHeaderTests(unittest.TestCase):

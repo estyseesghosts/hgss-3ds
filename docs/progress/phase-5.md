@@ -68,6 +68,36 @@ stop and ask before adding a new tool dependency. The `.3dsx` path needs no
 new dependency. The banner and icon must come from the user's cartridge at
 build time into `build/`, never git.
 
+## First hardware run: a packaging defect, found and fixed
+
+The first `.3dsx` on a New 3DS never started: Luma wrote
+`crash_dump_00000001.dmp` with an **undefined instruction** in the process
+named `loader`, pc at a `udf #0`. Decoding the dump (Luma's
+`ExceptionDumpHeader`: 40-byte header, 92-byte register block, 96-byte code
+window, then the stack and `processName`/`titleId`) showed the fault was in
+the console's Loader, not in game code — our image is `0x00100000`-
+`0x009263ec` and never appears, and `log.txt` was never written.
+
+Cause: **one word in the `.3dsx` lied about being a pointer.** Patch 1406's
+`LcdcAddress()` was `NitroPort_LcdcVram + (address - 0x06800000)`; GCC
+reassociated it to `(NitroPort_LcdcVram - 0x06800000) + address`, so a
+literal-pool word held an ABS32 relocation with addend `-0x06800000`,
+resolving to `0xFA607000` at ELF `0x008e5a20`. `3dsxtool` treats any
+relocated word at or above the image base as an absolute pointer, so it packed
+that word as a pointer ~4 GB outside the image and the Loader rejected it.
+`3dsxdump` refuses both earlier builds with `Cannot write segment data!`
+(return 7), which is the same check.
+
+Fixes: patch **1903** keeps the base read behind a `noinline` call so the
+subtraction cannot fold; `tools/hgss_game.py` now runs `validate_3dsx()` on the
+packaged file and fails the build instead of shipping it. Verified: the new
+`.3dsx` passes `3dsxdump` (`CODE 2087 pages, RODATA 109, DATA 13, BSS 3977`)
+and `validate_3dsx` reports 0 problems, while the old one reports 1.
+
+**Every host check passed the whole time** — the PC build, the port tests and
+the DS gate never look at the `.3dsx`. That is why this is now a build-time
+check rather than a note.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the

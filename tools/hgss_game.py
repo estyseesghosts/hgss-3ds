@@ -36,6 +36,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -686,6 +687,80 @@ def make_smdh(binary: Path) -> Path | None:
     return smdh
 
 
+class ThreeDsxError(RuntimeError):
+    """The packaged .3dsx would be rejected by the console's loader."""
+
+
+def validate_3dsx(path: Path) -> list[str]:
+    """Problems a 3DS loader meets relocating this .3dsx; [] when it is sound.
+
+    Raises ValueError when the file is not a .3dsx at all (truncated or foreign
+    output is a packaging bug, not a clean result).
+
+    Why this exists: 3dsxtool decides a word is an absolute pointer because its
+    value is at least the image base (0x00100000). A word that is really
+    "symbol - 0x06800000" -- what GCC makes of
+    NitroPort_LcdcVram + (address - 0x06800000) -- is therefore packed as a
+    pointer about 4 GB below the image, and the console's Loader aborts while
+    relocating it (Luma: undefined instruction in process "loader"). The
+    vendored 3dsxdump refuses the same file; this reproduces its checks. They
+    must run before an artifact reaches a card: the whole PC build and every
+    host test pass with the bad word in place.
+    """
+    data = Path(path).read_bytes()
+    if len(data) < 0x20 or data[:4] != b"3DSX":
+        raise ValueError("not a 3dsx (bad or missing magic)")
+    header_size, reloc_hdr_size = struct.unpack_from("<HH", data, 4)
+    code, rodata, data_size, bss = struct.unpack_from("<IIII", data, 0x10)
+    if header_size < 0x20 or reloc_hdr_size < 8 or reloc_hdr_size % 4:
+        raise ValueError(
+            f"implausible header (header {header_size:#x}, relocs {reloc_hdr_size:#x})")
+    if data_size < bss:
+        raise ValueError("data segment smaller than its bss")
+    tables = reloc_hdr_size // 4
+    stored = (code, rodata, data_size - bss)
+    segment_off = header_size + 3 * reloc_hdr_size
+    if segment_off + sum(stored) > len(data):
+        raise ValueError("truncated segments")
+    sizes = [(code + 0xFFF) & ~0xFFF, (rodata + 0xFFF) & ~0xFFF,
+             (data_size + 0xFFF) & ~0xFFF]
+    counts = [struct.unpack_from(f"<{tables}I", data, header_size + 8 * i)
+              for i in range(3)]
+    bases = [0x00100000, 0x00100000 + sizes[0],
+             0x00100000 + sizes[0] + sizes[1]]
+
+    cursor = segment_off + sum(stored)
+    problems: list[str] = []
+    start = 0
+    for index in range(3):
+        words = bytearray(data[segment_off + start:segment_off + start + stored[index]])
+        words += bytes(sizes[index] - len(words))
+        start += stored[index]
+        limit = sizes[index] // 4
+        for table in range(2):
+            position = 0
+            for _ in range(counts[index][table]):
+                if cursor + 4 > len(data):
+                    raise ValueError("truncated relocation table")
+                skip, patch = struct.unpack_from("<HH", data, cursor)
+                cursor += 4
+                position += skip
+                for _ in range(patch):
+                    if position >= limit:
+                        break
+                    value = struct.unpack_from("<I", words, position * 4)[0]
+                    where = (f"segment {index} word {position:#x} "
+                             f"(address {bases[index] + position * 4:#010x})")
+                    if table == 0 and value >> 28:
+                        problems.append(f"{where} is marked absolute but holds "
+                                        f"{value:#010x} (outside the image)")
+                    elif table == 1 and (value >> 28) > 1:
+                        problems.append(f"{where} is marked relative but holds "
+                                        f"{value:#010x}")
+                    position += 1
+    return problems
+
+
 def package_three_dsx(binary: Path, target: str) -> Path | None:
     """Package a linked 3DS ELF as a .3dsx next to it, or do nothing.
 
@@ -709,6 +784,18 @@ def package_three_dsx(binary: Path, target: str) -> Path | None:
         print(f"   note: 3dsxtool failed: {(proc.stderr or proc.stdout).strip()}")
         return None
     print(f"   packaged {dsx} ({dsx.stat().st_size} bytes)")
+    try:
+        problems = validate_3dsx(dsx)
+    except ValueError as exc:
+        print(f"   error: {dsx.name} is not a usable .3dsx: {exc}")
+        raise ThreeDsxError(str(exc)) from exc
+    if problems:
+        print(f"   error: {dsx.name} would be rejected by the console's loader "
+              f"({len(problems)} problem{'s' if len(problems) != 1 else ''}):")
+        for problem in problems[:5]:
+            print(f"     {problem}")
+        print("     the loader aborts on this; fix the relocation, not the .3dsx")
+        raise ThreeDsxError(problems[0])
     return dsx
 
 
@@ -1127,7 +1214,11 @@ def main(argv: list[str] | None = None) -> int:
     (out / "link.log").write_text(text, encoding="utf-8")
     if proc.returncode == 0 and binary.is_file():
         print(f"   linked {binary}")
-        package_three_dsx(binary, args.target)
+        try:
+            package_three_dsx(binary, args.target)
+        except ThreeDsxError as exc:
+            print(f"   the .3dsx was not accepted: {exc}")
+            return 1
         return 0
     print(f"   link failed ({len(unresolved)} unresolved symbols); log: {out / 'link.log'}")
     for name in unresolved:

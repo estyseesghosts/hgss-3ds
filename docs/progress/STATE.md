@@ -1,7 +1,7 @@
 # Current state
 
 Last verified: **2026-11-01 (session 7)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
-the tree at **76 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 56). Everything below that
+the tree at **77 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 57). Everything below that
 says "verified" was run on that tree on that date. If you change the patch stack, rerun the commands
 and update this page; do not trust it blindly.
 
@@ -81,6 +81,30 @@ generates the Wi-Fi stand-ins, compiles the program's MSL/C++/MB runtimes and it
 links. Both binaries are clean. The last 34 symbols were: MSL soft-float/string (11, bit-pattern ABI),
 C++ runtime (6, explicit MWCC-mangled definitions), multiboot (12, documented stand-ins) and five
 Pokéwalker interior aliases (a missing build stage, now run).
+
+## First hardware run: what it found
+
+The first `.3dsx` never started. Luma wrote a dump whose registers put the
+fault at a `udf #0` inside the console's **`loader`** process, not in game code
+(our image is `0x00100000`-`0x009263ec` and never appears; `log.txt` was never
+written).
+
+One word in the `.3dsx` lied about being a pointer: patch 1406's `LcdcAddress()`
+was `NitroPort_LcdcVram + (address - 0x06800000)`, which GCC reassociates to
+`(NitroPort_LcdcVram - 0x06800000) + address`. The folded constant became an
+ABS32 relocation with addend `-0x06800000`, resolving to `0xFA607000`
+(ELF `0x008e5a20`); `3dsxtool` packs any relocated word at or above the image
+base as an absolute pointer, so the Loader aborted. `3dsxdump` refuses both
+earlier builds with `Cannot write segment data!`.
+
+Fixed by patch **1903** (base read behind a `noinline` call) plus
+`validate_3dsx()` in `tools/hgss_game.py`, which now fails the build when a
+packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
+(`CODE 2087 pages, RODATA 109, DATA 13, BSS 3977`).
+
+**The DS gate has not been re-run at 77 patches** — patches 1901/1902/1903 are
+all `SDK_PORT_3DS`-only, but the gate is the evidence, so it must be re-run
+before the count is trusted.
 
 ## Next actions, in order
 
