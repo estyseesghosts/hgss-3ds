@@ -708,7 +708,10 @@ def link_command(cc: str, target: str, app_objects: list[Path],
                  "-Wl,--wrap=OS_WaitIrq"]
         extra = ["-lm", "-pthread", *wraps]
         if SANITIZE:
-            extra += SANITIZE_FLAGS
+            # ASan's runtime references the C++ allocation helpers through
+            # the MSL new objects; the normal link deliberately has no
+            # libstdc++.
+            extra += SANITIZE_FLAGS + ["-lstdc++"]
     else:
         # devkitARM's crt0 (3dsx.specs) provides _start and calls main; the
         # program is a normal libctru/citro3d one.
