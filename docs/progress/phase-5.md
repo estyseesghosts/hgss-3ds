@@ -137,6 +137,50 @@ now fails if `WaitForGame` ever polls APT again.
 If APT really did deliver a close/cancel at launch, the next run will say so
 in `log.txt` instead of dying silently, and that is the thing to chase.
 
+## Third hardware run: a join that said "ended" while the thread ran
+
+With APT left to the game thread, main no longer killed the run itself. The
+next console log:
+
+```text
+[0] [heartgold] starting the game
+[0] the game's thread ended at frame 0
+[0] [nitro] not implemented: DWC_CheckUserData
+[0] stopping (frame 0)
+```
+
+`WaitForGame`'s `threadJoin` returned success, so libctru reported the thread
+ended — but a game-thread line (`DWC_CheckUserData`, the port's Wi-Fi stub
+during the game's early init) follows it, so the thread was inside
+`NitroMain`. libctru's side is:
+
+```c
+Result threadJoin(Thread t, u64 timeout) {
+    if (!t || t->finished) return 0;
+    return svcWaitSynchronization(t->handle, timeout);
+}
+```
+
+so success means `Thread.finished` was already set (or the pointer was bad),
+not that the thread returned. Nothing we know of calls `threadExit` on it: the
+port never does, and the shell's two call sites both log first and neither
+line is in the file.
+
+Both plausible causes are now handled:
+
+- **A clobbered `Thread.finished`.** libctru allocates the `Thread` block at
+  the base of the same allocation the stack grows down into, so an overflowing
+  host stack writes into it. The game thread's stack went from 512 KiB to
+  1 MiB, and the log now records which size it used.
+- **A join result that cannot be trusted for "has it ended".** `WaitForGame`
+  polls the shell's own `sGameThreadAlive` (set and cleared inside
+  `GameThread`) and logs `threadJoin says the game's thread ended, but it is
+  still running` if the two disagree.
+
+The log had no lock either, while two threads wrote it; stdio is not
+reentrant, so line order could not be trusted. There is a `LightLock` around
+every line now.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the

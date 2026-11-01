@@ -45,7 +45,12 @@
 #define INI_PATH DATA_DIR "/port.ini"
 #define DEFAULT_SCRIPT DATA_DIR "/script.txt"
 
-#define GAME_STACK_SIZE (512 * 1024)
+/* libctru puts the Thread block at the base of the same allocation the stack
+ * grows down into, so an overflow here corrupts the very struct that
+ * threadJoin reads. The DS game's stack is its own, but the port's frames ride
+ * on this one; 1 MiB costs nothing (the heap has tens of MB) and takes the
+ * "did we silently overwrite Thread.finished?" question off the table. */
+#define GAME_STACK_SIZE (1024 * 1024)
 #define LOG_RING 64
 #define LOG_LINE 220
 
@@ -59,6 +64,9 @@ void NitroPort_CardFlush(void);
 int NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom) __attribute__((weak));
 
 static FILE *sLog;
+static LightLock sLogLock;
+static bool sLogLockReady;
+static volatile bool sGameThreadAlive;
 static unsigned long sFrame;
 static volatile bool sQuit;
 static volatile bool sPaused;
@@ -116,12 +124,22 @@ void NitroPort_Log(const char *fmt, ...)
     vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
 
+    /* Two threads write this file (the game's and the main one). stdio is not
+     * reentrant, and without the lock a line can be lost or torn -- the
+     * hardware log showed a game-thread line after the main thread had
+     * already declared the thread ended. */
+    if (sLogLockReady) {
+        LightLock_Lock(&sLogLock);
+    }
     fprintf(stderr, "[%lu] %s\n", sFrame, line);
     if (sLog != NULL) {
         fprintf(sLog, "[%lu] %s\n", sFrame, line);
         fflush(sLog);
     }
     LogLine(line);
+    if (sLogLockReady) {
+        LightLock_Unlock(&sLogLock);
+    }
 }
 
 /* The 3DS's buttons and circle pad, as the DS's PAD bits. */
@@ -421,8 +439,14 @@ static void GameThread(void *arg)
     static ERRF_ExceptionData exceptionData;
     static uint8_t exceptionStack[8192] __attribute__((aligned(16)));
 
+    sGameThreadAlive = true;
     threadOnException(HgssOnException, exceptionStack + sizeof(exceptionStack), &exceptionData);
     Heartgold_Run((const HeartgoldSettings *)arg);
+    /* Reaching here means NitroMain returned, which the game does not do in
+     * normal play. Say so: this flag, not libctru's thread state, is what the
+     * main thread trusts (see WaitForGame). */
+    NitroPort_Log("the game's thread is returning (frame %lu)", sFrame);
+    sGameThreadAlive = false;
 }
 
 /* APT hooks: HOME and sleep pause, wake resumes. */
@@ -449,29 +473,38 @@ static void AptHook(APT_HookType hook, void *param)
 static void WaitForGame(Thread thread)
 {
     unsigned long quiet = 0;
+    bool premature = false;
 
     /* APT belongs to the game thread: NitroPort_OnFrame calls aptMainLoop
      * once a frame, which is what libctru documents ("call this at the
-     * beginning of every frame"). Calling it here as well is that
-     * function's misuse, and a poll 100 ms after start returned false while
-     * the game was still loading overlays: the program stopped at frame 0
-     * with the game thread alive (docs/progress/phase-5.md). Come to think
-     * of it, this loop only has to wait for the thread. */
-    while (!sQuit) {
-        if (R_SUCCEEDED(threadJoin(thread, 100 * 1000000LL))) {
-            NitroPort_Log("the game's thread ended at frame %lu", sFrame);
-            threadFree(thread);
-            return;
+     * beginning of every frame"). Calling it here as well is that function's
+     * misuse, and a poll 100 ms after start returned false while the game was
+     * still loading overlays: the program stopped at frame 0 with the game
+     * thread alive (docs/progress/phase-5.md).
+     *
+     * The thread's own flag decides when it has ended, not threadJoin():
+     * libctru returns success as soon as its Thread.finished flag is set, and
+     * the hardware log showed that happening while the game was still inside
+     * NitroMain (a game-thread line followed it). */
+    while (!sQuit && sGameThreadAlive) {
+        if (R_SUCCEEDED(threadJoin(thread, 50 * 1000000LL)) && sGameThreadAlive) {
+            if (!premature) {
+                premature = true;
+                NitroPort_Log("threadJoin says the game's thread ended, but it is still running");
+            }
+            svcSleepThread(20 * 1000000LL);   /* (do not spin on a stale join) */
         }
-        if (sFrame == 0 && ++quiet == 100) {
+        if (sFrame == 0 && ++quiet == 200) {
             NitroPort_Log("still starting: no frame after 10 s");
         }
     }
-    /* The game thread saw the close request and left; let it finish. */
-    NitroPort_Log("closing at frame %lu", sFrame);
-    if (R_SUCCEEDED(threadJoin(thread, 1000 * 1000000LL))) {
-        threadFree(thread);
+    if (!sGameThreadAlive) {
+        NitroPort_Log("the game's thread ended at frame %lu", sFrame);
+    } else {
+        NitroPort_Log("closing at frame %lu", sFrame);
     }
+    threadJoin(thread, 2000 * 1000000LL);
+    threadFree(thread);
 }
 
 /* The error screen when the pack is missing or rejected. */
@@ -513,6 +546,8 @@ int main(int argc, char **argv)
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
+    LightLock_Init(&sLogLock);
+    sLogLockReady = true;
     sLog = fopen(LOG_PATH, "w");
 
     NitroPort_Log("pokeheartgold-3ds starting");
@@ -540,7 +575,7 @@ int main(int argc, char **argv)
         if (thread == NULL) {
             NitroPort_Log("Can't start the game's thread.");
         } else {
-            NitroPort_Log("running the game");
+            NitroPort_Log("running the game (thread stack %d KiB)", GAME_STACK_SIZE / 1024);
             WaitForGame(thread);
         }
         aptUnhook(&hook);

@@ -551,6 +551,8 @@ class OverlayCheckTests(unittest.TestCase):
         wait = text[text.index("static void WaitForGame"):]
         wait = code(wait[:wait.index("\n}")])
         self.assertNotIn("aptMainLoop", wait)
+        # The thread's own flag decides it ended, not threadJoin's result.
+        self.assertIn("sGameThreadAlive", wait)
         frame = text[text.index("void NitroPort_OnFrame"):]
         frame = code(frame[:frame.index("\n}")])
         self.assertIn("aptMainLoop", frame)
