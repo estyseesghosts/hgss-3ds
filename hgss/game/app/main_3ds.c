@@ -73,9 +73,6 @@ void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
 int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
 void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
-/* How many 3D images the port has produced: a change here means the engine
- * showing the 3D must be composited again, whatever its 2D state says. */
-uint32_t NitroPort_Gx3dImageCount(void);
 void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 
@@ -200,21 +197,18 @@ static void DrawFrame(void)
     u16 width = 0, height = 0;
     uint8_t *topFb;
     uint8_t *bottomFb;
-    static uint32_t last3dImages;
-    uint32_t images = NitroPort_Gx3dImageCount();
     int aOnTop = NitroPort_EngineAOnTop();
 
-    /* Engine A carries the 3D layer. A new 3D image is a change even when the
-     * engine's 2D inputs are identical, and the port's own renderer only
-     * knows that when a particular DISPCNT combination is set (its uses3D
-     * test); the field does not always set it, and the field froze. Comparing
-     * the image count here covers every case. */
-    if (images != last3dImages) {
-        last3dImages = images;
-        NitroPort_Render2D(0, aOnTop ? top : bottom);
-    } else {
-        (void)NitroPort_Render2DIfChanged(0, aOnTop ? top : bottom);
-    }
+    /* Engine A is the only engine that can show the 3D layer, and its
+     * picture changes whenever a new 3D image is published -- which the port
+     * only does lazily, so nothing outside it can detect the change in
+     * advance. Trying to skip A therefore blacked out the 3D while the 2D
+     * text kept drawing (see docs/progress/phase-5.md). A is composed every
+     * frame, exactly as NitroPort_RenderScreens does.
+     *
+     * Engine B is pure 2D: whatever it does not change costs nothing, and
+     * that is where the savings come from. */
+    NitroPort_Render2D(0, aOnTop ? top : bottom);
     (void)NitroPort_Render2DIfChanged(1, aOnTop ? bottom : top);
 
     /* Both screens are blitted every frame, always. The framebuffer is

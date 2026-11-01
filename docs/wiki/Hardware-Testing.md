@@ -80,6 +80,29 @@ not read exFAT).
 3. The app starts from `sdmc:/3ds/pokeheartgold/`. `log.txt` is rewritten on
    every start; copy it off after a run.
 
+## Checking the artifact before it reaches the card
+
+Two things go wrong silently on the host and only show on the console, so
+check the file you are about to copy:
+
+```bash
+# the packaging step already ran this and failed the build if it found a
+# problem (tools/hgss_game.py: validate_3dsx)
+/opt/devkitpro/tools/bin/3dsxdump build/game-3ds/pokeheartgold.3dsx /tmp/out.bin
+#   CODE / RODATA / DATA / BSS page counts and exit 0 is what you want
+```
+
+A rejected file prints `Cannot write segment data!`; the console then aborts
+in its Loader with an undefined-instruction dump naming the process `loader`.
+See [3DS-Pitfalls](3DS-Pitfalls.md#one-relocation-held-symbol---0x06800000).
+
+The frame-time instrumentation is in: every 600 frames the shell writes a
+`FRAMETIME` line, and `tools/frametime_report.py log.txt` turns a whole log
+into the budget table (mean/min/p95/max per subsystem, the frame rate, and how
+many frames exceeded 16.7 ms). `audio_us` is filled by the audio thread once
+audio is wired; `draw_us` includes the flip wait, so `total_us` is the number
+that decides whether it feels smooth.
+
 ## Logs over ftpd
 
 If the console runs `ftpd` (Homebrew Launcher), from the host:
@@ -107,6 +130,32 @@ map the pc with `addr2line -e build/game-3ds/pokeheartgold-3ds.elf <pc>`.
    `gdb-multiarch` is not installed in the container by default; install it
    only if you want this path (it is a host tool, not a build dependency).
 3. Break on `Heartgold_Run`, `NitroMain` or `HgssOnException` as needed.
+
+## Reading `log.txt`
+
+The first lines say what the build thinks it is running on and what it
+connected:
+
+```text
+[perf] New 3DS: 804 MHz + L2 requested     (or "268 MHz, the speedup is New-3DS only")
+NDSP started
+audio: 32768 Hz stereo, 4 blocks of 512 frames
+```
+
+Then the run. These lines mean specific things, and each one is there because
+a failure used to be ambiguous:
+
+| Line | Meaning |
+| --- | --- |
+| `still starting: no frame after 10 s` | Stuck inside the game's init; nothing killed it. |
+| `the HOME menu asked to close (frame N)` | APT delivered a close; the shell stops in order. |
+| `the game's thread is returning (frame N)` | `NitroMain` returned by itself. |
+| `threadJoin says the game's thread ended, but it is still running` | libctru's join lied; the shell's own flag keeps the run alive (expected on this port). |
+| `=== exception (type N) pc …` | A real fault in game code; map the pc with `addr2line`. |
+| `audio: N dropped frames of M` (at exit) | `N` large relative to `M` means the DSP was starved. |
+| `Can't start: …` | The pack or manifest is missing, damaged or from another build. |
+
+Send `log.txt` whole; nothing on that page needs filtering.
 
 ## The scripted New 3DS run
 

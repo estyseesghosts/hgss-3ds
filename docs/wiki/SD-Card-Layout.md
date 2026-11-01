@@ -21,7 +21,18 @@ Both folders may also contain:
 | File | What it is |
 | --- | --- |
 | `manifest.json` | The pack's index sidecar: the ROM's SHA-1, and each file's original NitroFS ID, path and size. Written by the extractor; copy it **with** the pack. |
-| `port.ini` | Optional per-installation settings for the shell (read in a later phase; the Phase 2 shell starts with the console's profile). |
+| `port.ini` | Optional `key=value` settings. The only key today is `script=PATH` (absolute, `sdmc:/…`, or a name resolved inside the folder). Without it the shell still picks up `script.txt` from the folder on its own. |
+| `script.txt` | Optional `tests/inputs`-style script the shell replays, frame for frame. |
+
+The DSP firmware is not in that folder: libctru loads a fixed path.
+
+| File | What it is |
+| --- | --- |
+| `sdmc:/3ds/dspfirm.cdc` | Your console's own DSP dump. Without it the game runs silent and `log.txt` says so; it is not an error. |
+
+The `.3dsx` itself is the program, not a ROM: it goes next to the folder, at
+`sdmc:/3ds/pokeheartgold.3dsx`, where the Homebrew Launcher lists it. Its SMDH
+metadata is embedded by `3dsxtool`, so no `.smdh` belongs on the card.
 
 The save is a raw **524,288-byte** file, exactly as an emulator keeps it, so
 a save can be moved between the port, an emulator and a flash card with no

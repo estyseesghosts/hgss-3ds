@@ -1,6 +1,10 @@
 # Phase 5 progress
 
-Status: **in progress — software side under construction; every hardware item is pending the user.**
+Status: **runs on hardware.** The game boots, plays the intro, reaches Oak's
+speech and the player's house, draws both screens and plays audio, at roughly
+58 Hz in the scenes measured. Remaining Phase 5 exits: the field's 3D layer
+(fix built, not yet confirmed), a full-speed run through Oak's speech, the
+save round-trip, the Old 3DS decision and the `.cia` decision.
 
 Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
 
@@ -24,9 +28,12 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   the main thread keeps `aptMainLoop` serviced.
 - **Crash log** `threadOnException` writes the exception type, r0-r12/sp/pc/
   cpsr, the last 64 log lines and 16 stack words to `log.txt`, then stops.
-- **NDSP** starts only when `dspfirm.cdc` loads; otherwise the game runs
-  silent, `log.txt` says so, and the pak-error screen adds a sound note. It
-  never stops the game. Audio mixing into NDSP is not wired yet (see gaps).
+- **Audio** starts only when `dspfirm.cdc` loads. `AudioThread` feeds the DS
+  mixer (`NitroPort_SoundRender`, 32768 Hz stereo) into NDSP in four 512-frame
+  blocks, and `NitroPort_OnFrame` pumps the ARM7's alarm replies on the game
+  thread. The exit log prints `audio: N dropped frames of M`. Without
+  `dspfirm.cdc` the game runs silent, `log.txt` says so, and nothing else
+  changes.
 - **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (9,103,728 bytes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon).
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
@@ -41,6 +48,30 @@ The PC shell and `NitroPort_RenderScreens` already follow `POWCNT1` bit 15
 (which is what `GX_SetDispSelect` writes): engine A to the top or bottom,
 engine B to the other. A dedicated mid-run flip test is still to land; see
 the gap list.
+
+### Session summary: eight runs, eight bugs
+
+The first hardware session found, in order: a folded relocation the console's
+Loader rejected; `main()` killing a still-initialising game through
+`aptMainLoop`; a `threadJoin` that reported an end while the thread ran; a
+weak hook that bound to NULL so nothing was ever drawn; the missing New 3DS
+clock (13 Hz); the double-buffer blit rule (flicker); engine A's 3D layer
+(black field); and the console painted over the bottom screen. Each has an
+entry with symptom, cause and rule in
+[../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md).
+
+Per-run results, condensed:
+
+| Run | Result |
+| --- | --- |
+| 1 | Loader `udf #0`; the `.3dsx` held one impossible relocation |
+| 2 | Started, then stopped at frame 0 — `aptMainLoop` polled from the wrong thread |
+| 3 | `threadJoin` lied; the shell's own flag was added |
+| 4 | 39,070 frames, black screens: weak hook bound to NULL |
+| 5 | 13.2 Hz: New 3DS clock never requested |
+| 6 | 35.7 Hz after the speedup |
+| 7 | 58.7 Hz with audio (0.4% dropped) — and three display bugs |
+| 8 | Flicker and console gone; field 3D still black, rule fixed |
 
 ### Frame-time instrumentation (P5-C)
 
@@ -373,6 +404,28 @@ skip and one older:
    over the bottom screen -- visible in the owner's photo as scrolling text
    around the game's UI. The console now comes up only for the "can't start"
    screen.
+
+## Eighth run: flicker and console gone, the 3D still missing
+
+The owner confirmed no flicker and a clean bottom screen, and that the run got
+through Oak's intro to the player's house. The remaining fault is the 3D
+environment: the house's background is black while the 2D text box ("Hi, Al!
+You're still awake.") draws correctly. So 2D composition is fine and the 3D
+layer is not reaching engine A.
+
+The previous build tried to detect new 3D images from outside by watching
+`NitroPort_Gx3dImageCount()` and forcing a compose when it moved. That cannot
+work: `sPublishCount` only advances when the port *publishes* an image, and
+publication is lazy -- it happens as part of a composite request. Nothing
+outside the port can see a pending image, so the force never fired, and the
+port's own `uses3D` test (`(dispcnt & 0x0108) == 0x0108`) does not hold for
+this scene either.
+
+Rule now: **engine A is composed every frame, exactly as
+`NitroPort_RenderScreens` did** (which is the configuration that rendered the
+3D correctly in the earlier runs). Engine B cannot show 3D at all, so it is
+the only one skipped when its inputs are unchanged -- that is where the
+savings come from, and it cannot hide a 3D layer.
 
 ## Pending user runs
 

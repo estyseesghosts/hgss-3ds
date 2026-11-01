@@ -85,9 +85,39 @@ Compiles the game and links a target. See [Build-Reference](Build-Reference.md#3
 
 - **Usage:** `python3 tools/hgss_game.py --target {host32,3ds} [--keep-going] [--out DIR] [-- {make args}]`
 - **Does:** runs `prepare_game_headers.py`, compiles `src/**/*.c|*.cpp` plus the port-compiled `lib/` sources, assembles the `.s` files, builds `libnitro.a`/`libnitrosystem.a`, writes the overlay table and ID script, generates the Wi-Fi stubs, and links `build/pokeheartgold-pc` or a 3DS static link.
-- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1092/1092 compile, 150/150 `.s`, **34 unresolved symbols** (MSL/C++ runtime, MB stubs, five pokéwalker aliases); no binary yet.
+- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1092/1092 compile, 150/150 `.s`, **linked with 0 unresolved** for both targets; the 3DS target also packages `pokeheartgold.3dsx` (with an SMDH) and then runs `validate_3dsx()`, which fails the build if a 3DS loader would reject the file (see [3DS-Pitfalls](3DS-Pitfalls.md)).
 - **Needs:** the container. The 3DS target needs devkitARM (present).
 - **Tested by:** `tests/test_hgss_game.py`.
+
+### `tools/boot_smoke.py`
+
+Tells you *where* a boot stopped, for a scripted or unattended run.
+
+- **Usage:** `python3 tools/boot_smoke.py --pc build/pokeheartgold-pc [--pak P] [--manifest M] [--frames N] [--json]`
+- **Does:** runs the program briefly and classifies the outcome: `missing_file` (with the NitroFS path the game asked for), `stall`, `exception`, `crash`, or `frame_limit`, plus a `boot_stage` (e.g. `overlay:intro_title`).
+- **Output:** a JSON report (and a human summary without `--json`); exit 0 when the run is understood, non-zero when it is not.
+- **Needs:** the container. A pack and manifest for anything past the first file request.
+- **Tested by:** `tests/test_boot_smoke.py` (synthetic packs).
+
+### `tools/frametime_report.py`
+
+Turns the shells' `FRAMETIME` lines into the performance budget table.
+
+- **Usage:** `python3 tools/frametime_report.py [LOG …] [--json OUT] [--markdown OUT]` (no argument reads stdin).
+- **Does:** parses `FRAMETIME frame=N logic_us=… draw_us=… audio_us=… total_us=…`, ignoring every other line, so a whole `log.txt` can be passed.
+- **Output:** mean/min/p95/max per subsystem, the frame rate against the 59.8 Hz target, and the count of frames over 16.7 ms. `draw_us` includes the flip wait; `total_us` is what decides whether it feels smooth.
+- **Needs:** nothing but Python.
+- **Tested by:** `tests/test_frametime_report.py`.
+
+### `tools/golden/run.py`
+
+Replays a scene through the PC build and diffs the screens against a reference.
+
+- **Usage:** `python3 tools/golden/run.py --scene NAME [--reference DIR] [--no-run --run DIR] [--out DIR]`
+- **Does:** runs the scene (`tests/inputs/NAME.txt`), aligns it to the reference on the first matching frame, and compares every overlapping frame: 2D exact, 3D within 8/255 per channel up to `--3d-until`.
+- **Output:** `report.json`, `report.html` and one PNG heat map per differing frame. Without a reference it writes a regression baseline and says the melonDS comparison is still pending.
+- **Needs:** the container and a pack for the capture step; `--no-run` needs neither.
+- **Tested by:** `tests/test_golden_run.py` (synthetic PNGs only).
 
 ### `tools/symbol_crosscheck.py`
 

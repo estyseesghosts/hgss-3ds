@@ -608,8 +608,10 @@ class OverlayCheckTests(unittest.TestCase):
         A, because the port's own uses3D test does not cover every field.
         """
         text = (self.APP / "main_3ds.c").read_text()
-        self.assertIn("NitroPort_Render2DIfChanged(", text)
-        self.assertIn("NitroPort_Gx3dImageCount()", text)
+        # Engine A can show 3D and is always composed; only B is skipped.
+        self.assertIn("NitroPort_Render2D(0,", text)
+        self.assertIn("NitroPort_Render2DIfChanged(1,", text)
+        self.assertNotIn("NitroPort_Gx3dImageCount", text)
         self.assertNotIn("NitroPort_RenderScreens(top, bottom);", text)
         frame = text[text.index("static void DrawFrame"):]
         frame = frame[:frame.index("\n}")]

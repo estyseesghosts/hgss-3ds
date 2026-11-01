@@ -82,12 +82,24 @@ links. Both binaries are clean. The last 34 symbols were: MSL soft-float/string 
 C++ runtime (6, explicit MWCC-mangled definitions), multiboot (12, documented stand-ins) and five
 Pokéwalker interior aliases (a missing build stage, now run).
 
-## First hardware run: what it found
+## Hardware: it runs
 
-The first `.3dsx` never started. Luma wrote a dump whose registers put the
-fault at a `udf #0` inside the console's **`loader`** process, not in game code
-(our image is `0x00100000`-`0x009263ec` and never appears; `log.txt` was never
-written).
+Eight runs on a New 3DS in one session. Current state: the game boots, plays
+the intro, reaches Oak's speech and the player's house, draws both screens and
+plays audio; the scenes measured ran at **17 ms a frame (~58.7 Hz)** with
+`logic_us` under 100 us, and the DSP reported **0.4% dropped frames**. Every
+bug found along the way — and the rule that prevents it — is in
+[../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md); [phase-5.md](phase-5.md)
+has the per-run numbers.
+
+Still open on hardware: the field's 3D layer (engine A is composed every frame
+now; not yet confirmed on the console), a full run through Oak's speech at full
+speed, the save round-trip, the Old 3DS measurement, and the `.cia` decision.
+
+The first run's failure, for the record: the `.3dsx` never started. Luma wrote
+a dump whose registers put the fault at a `udf #0` inside the console's
+**`loader`** process, not in game code (our image is
+`0x00100000`-`0x009263ec` and never appears; `log.txt` was never written).
 
 One word in the `.3dsx` lied about being a pointer: patch 1406's `LcdcAddress()`
 was `NitroPort_LcdcVram + (address - 0x06800000)`, which GCC reassociates to
