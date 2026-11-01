@@ -30,7 +30,7 @@ This repo never holds game content. It contains no ROMs, no extracted assets, no
 ## Requirements
 
 - An Apple-silicon Mac with OrbStack (tested) or Docker Desktop (documented, not tested here), and Node.js for the Dev Containers CLI. This is the setup the repo documents in full.
-- Linux: `.github/workflows/port.yml` is written to build the image and run `make test` on Ubuntu, but it has not run on GitHub yet. The DS-side steps are documented for the macOS container only.
+- Linux: `.github/workflows/port.yml` builds the image and runs `make test` on GitHub; the first public push passed (content check, image build, bootstrap, tests, 3m3s). The DS-side steps are documented for the macOS container only.
 - Your own copies of the MWCC 2.0 archive (`mwccarm.zip`, with `license.dat`) and the Nitro SDK 3.2-060901 archive. The container refuses to set up without them.
 - Your own US HeartGold or SoulSilver ROM to build the data pack (`builder/`) and run the game. The setup and test steps above do not use it; the game does. A save is optional.
 
@@ -71,7 +71,7 @@ pokeheartgold-3ds/
   docs/               progress records, decision log, pins, the wiki, and docs/upstream/ patches
                       for third-party projects (the Platinum camera-point fix)
   .devcontainer/      dev container image and its setup scripts
-  .github/workflows/  port.yml (public CI; not yet run on GitHub) and matching.yml (disabled)
+  .github/workflows/  port.yml (public CI; green on the first push) and matching.yml (disabled)
   build/              git-ignored output; a Docker volume inside the container
 ```
 

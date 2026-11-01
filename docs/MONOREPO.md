@@ -149,7 +149,8 @@ public push. The current history has none; keep it that way.
 
 - `port.yml` is the public gate: it builds the dev container image and runs
   `bootstrap.py` + `make test` on synthetic data. It does not need a ROM, MWCC
-  or the Nitro SDK.
+  or the Nitro SDK. The first push at `main` passed it in **3m3s**
+  ([run 41353964864](https://github.com/estyseesghosts/hgss-3ds/actions/runs/41353964864)).
 - `matching.yml` is disabled: it needs the proprietary toolchain and a
   self-hosted private runner. The gate can be run locally; the result is
   recorded in `docs/progress/STATE.md`.
