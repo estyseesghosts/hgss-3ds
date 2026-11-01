@@ -230,6 +230,27 @@ class AppSourceTests(unittest.TestCase):
         self.assertIn("3ds_input.c", names)
         self.assertNotIn("3ds_input.c", [p.name for p in hg.app_sources("host32")])
 
+    def test_3ds_program_has_the_pica_backend(self):
+        """The 3D layer needs a GPU worker; the backend is program-only.
+
+        port_gx3d_pica.c draws a scene into an off-screen PICA target and
+        hands the image to the port's image API. port_pica_abi.c is linked
+        with it: it exposes libctru's struct layout to the port (the port is
+        built with -fno-short-enums, libctru is not).
+        """
+        names = [p.name for p in hg.app_sources("3ds")]
+        self.assertIn("port_gx3d_pica.c", names)
+        self.assertIn("port_pica_abi.c", names)
+        self.assertIn("pica_classic_stubs.c", names)
+        for name in ("port_gx3d_pica.c", "port_pica_abi.c"):
+            self.assertNotIn(name, [p.name for p in hg.app_sources("host32")])
+
+    def test_shader_sources_are_in_dvle_order(self):
+        sources = hg.gx3d_shader_sources()
+        self.assertEqual([p.name for p in sources], list(hg.GX3D_SHADERS))
+        for source in sources:
+            self.assertTrue(source.is_file(), source)
+
 
 class SanitizerFlagTests(unittest.TestCase):
     def tearDown(self):
@@ -611,7 +632,9 @@ class OverlayCheckTests(unittest.TestCase):
         # Engine A can show 3D and is always composed; only B is skipped.
         self.assertIn("NitroPort_Render2D(0,", text)
         self.assertIn("NitroPort_Render2DIfChanged(1,", text)
-        self.assertNotIn("NitroPort_Gx3dImageCount", text)
+        # The image counter is logged so a hardware run can prove the GPU
+        # published images (it stayed 0 while no worker existed).
+        self.assertIn("NitroPort_Gx3dImageCount()", text)
         self.assertNotIn("NitroPort_RenderScreens(top, bottom);", text)
         frame = text[text.index("static void DrawFrame"):]
         frame = frame[:frame.index("\n}")]
@@ -621,7 +644,53 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertEqual(frame.count("if (topFb != NULL)"), 1)
         self.assertEqual(frame.count("if (bottomFb != NULL)"), 1)
 
-    def test_no_console_over_the_game_screens(self):
+    def test_shell_runs_the_gpu_and_geometry_threads(self):
+        """The 3D layer is a worker, not a side effect of the composite.
+
+        On the 3DS the port only converts an image that was handed over by a
+        GPU worker; with none, AcquireImage always returned NULL and engine A
+        drew black. The shell now starts the geometry thread (scene building
+        off the game's thread) and the GPU thread (PICA init, PicaRender,
+        submit, convert), flushes the geometry once a frame, and wakes the GPU
+        from the port's SWAP callback.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("NitroPort_PicaInit()", text)
+        self.assertIn("NitroPort_PicaRender(scene, &dropped)", text)
+        self.assertIn("NitroPort_Gx3dFlush()", text)
+        self.assertIn("NitroPort_Gx3dThreadMain(&sGeoRunning)", text)
+        self.assertIn("NitroPort_Gx3dConvertPending()", text)
+        # A strong override: the port's default is a weak no-op.
+        self.assertIn("void NitroPort_Gx3dScenePublished(void)", text)
+        self.assertNotIn("weak", text[text.index("void NitroPort_Gx3dScenePublished"):
+                                    text.index("void NitroPort_Gx3dScenePublished") + 200])
+        # Flush happens before the composite that reads the image.
+        frame = text[text.index("void NitroPort_OnFrame"):]
+        frame = frame[:frame.index("\n}")]
+        self.assertLess(frame.index("NitroPort_Gx3dFlush()"),
+                        frame.index("DrawFrame()"))
+
+    def test_shell_falls_back_to_2d_if_the_gpu_will_not_start(self):
+        """A failed PICA init or thread must not take the game down.
+
+        The previous hardware builds drew both screens without 3D; that is
+        still what a failed GPU start leaves, with a line in the log.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        gpu = text[text.index("static void GpuMain"):]
+        gpu = gpu[:gpu.index("\nstatic bool GpuStart")]
+        self.assertIn("if (!NitroPort_PicaInit())", gpu)
+        self.assertIn("sGpuRunning = false", gpu)
+        start = text[text.index("static bool GpuStart"):]
+        start = start[:start.index("\nstatic void GpuStop")]
+        self.assertIn("if (!sGpuRunning)", start)
+        self.assertIn("return false", start)
+        # Geometry failure returns the engine to the game's thread.
+        geo = text[text.index("static bool GpuStartGeometry"):]
+        geo = geo[:geo.index("\nstatic void GpuStopGeometry")]
+        self.assertIn("NitroPort_Gx3dStopThread()", geo)
+
+
         """NitroPort_Log writes to stderr, which the console draws on screen.
 
         A console initialised at startup put every log line over the bottom

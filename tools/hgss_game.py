@@ -241,12 +241,72 @@ def app_sources(target: str) -> list[Path]:
     else:
         # The 3DS shell's scripted-input parser (plain C, host-testable).
         sources.append(REPO / "hgss" / "game" / "app" / "3ds_input.c")
+        # The port's PICA backend (the classic off-screen path): it turns a
+        # scene into an RGBA8 image and hands it to the image API the 2D
+        # compositor reads. port_pica_abi.c is libctru's struct layout and is
+        # compiled separately (without -fno-short-enums); see the build.
+        sources.append(REPO / "3ds_port" / "game" / "app" / "port_gx3d_pica.c")
+        sources.append(REPO / "3ds_port" / "game" / "app" / "port_pica_abi.c")
+        # The classic path never reaches the compose profiler; its real
+        # definitions are in port_compose_pica.c, which this program does not
+        # link. See the file.
+        sources.append(REPO / "hgss" / "game" / "app" / "pica_classic_stubs.c")
     return sources
 
 
 def object_path(out: Path, rel: str) -> Path:
     """out/obj/<checkout-relative path with .o> (main.lsf's object spelling)."""
     return out / "obj" / Path(rel).with_suffix(".o")
+
+
+# The PICA vertex programs port_gx3d_pica.c expects, in DVLE order: the
+# polygons, the sun shadows' map, the sun shadows' scene. They are Platinum's
+# (3ds_port/ is byte-identical), assembled by picasso and embedded by bin2s.
+GX3D_SHADERS = ("gx3d_passthrough.v.pica", "gx3d_shadow_cast.v.pica",
+                "gx3d_shadow_recv.v.pica")
+
+
+def gx3d_shader_sources() -> list[Path]:
+    """The .v.pica files linked into the 3DS program, in DVLE order."""
+    app = REPO / "3ds_port" / "game" / "app"
+    return [app / name for name in GX3D_SHADERS]
+
+
+def gx3d_shader_object(out: Path) -> Path:
+    """Build the shader blob object for the 3DS program.
+
+    picasso assembles the three vertex programs into one DVLB; bin2s turns it
+    into an assembly object whose symbols are gx3d_passthrough_shbin and
+    ..._size, which port_gx3d_pica.c references. Both tools ship with
+    devkitPro (the same place as 3dsxtool/3dsxdump), so this adds no new
+    dependency.
+    """
+    app = out / "app"
+    app.mkdir(parents=True, exist_ok=True)
+    shbin = app / "gx3d_passthrough.shbin"
+    asm = app / "gx3d_passthrough_shbin.s"
+    obj = app / "gx3d_passthrough_shbin.o"
+    picasso = devkitpro() / "tools" / "bin" / "picasso"
+    bin2s = devkitpro() / "tools" / "bin" / "bin2s"
+    assembler = devkitarm_bin() / "arm-none-eabi-as"
+    for tool in (picasso, bin2s, assembler):
+        if not tool.is_file():
+            raise RuntimeError(f"missing {tool} (devkitPro tools)")
+    sources = [src for src in gx3d_shader_sources() if src.is_file()]
+    if len(sources) != len(GX3D_SHADERS):
+        missing = [src.name for src in gx3d_shader_sources() if not src.is_file()]
+        raise RuntimeError(f"missing shader sources: {', '.join(missing)}")
+    proc = run([str(picasso), "-o", str(shbin), *map(str, sources)])
+    if proc.returncode != 0:
+        raise RuntimeError(f"picasso failed: {(proc.stderr or proc.stdout).strip()}")
+    proc = run([str(bin2s), str(shbin)])
+    if proc.returncode != 0:
+        raise RuntimeError(f"bin2s failed: {(proc.stderr or proc.stdout).strip()}")
+    asm.write_text(proc.stdout, encoding="utf-8")
+    proc = run([str(assembler), "-o", str(obj), str(asm)])
+    if proc.returncode != 0:
+        raise RuntimeError(f"as failed: {(proc.stderr or proc.stdout).strip()}")
+    return obj
 
 
 # --------------------------------------------------------- data pack reader
@@ -1174,6 +1234,12 @@ def main(argv: list[str] | None = None) -> int:
 
     app_jobs = [(src, out / "app" / (src.stem + ".o"), "c")
                 for src in app_sources(args.target)]
+    # port_pica_abi.c must see libctru's enums at libctru's size, so it is
+    # compiled without the port's -fno-short-enums (as Platinum's Makefile
+    # does); the rest of the app uses the port's flags.
+    abi_src = REPO / "3ds_port" / "game" / "app" / "port_pica_abi.c"
+    if args.target == "3ds":
+        app_jobs = [job for job in app_jobs if job[0] != abi_src]
     if wifi_c.is_file():
         app_jobs.append((wifi_c, out / "gen" / "wifi_stubs.o", "c"))
     # The program's own libpak reader: the vendored one keeps Platinum's ROM
@@ -1188,8 +1254,25 @@ def main(argv: list[str] | None = None) -> int:
         app_cflags.append(f"-I{devkitpro() / 'libctru' / 'include'}")
     app_objects, app_failed = compile_objects(
         tools["cc"], app_cflags, app_jobs, args.jobs, log_dir, args.keep_going)
+    if args.target == "3ds":
+        abi_obj = out / "app" / "port_pica_abi.o"
+        abi_flags = [flag for flag in app_cflags if flag != "-fno-short-enums"]
+        abi_ok, abi_errors, abi_log = compile_one(
+            tools["cc"], abi_flags, abi_src, abi_obj, "c", log_dir)
+        if abi_ok:
+            app_objects.append(abi_obj)
+        else:
+            app_failed.append((abi_src, abi_errors, abi_log))
+        try:
+            app_objects.append(gx3d_shader_object(out))
+        except RuntimeError as exc:
+            print(f"   shader build failed: {exc}", file=sys.stderr)
+            app_failed.append((Path("gx3d shaders"), 1, ""))
     for src, errors, log in app_failed:
         print(f"     {errors:4d}  {src}  ({log})")
+    if app_failed:
+        print(f"   {len(app_failed)} app source(s) failed; not linking")
+        return 1
 
     # The overlay table includes <nitro_port.h> only.
     table_src = gen / "overlay_table.c"

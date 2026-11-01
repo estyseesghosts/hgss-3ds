@@ -36,6 +36,9 @@
 
 #include "3ds_input.h"
 #include "heartgold.h"
+/* The scene type and the geometry thread's ops. Unlike nitro_port.h this
+ * header is standalone (stdint/stddef only), so it can sit next to libctru's. */
+#include <nitro_port_gx3d.h>
 
 #define DATA_DIR "sdmc:/3ds/pokeheartgold"
 #define PAK_PATH DATA_DIR "/heartgold3ds.pak"
@@ -75,6 +78,14 @@ void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
 void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
+
+/* The GPU half of the port, from 3ds_port/game/app/port_gx3d_pica.c and
+ * port_pica_abi.c (compiled into the program only). NitroPort_PicaRender
+ * draws a scene into an off-screen PICA target and hands the RGBA8 image to
+ * the port's image API; the next 2D composite converts it. */
+int NitroPort_PicaInit(void);
+int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
+void NitroPort_PicaExit(void);
 
 static FILE *sLog;
 static LightLock sLogLock;
@@ -228,6 +239,195 @@ static void DrawFrame(void)
     gfxSwapBuffers();
 }
 
+/* ------------------------------------------------------ the 3D's threads */
+
+/* Platinum's proven classic path: a geometry thread builds the DS's scenes off
+ * the game's thread, and a GPU thread draws each finished scene into an
+ * off-screen PICA target, hands the RGBA8 image to the port's image API
+ * (NitroPort_Gx3dSubmitRGBA8), and converts it to the DS's RGB555 there. The
+ * 2D compositor then reads the published image for engine A -- that is the 3D
+ * layer the field and the intro were missing.
+ *
+ * The thread failed -> 2D only, exactly as before this pipeline existed. Both
+ * failures are logged and nothing else changes. */
+static Thread sGpuThread;
+static LightEvent sGpuWake, sGpuStarted;
+static volatile bool sGpuRunning, sGpuWakeReady;
+static volatile unsigned long sGpuScenes;
+/* A thread that would not stop: end the process rather than tear libctru and
+ * citro3d down around it (Platinum's sStopFailed rule). */
+static bool sGpuStopFailed;
+/* New 3DS: the geometry thread gets core 2 (the game and the 2D composite
+ * stay on core 0; the GPU thread is there as well, below the game). */
+static bool sNew3ds;
+
+static Thread sGeoThread;
+static LightEvent sGeoWorkerEvent, sGeoProducerEvent;
+static volatile int sGeoRunning;
+
+/* The port calls this at each SWAP_BUFFERS (port_gx3d.c's weak default is a
+ * no-op). It is how the GPU thread learns a scene is ready. */
+void NitroPort_Gx3dScenePublished(void)
+{
+    if (sGpuWakeReady) {
+        LightEvent_Signal(&sGpuWake);
+    }
+}
+
+static void GpuMain(void *arg)
+{
+    uint32_t seen = 0;
+
+    (void)arg;
+    if (!NitroPort_PicaInit()) {
+        NitroPort_Log("[gx3d] 3D setup failed; the screens carry on without the 3D layer");
+        sGpuRunning = false;
+        LightEvent_Signal(&sGpuStarted);
+        threadExit(0);
+    }
+    NitroPort_Log("[gx3d] PICA ready (classic path)");
+    LightEvent_Signal(&sGpuStarted);
+    while (sGpuRunning) {
+        LightEvent_Wait(&sGpuWake);
+        if (!sGpuRunning) {
+            break;
+        }
+        /* Drain every scene that is waiting; a newer one replaces an
+         * unacquired older one inside the port. */
+        for (;;) {
+            const NitroGx3dScene *scene;
+            unsigned dropped = 0;
+            int drawn;
+
+            scene = NitroPort_Gx3dAcquireScene(&seen);
+            if (scene == NULL) {
+                break;
+            }
+            drawn = NitroPort_PicaRender(scene, &dropped);
+            NitroPort_Gx3dReleaseScene(scene);
+            if (drawn >= 0) {
+                sGpuScenes++;
+                /* Convert here rather than making the game's frame do it:
+                 * the 2D composite then only reads a published image. */
+                (void)NitroPort_Gx3dConvertPending();
+            }
+            if (!sGpuRunning) {
+                break;
+            }
+        }
+    }
+    NitroPort_PicaExit();
+    threadExit(0);
+}
+
+static bool GpuStart(s32 priority)
+{
+    LightEvent_Init(&sGpuWake, RESET_ONESHOT);
+    LightEvent_Init(&sGpuStarted, RESET_ONESHOT);
+    sGpuRunning = true;
+    sGpuWakeReady = true;
+    sGpuThread = threadCreate(GpuMain, NULL, 128 * 1024, priority + 1, -2, false);
+    if (sGpuThread == NULL) {
+        sGpuRunning = false;
+        sGpuWakeReady = false;
+        NitroPort_Log("[gx3d] couldn't start the 3D thread; staying 2D");
+        return false;
+    }
+    /* PicaInit runs inside the thread: on failure it says so and this wait
+     * returns with the flag clear, so the shell can stay 2D. */
+    LightEvent_Wait(&sGpuStarted);
+    if (!sGpuRunning) {
+        threadJoin(sGpuThread, 1000 * 1000000LL);
+        threadFree(sGpuThread);
+        sGpuThread = NULL;
+        sGpuWakeReady = false;
+        return false;
+    }
+    return true;
+}
+
+static void GpuStop(void)
+{
+    if (sGpuThread == NULL) {
+        return;
+    }
+    sGpuRunning = false;
+    if (sGpuWakeReady) {
+        LightEvent_Signal(&sGpuWake);
+    }
+    if (R_SUCCEEDED(threadJoin(sGpuThread, 2000 * 1000000LL))) {
+        threadFree(sGpuThread);
+    } else {
+        sGpuStopFailed = true;
+        NitroPort_Log("[gx3d] the 3D thread didn't stop; quitting without it");
+    }
+    sGpuThread = NULL;
+    sGpuWakeReady = false;
+}
+
+static void GeoWaitWorker(void *arg) { (void)arg; LightEvent_Wait(&sGeoWorkerEvent); }
+static void GeoWakeWorker(void *arg) { (void)arg; LightEvent_Signal(&sGeoWorkerEvent); }
+static void GeoWaitProducer(void *arg) { (void)arg; LightEvent_Wait(&sGeoProducerEvent); }
+static void GeoWakeProducer(void *arg) { (void)arg; LightEvent_Signal(&sGeoProducerEvent); }
+static uint64_t GeoTicks(void *arg) { (void)arg; return svcGetSystemTick(); }
+
+static void GeoMain(void *arg)
+{
+    (void)arg;
+    NitroPort_Gx3dThreadMain(&sGeoRunning);
+    threadExit(0);
+}
+
+static bool GpuStartGeometry(s32 priority)
+{
+    NitroGx3dThreadOps ops;
+
+    memset(&ops, 0, sizeof(ops));
+    ops.wait_worker = GeoWaitWorker;
+    ops.wake_worker = GeoWakeWorker;
+    ops.wait_producer = GeoWaitProducer;
+    ops.wake_producer = GeoWakeProducer;
+    ops.ticks = GeoTicks;
+    LightEvent_Init(&sGeoWorkerEvent, RESET_ONESHOT);
+    LightEvent_Init(&sGeoProducerEvent, RESET_ONESHOT);
+    sGeoRunning = 1;
+    /* Before the thread runs: it needs the ops. Nothing has been drawn yet,
+     * so if it can't start the engine goes back to the game's thread. */
+    NitroPort_Gx3dStartThread(&ops);
+    sGeoThread = threadCreate(GeoMain, NULL, 64 * 1024, priority - 1,
+                              sNew3ds ? 2 : -2, false);
+    if (sGeoThread == NULL && sNew3ds) {
+        /* Core 2 is the New 3DS's extra core; if the kernel will not give it
+         * (an Old 3DS in a New 3DS's clothes, no 804 MHz mode), the game's
+         * core still builds scenes correctly, just not off its thread. */
+        sGeoThread = threadCreate(GeoMain, NULL, 64 * 1024, priority - 1, -2, false);
+    }
+    if (sGeoThread == NULL) {
+        NitroPort_Gx3dStopThread();
+        sGeoRunning = 0;
+        NitroPort_Log("[gx3d] no geometry thread; the game's thread builds scenes");
+        return false;
+    }
+    NitroPort_Log("[gx3d] geometry on its own thread (core %d)", sNew3ds ? 2 : 0);
+    return true;
+}
+
+static void GpuStopGeometry(void)
+{
+    if (sGeoThread != NULL) {
+        sGeoRunning = 0;
+        LightEvent_Signal(&sGeoWorkerEvent);
+        if (R_SUCCEEDED(threadJoin(sGeoThread, 1000 * 1000000LL))) {
+            threadFree(sGeoThread);
+        } else {
+            sGpuStopFailed = true;
+            NitroPort_Log("[gx3d] the geometry thread didn't stop; quitting without it");
+        }
+        sGeoThread = NULL;
+    }
+    NitroPort_Gx3dStopThread();
+}
+
 /* Once a frame, from the game's idle path: keep the HOME menu serviced, feed
  * the buttons/touch and draw. */
 static unsigned long long TicksToUs(u64 ticks)
@@ -262,6 +462,11 @@ void NitroPort_OnFrame(void)
         svcSleepThread(16 * 1000000LL);
         return;
     }
+
+    /* The geometry thread has everything the game wrote this frame; a
+     * SWAP_BUFFERS in it is the scene the GPU thread will draw. Both shells
+     * flush at the same point. */
+    NitroPort_Gx3dFlush();
 
     /* The ARM7's alarm replies (sound ticks and the sequencer) are delivered
      * on this thread, as the PC shell does. */
@@ -299,6 +504,8 @@ void NitroPort_OnFrame(void)
         NitroPort_Log("frame %lu", sFrame);
         NitroPort_Log("FRAMETIME frame=%lu logic_us=%llu draw_us=%llu audio_us=0 total_us=%llu",
                       sFrame, logicUs, drawUs, totalUs);
+        NitroPort_Log("3D images: %lu (scenes drawn: %lu)",
+                      (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes);
         if (sScriptLoaded && sScript.end > 0 && (long)sFrame > sScript.end) {
             NitroPort_Log("script ended at frame %ld", sScript.end);
             sScriptLoaded = false;
@@ -696,6 +903,7 @@ int main(int argc, char **argv)
         bool isNew3ds = false;
 
         APT_CheckNew3DS(&isNew3ds);
+        sNew3ds = isNew3ds;
         NitroPort_Log("[perf] %s: %s", isNew3ds ? "New 3DS" : "Old 3DS",
                       isNew3ds ? "804 MHz + L2 requested"
                                : "268 MHz, the speedup is New-3DS only");
@@ -721,6 +929,18 @@ int main(int argc, char **argv)
         settings.savePath = SAVE_PATH;
         LoadScript(&settings);
 
+        /* Platinum's architecture: the GPU thread draws the 3D off the game's
+         * thread, and the geometry thread keeps the vertices off it as well.
+         * Either failing is logged and leaves today's 2D-only behaviour. */
+        {
+            s32 priority = 0x30;
+
+            svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+            if (GpuStart(priority)) {
+                GpuStartGeometry(priority);
+            }
+        }
+
         aptHook(&hook, AptHook, NULL);
         thread = threadCreate(GameThread, &settings, GAME_STACK_SIZE, 0x30, -2, false);
         if (thread == NULL) {
@@ -730,6 +950,12 @@ int main(int argc, char **argv)
             WaitForGame(thread);
         }
         aptUnhook(&hook);
+        /* Geometry first (it may still be finishing a scene for the GPU),
+         * then the GPU. Both are no-ops if they never started. */
+        GpuStopGeometry();
+        GpuStop();
+        NitroPort_Log("[gx3d] %lu 3D images, %lu scenes drawn",
+                      (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes);
     }
 
     if (sAudio) {
@@ -744,6 +970,12 @@ int main(int argc, char **argv)
         fflush(sLog);
         fclose(sLog);
         sLog = NULL;
+    }
+    if (sGpuStopFailed) {
+        /* A GPU/geometry thread is still inside citro3d/libctru: tearing the
+         * runtime down around it crashes on the way out, so end the process
+         * (the log above already says which thread and why). */
+        svcExitProcess();
     }
     if (sAudio) {
         ndspExit();
