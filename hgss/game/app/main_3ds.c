@@ -223,6 +223,15 @@ int main(int argc, char **argv)
         NitroPort_Log("Can't start: %s.", error);
         NitroPort_Log("Put heartgold3ds.pak and manifest.json (made with the builder "
                       "from your own cartridge) in " DATA_DIR "/.");
+        /* The plan asks for an on-screen message, not only log.txt: the
+         * console owns the bottom screen (consoleInit in main). */
+        consoleClear();
+        printf("\n pokeheartgold-3ds\n\n Can't start: %s.\n\n"
+               " Put heartgold3ds.pak and manifest.json\n"
+               " (made with the builder from your own\n"
+               " cartridge) in:\n\n  " DATA_DIR "/\n\n"
+               " See " DATA_DIR "/log.txt for the details.\n\n"
+               " Press START to exit.\n", error);
         while (aptMainLoop() && !sQuit) {
             hidScanInput();
             if (hidKeysDown() & KEY_START) {

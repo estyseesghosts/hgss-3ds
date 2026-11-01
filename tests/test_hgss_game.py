@@ -477,6 +477,15 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("NitroPort_IsOverlayLoaded", text)
         self.assertIn("overlays (%d with static initializers), %d failed", text)
 
+    def test_3ds_shell_shows_the_pak_error_on_screen(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("consoleClear();", text)
+        self.assertIn('printf("\\n pokeheartgold-3ds', text)
+        self.assertIn("Press START to exit", text)
+        # The screen text comes after the open attempt fails, not instead of it.
+        self.assertLess(text.index("Can't start: %s."), text.index("consoleClear();"))
+        self.assertLess(text.index("consoleClear();"), text.index("Press START to exit"))
+
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)
