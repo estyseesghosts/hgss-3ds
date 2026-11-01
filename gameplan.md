@@ -533,10 +533,10 @@ The goal is a builder that turns the user's own verified `.nds` into `heartgold3
 
 ### Deliverables
 
-- [ ] `verify_rom.py`, `extract_rom.py`, `pack.py` for HG and SS US
-- [ ] Boot-time pak check with on-screen error
-- [ ] SD layout documented in `3ds_port/game/README.md`
-- [ ] Builder unit tests on synthetic images
+- [x] `verify_rom.py`, `extract_rom.py`, `pack.py` for HG and SS US
+- [x] Boot-time pak check with on-screen error
+- [x] SD layout documented in `3ds_port/game/README.md` (as `docs/wiki/SD-Card-Layout.md`; see decisions)
+- [x] Builder unit tests on synthetic images
 
 ### Pitfalls
 
