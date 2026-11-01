@@ -152,7 +152,16 @@ def port_cflags(target: str, cxx: bool = False) -> list[str]:
     if cxx:
         flags += ["-fno-exceptions", "-fno-rtti"]
     flags += HOST_FLAGS if target == "host32" else ARM_FLAGS
+    if SANITIZE and target == "host32":
+        flags += SANITIZE_FLAGS
     return flags
+
+
+# --sanitize: instrument the game and app objects (and the link) for the
+# Phase 4 replay. The vendored archives are built normally; ASan still
+# interposes malloc and checks the game's accesses into them.
+SANITIZE = False
+SANITIZE_FLAGS = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"]
 
 
 def hgss_includes(root: Path, sdk: Path, gen: Path) -> list[str]:
@@ -698,6 +707,8 @@ def link_command(cc: str, target: str, app_objects: list[Path],
                  "-Wl,--wrap=NitroPort_RaiseIrq",
                  "-Wl,--wrap=OS_WaitIrq"]
         extra = ["-lm", "-pthread", *wraps]
+        if SANITIZE:
+            extra += SANITIZE_FLAGS
     else:
         # devkitARM's crt0 (3dsx.specs) provides _start and calls main; the
         # program is a normal libctru/citro3d one.
@@ -934,7 +945,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--skip-prepare", action="store_true",
                     help="reuse the generated headers already in --root")
+    ap.add_argument("--sanitize", action="store_true",
+                    help="host32 only: build with -fsanitize=address,undefined")
     args = ap.parse_args(argv)
+
+    global SANITIZE
+    if args.sanitize:
+        if args.target != "host32":
+            ap.error("--sanitize is host32 only")
+        SANITIZE = True
 
     root = args.root.resolve()
     out = args.out.resolve()

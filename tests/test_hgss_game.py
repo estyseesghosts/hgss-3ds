@@ -58,6 +58,9 @@ class FlagTests(unittest.TestCase):
         for want in self.REQUIRED:
             self.assertIn(want, flags)
         self.assertIn("-m32", flags)
+        # The DS build keeps asserts; several GF_ASSERT operands have side
+        # effects (the Oak's-speech transfer tasks, for one).
+        self.assertIn("-DPM_KEEP_ASSERTS", flags)
         self.assertIn("-malign-double", flags)
         self.assertNotIn("-march=armv6k", flags)
         self.assertNotIn("-fno-exceptions", flags)
@@ -196,6 +199,28 @@ class AppSourceTests(unittest.TestCase):
     def test_unknown_target(self):
         with self.assertRaises(ValueError):
             hg.app_sources("arm7")
+
+    def test_host_program_has_the_trace_wrappers(self):
+        names = [p.name for p in hg.app_sources("host32")]
+        self.assertIn("pc_trace.c", names)
+        self.assertNotIn("pc_trace.c", [p.name for p in hg.app_sources("3ds")])
+
+
+class SanitizerFlagTests(unittest.TestCase):
+    def tearDown(self):
+        hg.SANITIZE = False
+
+    def test_sanitize_instruments_host_only(self):
+        hg.SANITIZE = True
+        flags = hg.port_cflags("host32")
+        self.assertIn("-fsanitize=address,undefined", flags)
+        self.assertIn("-fno-omit-frame-pointer", flags)
+        # The 3DS target must not see host sanitizer flags.
+        self.assertNotIn("-fsanitize=address,undefined", hg.port_cflags("3ds"))
+
+    def test_sanitize_off_by_default(self):
+        hg.SANITIZE = False
+        self.assertNotIn("-fsanitize=address,undefined", hg.port_cflags("host32"))
 
 
 class ObjectAliasTests(unittest.TestCase):
