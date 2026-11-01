@@ -160,11 +160,23 @@ Newest first. Each entry: what changed, what was run, what it proved.
   `--events`. `pc_trace.c` uses linker wraps so `3ds_port/` stays byte-identical.
 - **`tools/boot_smoke.py` + tests**: synthetic pak reports `missing_file a/0/1/6` at frame 0; the
   real pack reports `frame_limit` with boot stage `overlay:intro_title`.
+- **Golden runner**: `tools/golden/run.py` replays a scene, aligns on the first matching frame and
+  writes JSON/HTML/heat maps; 2D exact, 3D 8/255 up to frame 6600. No melonDS goldens yet, so a run
+  without a reference is a regression baseline only.
+- **Sanitizer**: `--sanitize` builds; the replay found two real out-of-bounds reads (patches 1901,
+  1902) and the ASan link needed the MSL `std::__new_handler`. The overlay loader's bulk `.data`
+  restore is a known ASan global-redzone artifact; the full replay runs with `report_globals=0` while
+  heap/stack stay on.
+- **3DS shell**: centered 1:1 display, D-pad/circle-pad input, APT pause, crash log, optional NDSP,
+  scripted-input replay and a generic SMDH. `.3dsx` packages; `.cia` is blocked on makerom/bannertool
+  (absent; user decision). Frame-time lines and `tools/frametime_report.py` exist; the hardware
+  budget table is pending.
 - **End-to-end:** real HG pack, no save, 20,000 frames: logo, full movie, title, main menu, Oak's
   speech (portrait/text/touch buttons), gender, naming keyboard, confirmation, first bedroom. No
   crash or stall. Calibrated `tests/inputs/{boot-title,main-menu-nosave,newgame-buttons}.txt`.
-- Open: golden captures (user), a written save + melonDS load, sanitizer, upstream drafts, 3DS shell.
-  [phase-4.md](phase-4.md)
+- Open: golden captures (user), a written save + melonDS load, upstream drafts (none new: the fixes
+  are HGSS game code, not generic port code), 3DS hardware runs and the CIA tool decision.
+  [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md)
 
 ### 2026-10-31 (session 6) — PC and 3DS link clean, Phase 3 complete
 

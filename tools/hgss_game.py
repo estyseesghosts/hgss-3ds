@@ -666,7 +666,7 @@ def three_dsx_command(tool: Path, elf: Path, dsx: Path,
     the cart-derived icon and banner are generated locally in Phase 5."""
     command = [str(tool), str(elf), str(dsx)]
     if smdh is not None:
-        command.append(str(smdh))
+        command.append(f"--smdh={smdh}")
     return command
 
 

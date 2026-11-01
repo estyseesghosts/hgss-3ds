@@ -602,7 +602,7 @@ class ThreeDsxTests(unittest.TestCase):
         cmd = hg.three_dsx_command(Path("/dkp/tools/bin/3dsxtool"),
                                    Path("/out/game.elf"), Path("/out/game.3dsx"),
                                    Path("/out/game.smdh"))
-        self.assertEqual(cmd[-1], "/out/game.smdh")
+        self.assertEqual(cmd[-1], "--smdh=/out/game.smdh")
         self.assertEqual(len(cmd), 4)
 
     def test_no_smdh_tool_means_no_metadata(self):
@@ -619,13 +619,6 @@ class ThreeDsxTests(unittest.TestCase):
 
     def test_host32_is_not_packaged(self):
         self.assertIsNone(hg.package_three_dsx(Path("/nonexistent.elf"), "host32"))
-
-    def test_command_takes_an_optional_smdh(self):
-        cmd = hg.three_dsx_command(Path("/dkp/tools/bin/3dsxtool"),
-                                   Path("/out/game.elf"), Path("/out/game.3dsx"),
-                                   Path("/out/game.smdh"))
-        self.assertEqual(cmd[-1], "/out/game.smdh")
-        self.assertEqual(len(cmd), 4)
 
     def test_packages_with_the_generic_smdh_when_the_tool_exists(self):
         with tempfile.TemporaryDirectory() as tmp:

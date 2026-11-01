@@ -82,7 +82,10 @@ the sanitizer runtime); it is defined as a NULL pointer in `cpp_runtime.c`.
 redzones. That is not a game bug but ASan cannot see the section as one object. The full replay
 therefore runs with `ASAN_OPTIONS=report_globals=0`; the boot phase (before the first overlay reload
 that trips it) runs with global checks on, which is how 1901 was found. Heap and stack checks stay on
-for the whole run. The 20,000-frame replay with 1901/1902 applied is the acceptance check.
+for the whole run.
+
+**Result:** the 20,000-frame scripted replay with 1901/1902 applied exits 0 with **0 ASan errors and
+0 UBSan runtime errors** (`grep -cE "ERROR: AddressSanitizer|runtime error"` = 0).
 
 ## Open items
 

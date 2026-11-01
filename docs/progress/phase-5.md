@@ -43,9 +43,21 @@ the gap list.
 
 ### Frame-time instrumentation (P5-C)
 
-Not implemented yet. The shell logs a frame every 600 frames; per-subsystem
-timing and `tools/frametime_report.py` are the remaining work. Target 59.8 Hz
-in menus, the intro and the title.
+Both shells log one sample per 600 frames (60 on the PC with `--frametime`):
+
+```text
+FRAMETIME frame=1234 logic_us=820 draw_us=9100 audio_us=0 total_us=16720
+```
+
+The 3DS measurement is the interval between `NitroPort_OnFrame` calls (the
+game's own work), the time inside `DrawFrame`, and the same for the PC. Audio
+is not mixed yet, so `audio_us` is 0.
+
+`tools/frametime_report.py` parses either log (whole `log.txt` is fine; other
+lines are ignored) and prints mean/min/p95/max per subsystem plus the frame
+rate against 59.8 Hz. It writes JSON/Markdown for the budget table. Tests are
+synthetic. **The budget table itself is a hardware deliverable and is pending
+the user's New 3DS run.**
 
 ### CIA build (P5-D)
 
