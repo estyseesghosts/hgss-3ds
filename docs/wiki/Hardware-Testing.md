@@ -170,10 +170,12 @@ a failure used to be ambiguous:
 
 Send `log.txt` whole; nothing on that page needs filtering.
 
-The noise-channel fix (patch 1407) has no log line of its own: its pass is by
-ear. Play a field and a battle and confirm no note sustains into the next one
-and single sounds are not distorted. `audio: N dropped frames of M` near zero
-is the other half of the audio result.
+The noise-channel fix (patch 1407) and the NNS volume-table fix have no log
+line on the console: the build prints `[sound] _0210D750 -> ...` and the pass
+is by ear. Play a field and a battle and confirm a note fades out instead of
+sustaining a high-pitched crunch into the next note, and single sounds are not
+distorted. `audio: N dropped frames of M` near zero is the other half of the
+audio result.
 
 ## The scripted New 3DS run
 

@@ -1,6 +1,6 @@
 # Current state
 
-Last verified: **2026-11-01 (session 9: frame cap, audio, 3D)**, inside the dev container
+Last verified: **2026-11-01 (session 10: NNS volume table, camera-point w)**, inside the dev container
 (`/workspaces/pokeheartgold-3ds`), with the tree at **78 patches** (`NitroSDK` 15, `NitroSystem` 3,
 `pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
@@ -19,11 +19,11 @@ the gate is the evidence.
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 78 patches apply from scratch; `make test` 334 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 78 patches apply from scratch; `make test` 338 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, audio noise fix and camera-point 3D fix in the latest artifact; hardware re-run pending. |
+| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table and the camera-point GPU w are in the latest artifact; hardware re-run pending. |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -34,7 +34,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
-| Host tests | `make test` | **exit 0**; **334 Python tests** + **20 SDK suites** |
+| Host tests | `make test` | **exit 0**; **338 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **337 + 239** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-point hunk compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
@@ -169,7 +169,7 @@ devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
 python3 tools/bootstrap.py            # "already at ... with 78 patches" if in sync
-make test                            # exit 0 (334 tests + 20 SDK suites)
+make test                            # exit 0 (338 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
@@ -226,7 +226,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **Regression test:** `nitro/tests/test_gx3d.c` `test_camera_point_vertex`
   emits a triangle with a `(0,0,0,0)` vertex, checks the stored `clip[3] == 1`
   and screen `(0,0)`, and checks the batch builder gives the GPU `w > 0`.
-- **Local:** `make test` **334 Python tests, OK** + 20 SDK suites;
+- **Local:** `make test` **338 Python tests, OK** + 20 SDK suites;
   `make port-tests` gx3d **337 + 239**, nitrosystem **17,122**, 0 failed;
   host32 1092/1092, 0 unresolved; 3DS 1092/1092, 0 unresolved, `.3dsx`
   **9,278,120 B** (`sha256 3f493661…b7f00`), `3dsxdump` rc 0 (CODE 2126,
@@ -237,6 +237,39 @@ Newest first. Each entry: what changed, what was run, what it proved.
   [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md)
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
+
+### 2026-11-01 (session 10, audio + 3D) — the NNS volume table and the grey fan
+
+- **Audio.** After 1407 the note still held until the next one and the mix
+  clipped. The cause was not the ARM7 or the mixer: NitroSystem's
+  `_0210D750` (player volume 0..127 -> decibels) is an empty alias section in
+  the decomp (`lib/asm/nitro_sdk_data.s`), which the DS link order resolves to
+  `SNDi_DecibelTable` but the port's order landed on a pointer table. NNS read
+  pointer bytes as decibels: the external fader became +25.6 dB, every channel
+  clamped to 0 dB, and `SND_ExChannelMain`'s release stop (`volume <= -723`)
+  could never fire. A PC trace showed 14 channels at 0 dB and 4 natural ends
+  in 90 s; after the fix, volumes 41-103, **192** ends, no saturated 50 ms
+  window, and real quiet gaps.
+- **Fix:** `hgss/compat/src/nns_volume_table.c` supplies the real table;
+  `tools/hgss_game.py` drops `.rodata.alias_d750` from the SDK data object and
+  checks the linked symbol (`[sound] _0210D750 -> nns_volume_table.c
+  (256 bytes)`). `tests/test_hgss_game.py` keeps it equal to `SNDi_DecibelTable`
+  and the build. The DS gate is untouched.
+- **3D.** The camera point's stored `clip[3] = 1` gave the PICA `w = 1/4096`,
+  so its `1/w` dominated the fan's perspective interpolation and the grey
+  texel covered the wing (the software's `inv_w = 0` does the opposite). The
+  vertex is flagged and `put_vertex()` gives the GPU `w = 2^18`, with z scaled
+  in Z-buffer scenes so `z/w` (the stored depth) is unchanged. The PC frame
+  4800 PNG is byte-identical (`sha256 7d7ea8f5…97ad8`); gx3d **340 + 242**
+  checks pass.
+- **Hardware is still the owner's run:** the fan must be the feathered wing,
+  not grey, and notes must fade. Local artifact: `.3dsx` **9,278,472 B**
+  (`sha256 63d880e7…c03`), 3DS build **1092/1092**, 0 unresolved,
+  `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages); staged as
+  `sdmc:/3ds/pokeheartgold.3dsx` (the previous `3f493661…b7f00` is kept beside
+  it as `pokeheartgold-3f493661.3dsx`).
+  [agent-notes/s13-nns-volume-table.md](agent-notes/s13-nns-volume-table.md) ·
+  [3DS-Pitfalls](../wiki/3DS-Pitfalls.md)
 
 ### 2026-11-01 (session 9, audio) — the hung noise note
 

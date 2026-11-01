@@ -472,6 +472,48 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn(str(root / "lib/NitroWiFi/include"), cmd)  # absent
 
 
+class NnsVolumeTableTests(unittest.TestCase):
+    """NNS's _0210D750 must be the real volume->decibel table.
+
+    The decomp emits it as an empty alias section; its DS link order makes it
+    share SNDi_DecibelTable's data, but the port's default order left it on an
+    unrelated pointer table. NNS then read pointers as decibels: a large
+    positive fader pinned every channel at 0 dB and the release stop
+    (volume <= -723) never fired, so a note sustained until the next key-on.
+    """
+
+    def port_values(self):
+        text = hg.NNS_VOLUME_PORT_SOURCE.read_text()
+        body = text[text.index("_0210D750[0x80] = {"):]
+        body = body[body.index("{") + 1:body.index("};")]
+        return [int(v) for v in re.findall(r"-?\d+", body)]
+
+    def test_has_the_128_linear_volume_steps(self):
+        values = self.port_values()
+        self.assertEqual(len(values), 128)
+        self.assertEqual(values[0], -32768)     # 0 = silence
+        self.assertEqual(values[-1], 0)         # 127 = 0 dB
+        self.assertTrue(all(a <= b for a, b in zip(values, values[1:])))
+
+    def test_matches_the_nitrosdk_table(self):
+        sdk = hg.REPO / "build" / "upstream" / "lib" / "NitroSDK" / "src" / "snd" / "SND_util.c"
+        if not sdk.is_file():
+            self.skipTest("run tools/bootstrap.py first")
+        text = sdk.read_text()
+        body = text[text.index("SNDi_DecibelTable[0x80] = {"):]
+        body = body[body.index("{") + 1:body.index("};")]
+        self.assertEqual(self.port_values(), [int(v) for v in re.findall(r"-?\d+", body)])
+
+    def test_port_programs_link_the_table(self):
+        for target in ("host32", "3ds"):
+            self.assertIn(hg.NNS_VOLUME_PORT_SOURCE, hg.app_sources(target))
+        self.assertEqual(hg.NNS_VOLUME_TABLE_SIZE, 256)
+
+    def test_sdk_alias_section_is_the_one_dropped(self):
+        self.assertEqual(hg.NNS_VOLUME_ALIAS_SECTION, ".rodata.alias_d750")
+        self.assertEqual(hg.NNS_VOLUME_SDK_SOURCE, "lib/asm/nitro_sdk_data.s")
+
+
 class LinkTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

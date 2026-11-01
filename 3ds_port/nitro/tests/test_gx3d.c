@@ -406,6 +406,7 @@ static void test_camera_point_vertex(void)
         CHECK(tri->v[0].clip[0]==0 && tri->v[0].clip[1]==0 &&
               tri->v[0].clip[2]==0);
         CHECK(tri->v[0].clip[3]==1);
+        CHECK((tri->v[0].flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0);
         CHECK(tri->v[0].x==0 && tri->v[0].y==0);
         /* The rim vertices keep the real w the projection gave them. */
         CHECK(tri->v[1].clip[3]>0);
@@ -415,11 +416,16 @@ static void test_camera_point_vertex(void)
     CHECK(count==3);
     CHECK(batch_count==1);
     if(count==3){
-        /* The GPU's homogeneous position has w > 0, so the PICA can divide.
-         * Its NDC is the top-left corner the software reference draws. */
-        CHECK(gpu[0].position[3]>0.0f);
+        /* The camera vertex's GPU w is huge, so its 1/w (the perspective
+         * weight) is negligible like the software rasteriser's inv_w = 0:
+         * the fan takes the rim texels, not its own grey one. Its NDC is
+         * still the top-left corner. In a Z-buffer scene z scales with w,
+         * so z/w (the stored depth) is the camera point's 0.5. */
+        CHECK(gpu[0].position[3]>1000.0f*gpu[1].position[3]);
+        CHECK(gpu[0].position[3]>1000.0f);
         CHECK(gpu[0].position[0]<0.0f);
         CHECK(gpu[0].position[1]>0.0f);
+        CHECK(fabs((double)(gpu[0].position[2]/gpu[0].position[3])+0.5)<1e-3);
     }
 }
 

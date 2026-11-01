@@ -67,7 +67,13 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
         for(k=0;k<3;k++){
             const NitroGx3dVertex *v=&tri->v[k];
             NitroGx3dGpuVertex *dst=&out[count++];
-            float w=v->clip[3]/4096.0f;
+            /* Same camera-point w as put_vertex(): its stored clip[3] is 1 only
+             * to keep the software values finite; the GPU needs it negligible
+             * in the perspective interpolation. Scale z with w in a Z-buffer
+             * scene (W-buffer scenes store the DS W itself). */
+            int camera=(v->flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0;
+            float base=(float)v->clip[3]/4096.0f;
+            float w=camera?262144.0f:base;
             float x=v->x/256.0f;
             float y=v->y/256.0f;
             /* Map final DS pixels into NDC without applying the DS viewport
@@ -80,6 +86,8 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
             dst->position[0]=ndc_x*w;
             dst->position[1]=ndc_y*w;
             dst->position[2]=NitroPort_Gx3dClipZ(v,scene->swap_param);
+            if(camera && !(scene->swap_param&2u) && base>0.0f)
+                dst->position[2]*=w/base;
             dst->position[3]=w;
             dst->color[0]=color8(v->color&31u);
             dst->color[1]=color8((v->color>>5)&31u);
@@ -265,12 +273,25 @@ static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
                        uint32_t swap_param,unsigned alpha,float tw,float th,
                        float sx,float sy)
 {
-    float w=v->clip[3]/4096.0f;
+    /* The PICA's w, and the clip z that goes with it. A camera-point vertex
+     * stores clip[3] = 1 so the software path and the W-buffer depth stay
+     * finite; on the GPU its 1/w is the perspective weight, and the software
+     * rasteriser weights that vertex by inv_w = 0 (the corner of the fan is
+     * the rim vertices' texel, not the camera point's grey one). Give the GPU
+     * a huge w instead: 1/w becomes negligible, so perspective-correct
+     * interpolation matches the software/DS fan. In a Z-buffer scene z must
+     * scale with w to keep z/w (the stored depth); W-buffer scenes store the
+     * DS W itself, so z stays as NitroPort_Gx3dClipZ gave it. */
+    int camera=(v->flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0;
+    float base=(float)v->clip[3]/4096.0f;
+    float w=camera?262144.0f:base;
     float ndc_x=sx/128.0f-1.0f;
     float ndc_y=1.0f-sy/96.0f;
     dst->position[0]=ndc_x*w;
     dst->position[1]=ndc_y*w;
     dst->position[2]=NitroPort_Gx3dClipZ(v,swap_param);
+    if(camera && !(swap_param&2u) && base>0.0f)
+        dst->position[2]*=w/base;
     dst->position[3]=w;
     dst->color[0]=color8(v->color&31u);
     dst->color[1]=color8((v->color>>5)&31u);

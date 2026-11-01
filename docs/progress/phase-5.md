@@ -605,6 +605,30 @@ and repeat clear), while `0x0E0`/`0x0E8` and channel 0 keep their sentinels.
 Before the patch that suite reports 24 failures, including the stale
 `0x88400040` control; after it, 122 checks, 0 failures.
 
+## The NNS volume table: the note that still hung after 1407
+
+The hardware run after 1407 still had a note held at full volume until the
+next one, and the mix clipped. The remaining cause was outside the ARM7
+driver and the mixer: NitroSystem's `_0210D750` maps a linear 0..127 player
+volume to decibels (`lib/NitroSystem/src/snd_player.c`), and in the DS build
+it is an **empty alias section** (`lib/asm/nitro_sdk_data.s`) that the DS link
+order places immediately before `SNDi_DecibelTable`; the two names share the
+table. The port's link order put the empty section on an unrelated pointer
+table, so NNS read pointer bytes as decibels: the external fader became
++25.6 dB, every channel clamped to 0 dB, and the release stop
+(`volume <= -723`) could never fire.
+
+`hgss/compat/src/nns_volume_table.c` supplies the real table;
+`tools/hgss_game.py` drops the empty `.rodata.alias_d750` section from the SDK
+data object and checks the linked 256-byte table. A PC trace at the title
+went from 14 channels at 0 dB and 4 natural ends in 90 s to volumes 41-103,
+192 ends, no saturated 50 ms window and real quiet gaps. `make test` adds
+`tests/test_hgss_game.py::NnsVolumeTableTests`; the DS gate never runs the
+port's object step. See [agent-notes/s13-nns-volume-table.md](agent-notes/
+s13-nns-volume-table.md) and
+[3DS-Pitfalls](../wiki/3DS-Pitfalls.md#the-nns-volume-table-is-an-empty-alias).
+
+
 **Local verification (container, 2026-11-01).** `python3 tools/bootstrap.py
 --clean` applies **78 patches**; `make test` exits 0 with **329 Python tests**
 and the `tests/sdk/*` suites; the 3DS build compiles **1092/1092**, links with

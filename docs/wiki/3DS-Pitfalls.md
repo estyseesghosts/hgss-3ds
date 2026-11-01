@@ -26,7 +26,8 @@ sequence.
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
-| A note hangs until the next note starts; sounds distort | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
+| A note hangs until the next note starts; sounds distort | [The NNS volume table is an empty alias](#the-nns-volume-table-is-an-empty-alias) |
+| A noise note writes an unused hole (1407; related) | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 
 ## A weak hook binds to NULL
@@ -345,6 +346,41 @@ at their sentinels. Before the patch the suite reports 24 failures; after it,
 a DS low 16-bit address: channel *c* at `0x400 + 16c`, `SOUNDCNT` at `0x500`,
 captures at `0x508`-`0x51C`. Never add a relative channel offset without
 `0x400`.
+
+## The NNS volume table is an empty alias
+
+**Symptom.** Every note stays at full volume until the next note replaces it;
+instead of a note and its fade there is a sustained, high-pitched crunch. The
+whole mix clips (4-14% of samples at full scale). Patch 1407 (the noise
+register offsets) is necessary but does not fix it.
+
+**Cause.** NitroSystem's sequence player converts its 0..127 player volume to
+decibels through `_0210D750` (`lib/NitroSystem/src/snd_player.c`). In the DS
+build that symbol is an alias of NitroSDK's `SNDi_DecibelTable`:
+`lib/asm/nitro_sdk_data.s` emits an **empty** `.rodata.alias_d750` section,
+and the DS link order places it immediately before `SND_util.o`'s
+`.rodata.snd_decibel`, so both names share the table. The port links with the
+host's default section order, where the empty section landed on unrelated
+`.rodata` (a function-pointer table). `NNSi_SndPlayerMain` then read pointer
+bytes as decibels, the external fader became a large positive gain, every
+channel volume clamped to 0 dB, and `SND_ExChannelMain`'s release stop
+(`volume <= -723`) could never fire: each note kept playing until the next
+key-on. A PC trace showed 15 channels at `ctrl` volume `0x7f`/shift 0 (0 dB)
+and only 4 natural ends in 90 s; a fixed run showed volumes 41-103 with 192.
+
+**Fix.** `hgss/compat/src/nns_volume_table.c` supplies the real 128-entry table
+(identical to `SNDi_DecibelTable`); `tools/hgss_game.py` removes the empty
+`.rodata.alias_d750` from the SDK data object for the port links and checks
+after the link that `_0210D750` is 256 bytes
+(`[sound] _0210D750 -> nns_volume_table.c (256 bytes)`). Tests:
+`tests/test_hgss_game.py` keeps the table equal to the NitroSDK source and
+fails the build if the link loses it; `test_sound_chip`/`test_sound_sequence`
+still cover the mixer and driver. The DS gate is untouched: it links with its
+own order and never runs the port's object step.
+
+**Rule.** A zero-size data alias is only valid where the linker's section order
+is pinned. When a port links the same objects with a different order, give the
+symbol its real data; an empty alias silently points at whatever follows.
 
 ## A frame under the refresh is not a 60 Hz frame
 

@@ -140,6 +140,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **Noise channel.** Sound channels 14 and 15, driven by `SND_SetupChannelNoise`. After patch 1405 the port array is indexed by the DS low 16-bit address, so the control is at `0x400 + 16c`, not `16c`; patch 1407 fixes the two writes ([3DS-Pitfalls](3DS-Pitfalls.md#a-noise-note-writes-an-unused-hole)).
 
+**NNS volume table (`_0210D750`).** NitroSystem's 128-entry linear 0..127 volume-to-decibel table, used by `snd_player.c` before it pushes a player volume to the ARM7. On the DS it aliases NitroSDK's `SNDi_DecibelTable`; the port supplies it in `hgss/compat/src/nns_volume_table.c` because the decomp's empty alias section lands elsewhere under the port link ([3DS-Pitfalls](3DS-Pitfalls.md#the-nns-volume-table-is-an-empty-alias)).
+
 **NARC.** The DS's archive format for game data files. Its generated index headers have the extension `.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4).
 
 **NAIX.** The extension of the generated NARC index headers, such as `msgdata/msg.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4; [tools/layout_probe/run_probe.py](../../tools/layout_probe/run_probe.py)).

@@ -86,6 +86,21 @@ LINK_DATA_EXCLUDED = ("lib/NitroDWC/asm/dwc_gamespy_bss.o",
                       "lib/NitroDWC/asm/dwc_lib_data.o",
                       "lib/NitroDWC/asm/dwc_lib_rodata.o")
 
+# NitroSystem's volume->decibel table, _0210D750, is an alias of NitroSDK's
+# SNDi_DecibelTable on the DS: lib/asm/nitro_sdk_data.s emits it as an empty
+# .rodata.alias_d750 section and the DS link order places that section right
+# before SND_util.o's .rodata.snd_decibel. The port's default section order
+# does not: the empty symbol landed on unrelated .rodata, and NNS read pointer
+# bytes as decibels (a large positive fader pinned every channel at 0 dB and
+# kept the release stop from ever firing, so notes hung until the next key-on).
+# Drop the empty section from the SDK data object for the port links and
+# provide the table from the port object below.
+NNS_VOLUME_ALIAS_SECTION = ".rodata.alias_d750"
+NNS_VOLUME_SDK_SOURCE = "lib/asm/nitro_sdk_data.s"
+NNS_VOLUME_PORT_SOURCE = REPO / "hgss" / "compat" / "src" / "nns_volume_table.c"
+NNS_VOLUME_SYMBOL = "_0210D750"
+NNS_VOLUME_TABLE_SIZE = 0x80 * 2
+
 PORT_DEFINES = ["-DSDK_ARM9", "-DSDK_TS", "-DSDK_4M", "-DSDK_CODE_ARM",
                 "-DSDK_FINALROM", "-DNNS_FINALROM", "-DSDK_PORT_3DS",
                 # The DS build keeps assertions (config.mk). Several call
@@ -232,6 +247,7 @@ def app_sources(target: str) -> list[Path]:
                REPO / "hgss" / "game" / "app" / "heartgold.c",
                REPO / "hgss" / "game" / "app" / "cpp_runtime.c",
                REPO / "hgss" / "compat" / "src" / "msl_runtime.c",
+               REPO / "hgss" / "compat" / "src" / "nns_volume_table.c",
                REPO / "hgss" / "game" / "stubs" / "wm_stubs.c",
                REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c",
                REPO / "hgss" / "game" / "stubs" / "mb_stubs.c"]
@@ -916,6 +932,33 @@ def unresolved_symbols(text: str) -> list[str]:
     return list(seen)
 
 
+def check_nns_volume_table(nm: str, binary: Path) -> tuple[bool, str]:
+    """Confirm the linked program defines NNS's volume table, at full size.
+
+    The decomp's empty .rodata.alias_d750 is removed from the SDK data object
+    and hgss/compat/src/nns_volume_table.c supplies the table; a future section
+    rename or an accidentally dropped app object must fail the build here
+    rather than silently take the audio back to a clipped wall with hung notes.
+    """
+    try:
+        proc = run([nm, "-S", "--defined-only", str(binary)])
+    except OSError as exc:
+        return False, f"can't run {nm}: {exc}"
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[-1] == NNS_VOLUME_SYMBOL:
+            try:
+                size = int(parts[1], 16)
+            except ValueError:
+                break
+            if size != NNS_VOLUME_TABLE_SIZE:
+                return False, (f"{NNS_VOLUME_SYMBOL} is {size} bytes, "
+                               f"want {NNS_VOLUME_TABLE_SIZE}")
+            return True, (f"{NNS_VOLUME_SYMBOL} -> "
+                          f"{NNS_VOLUME_PORT_SOURCE.name} ({size} bytes)")
+    return False, f"{NNS_VOLUME_SYMBOL} is not defined"
+
+
 def run(cmd: list[str], cwd: Path | None = None,
         env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run a child with captured output (tasks print their own summaries)."""
@@ -1007,6 +1050,15 @@ def assemble_objects(root: Path, cc: str, flags: list[str], out: Path,
             if align_text:
                 text += align_text
                 ok = "error" not in align_text.lower()
+        if ok and objcopy is not None and Path(rel).as_posix().endswith(NNS_VOLUME_SDK_SOURCE):
+            # See NNS_VOLUME_ALIAS_SECTION: the port supplies the real table
+            # from NNS_VOLUME_PORT_SOURCE, so the empty SDK definition must go.
+            strip = run([objcopy, f"--remove-section={NNS_VOLUME_ALIAS_SECTION}",
+                         str(obj)])
+            text += strip.stdout + strip.stderr
+            if strip.returncode != 0:
+                ok = False
+                errors = 1
         if ok:
             ok, alias_text = apply_object_aliases(root, root / rel, obj,
                                                   alias_env, nm, readelf, out)
@@ -1301,6 +1353,14 @@ def main(argv: list[str] | None = None) -> int:
     (out / "link.log").write_text(text, encoding="utf-8")
     if proc.returncode == 0 and binary.is_file():
         print(f"   linked {binary}")
+        table_ok, table_text = check_nns_volume_table(tools["nm"], binary)
+        print(f"   [sound] {table_text}")
+        if not table_ok:
+            print("hgss_game: the NNS volume table is missing or the wrong size; "
+                  "the port must drop " + NNS_VOLUME_ALIAS_SECTION + " from "
+                  + NNS_VOLUME_SDK_SOURCE + " and link " + str(NNS_VOLUME_PORT_SOURCE),
+                  file=sys.stderr)
+            return 1
         try:
             package_three_dsx(binary, args.target)
         except ThreeDsxError as exc:

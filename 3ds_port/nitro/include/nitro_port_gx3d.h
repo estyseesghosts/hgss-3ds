@@ -30,7 +30,14 @@ typedef struct NitroGx3dVertex {
     uint32_t depth;
     float inv_w, s, t;
     uint16_t color;               /* DS RGB555 */
+    /* NITRO_GX3D_VERTEX_CAMERA_POINT: clip was exactly (0,0,0,0), so the
+     * store keeps screen (0,0) and clip[3] = 1 (see to_screen in
+     * port_gx3d.c). The GPU path then needs a different w; see put_vertex
+     * in port_gx3d_vertex.c. */
+    uint8_t flags;
 } NitroGx3dVertex;
+
+#define NITRO_GX3D_VERTEX_CAMERA_POINT 0x01u
 
 typedef struct NitroGx3dTriangle {
     NitroGx3dVertex v[3];

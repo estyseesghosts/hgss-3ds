@@ -137,7 +137,7 @@ git status --short                    # no untracked game content that could be 
 git ls-files | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'   # must be empty
 git log --all --oneline --stat | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'  # history audit
 git count-objects -vH                 # about 2 MB, no LFS needed
-make test                             # 334 Python tests + 20 SDK suites
+make test                             # 338 Python tests + 20 SDK suites
 make content-check
 ```
 
