@@ -25,6 +25,7 @@ sequence.
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
+| Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 
 ## A weak hook binds to NULL
 
@@ -305,6 +306,31 @@ worker.
 **Rule.** Initialising an output device is not connecting it. Log a counter
 that proves it was fed, and give the feeder a priority above the work that can
 hold its core.
+
+## A frame under the refresh is not a 60 Hz frame
+
+**Symptom.** The game runs about 1.45x fast: scripted cutscenes finish early,
+and `tools/frametime_report.py` reports **87.0 Hz** (40 samples, mean
+`total_us` 11.49 ms) while `draw_us` stays under one 16.7 ms refresh.
+
+**Cause.** The emulated DS's only clock is the V-blank the port raises once per
+`NitroPort_OnFrame`. Nothing spaced those calls except `gfxSwapBuffers`' wait
+for the display — and that wait ends as soon as the previous frame has been
+presented. Once the composite got faster than a refresh, the swap returned
+early and the loop free-ran. A frame that fits under the refresh is not a
+60 Hz frame.
+
+**Fix.** `WaitForFrameCap` holds frame starts to a `SYSCLOCK_ARM11 / fps` tick
+grid with `svcGetSystemTick()` and sleeps only the remainder with
+`svcSleepThread`. It is a deadline, not another V-blank: a frame that already
+overran returns without sleeping, and one more than a period behind starts a
+fresh grid so a slow frame cannot cause a catch-up burst. `DrawFrame` — both
+blits and the swap — stays unconditional and runs before the wait. `fps` in
+`port.ini` is 60 by default; `fps=30` halves the game's speed because the game
+clock is per frame, so it is a comparison mode only.
+
+**Rule.** If the display swap can return before a refresh, pace the frame loop
+yourself and measure the interval between frame starts.
 
 ## Reading a Luma crash dump
 

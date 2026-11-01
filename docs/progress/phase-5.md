@@ -2,8 +2,9 @@
 
 Status: **runs on hardware; the 3D GPU pipeline is built and packages, pending
 a console run.** The game boots, plays the intro, reaches Oak's speech and the
-player's house, draws both screens and plays audio, at roughly 58 Hz in the
-scenes measured. Remaining Phase 5 exits: confirming the 3D layer on a console
+player's house, draws both screens and plays audio. Frame starts are capped at
+60 Hz since the log-9 run measured 87 Hz without a cap. Remaining Phase 5
+exits: confirming the 3D layer on a console
 (the GPU worker is in this tree but has not run there), a full-speed run
 through Oak's speech, the save round-trip, the Old 3DS decision and the `.cia`
 decision.
@@ -533,6 +534,45 @@ RODATA 112, DATA 13, BSS 4446 pages); `make test` 327 tests OK + 21 SDK
 suites; `make port-tests` 17,122 checks, 0 failed; the new host test
 `tests/game/pica_scene/run.sh` passes. Staged artifact
 `sha256 ce683574cfe912d4896a6db18089c6b53773bfd893e01a2c0b2138f9e9ad4afd`.
+
+## The 60 Hz frame cap: log-9 ran at 87 Hz
+
+The run after the GPU-worker fixes (log-9) proved the pipeline but exposed a
+clock problem: `tools/frametime_report.py` over 40 samples reported mean
+`total_us` **11.49 ms**, **87.0 Hz**, with `logic_us` under 1 ms. The game and
+its scripted cutscenes therefore ran **1.45x fast**.
+
+The emulated DS's only clock is the V-blank the port raises once per
+`NitroPort_OnFrame`; the call spacing used to come from `gfxSwapBuffers`' wait
+for the display. That wait ends once the previous frame has been presented, so
+as soon as the composite fit under one refresh it returned early and the loop
+free-ran. A frame that fits under the refresh is not a 60 Hz frame.
+
+`NitroPort_OnFrame` now ends with `WaitForFrameCap`: frame starts are held to
+a wall-clock grid of `SYSCLOCK_ARM11 / fps` ticks from `svcGetSystemTick()`,
+and only the remainder is slept with `svcSleepThread`. It is a deadline, not a
+second V-blank — a frame that already overran returns immediately — and if the
+frame is more than one period behind, the grid restarts from now instead of
+bursting to catch up. Both blits and `gfxSwapBuffers` stay unconditional and
+ahead of the wait, so `draw_us` still measures only the draw.
+
+`fps` in `port.ini` selects the cap: **60** (the default, the game's intended
+speed) or **30**. 30 is a comparison mode and **halves the game's speed**,
+because the game clock advances once per frame; missing or invalid values use
+60. Startup logs `[perf] frame cap 60 Hz`. Every 600 frames the existing
+`FRAMETIME` line keeps its shape; at 60 Hz `total_us` should settle near
+**16,700** (the period is 4,468,530 ticks = 16,667 us, 60.0 Hz) with
+`draw_us` unchanged, and a mean near 11,490 is the symptom the cap was added
+for.
+
+**Local verification (container, 2026-11-01).** `make test` **329 tests, OK**
+(the two new shell-text tests) plus the `tests/sdk/*` suites, exit 0. The 3DS
+build compiles **1092/1092** with **0 unresolved** and packages
+`pokeheartgold.3dsx` (**9,278,584 bytes**); `3dsxdump` exits **0** (CODE 2126,
+RODATA 112, DATA 13, BSS 4446 pages) and the ELF carries
+`[perf] frame cap %d Hz`. Artifact
+`sha256 a25cbee94bbe59a3c496a6734cc5c7777d04f3e99b0cacf3f0f02f3a3cdaf910`.
+None of the timing claims are verified: the container cannot run a console.
 
 ## Pending user runs
 

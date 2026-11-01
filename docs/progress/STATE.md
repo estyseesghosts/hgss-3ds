@@ -92,7 +92,11 @@ player. The ninth run also exposed two defects, now fixed in the tree but not
 yet re-run: the GPU worker was on the game's core and rendered about **1 image
 a second** (105 images in 4,680 frames), and a `w = 0` vertex produced the
 black fan over Ho-oh. The worker moved to core 2, the camera-plane triangles
-are dropped, and the audio thread moved above the game.
+are dropped, and the audio thread moved above the game. The run after those
+fixes (log-9) then measured **87.0 Hz**: once the composite fit under one
+refresh, `gfxSwapBuffers` stopped pacing the loop. The tree now caps frame
+starts at 60 Hz (`[perf] frame cap 60 Hz`), so the next log's mean `total_us`
+should be near **16,700**, not 11,490.
 
 The scenes measured before the pipeline ran at **17 ms a frame (~58.7 Hz)**
 with `logic_us` under 100 us, and the DSP reported **0.4% dropped frames**.
@@ -134,9 +138,10 @@ before the count is trusted.
 1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
    replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
    itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
-2. **Phase 5:** confirm the GPU pipeline on hardware (room, player sprite and
-   intro movie's 3D; rising `3D images:` count), then the remaining shell
-   items (input, SMDH and a hardware run).
+2. **Phase 5:** confirm the GPU pipeline and the 60 Hz frame cap on hardware
+   (room, player sprite and intro movie's 3D; rising `3D images:` count; mean
+   `total_us` near 16,700 rather than 11,490), then the remaining shell items
+   (input, SMDH and a hardware run).
 3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 again at 72 patches.
 4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
    available for an end-to-end pack/open; record it when a dump is available.
@@ -197,6 +202,29 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-01 (session 8, follow-up 2) — the 60 Hz frame cap
+
+- **The log-9 run ran at 87.0 Hz.** `tools/frametime_report.py` over 40
+  samples: mean `total_us` **11.49 ms**, `logic_us` under 1 ms. The emulated
+  DS's V-blank is raised once per `NitroPort_OnFrame`, and `gfxSwapBuffers`
+  only waits while the previous frame is still being presented; once the
+  composite fit under one refresh the loop free-ran, so the game and its
+  cutscenes ran 1.45x fast.
+- **The shell caps frame starts at 60 Hz.** `WaitForFrameCap` holds a
+  `SYSCLOCK_ARM11 / fps` tick grid with `svcGetSystemTick()` and sleeps only
+  the remainder; a frame that already overran waits for nothing, and one more
+  than a period behind re-anchors the grid. `DrawFrame` and its swap stay
+  unconditional and before the wait. `port.ini`'s `fps` takes 60 (default) or
+  30 (comparison: half game speed, because the game clock is per frame);
+  invalid values use 60. Startup logs `[perf] frame cap 60 Hz`.
+- **Expected next log:** mean `total_us` near **16,700** (the period is
+  4,468,530 ticks = 16,667 us) rather than 11,490, with `draw_us` unchanged.
+- **Local:** `make test` **329 tests, OK** plus the `tests/sdk/*` suites, exit
+  0; 3DS build 1092/1092, 0 unresolved; `.3dsx` **9,278,584 B**; `3dsxdump`
+  rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). Hardware timing is
+  the owner's run.
+  [phase-5.md](phase-5.md) · [3DS-Pitfalls](../wiki/3DS-Pitfalls.md)
 
 ### 2026-11-01 (session 8, follow-up) — the 3D works; the worker was starved
 

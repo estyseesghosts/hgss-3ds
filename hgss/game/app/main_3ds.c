@@ -23,6 +23,11 @@
  * The replay is frame-for-frame the PC runner's, so a hardware run repeats
  * the PC run. Without a script the console's buttons and touch screen drive
  * the game.
+ *
+ * Frame cap: one emulated DS V-blank per displayed frame, 60 Hz by default.
+ *   fps=60        (the default; the game runs at its intended speed)
+ *   fps=30        comparison mode: the game clock is per frame, so the game
+ *                 runs at half speed. Missing or invalid values use 60.
  */
 
 #include <3ds.h>
@@ -56,6 +61,10 @@
 #define GAME_STACK_SIZE (1024 * 1024)
 #define LOG_RING 64
 #define LOG_LINE 220
+
+/* One emulated DS V-blank per frame. 30 Hz is a comparison mode only: the
+ * game's clock is the per-frame V-blank, so it halves the game's speed. */
+#define DEFAULT_FPS 60
 
 /* The port's hooks (see nitro_port.h). Declared here rather than included:
  * nitro_port.h pulls in NitroSDK's types, which cannot live next to
@@ -102,6 +111,8 @@ static bool sScriptLoaded;
 static HgssScript sScript;
 static u64 sLastFrameTick;
 static bool sHaveLastFrameTick;
+static int sFrameCap = DEFAULT_FPS;
+static u64 sNextFrameTick;
 
 /* The last log lines, for the exception log. */
 static char sRing[LOG_RING][LOG_LINE];
@@ -455,6 +466,36 @@ static unsigned long long TicksToUs(u64 ticks)
     return (unsigned long long)ticks * 1000000ULL / SYSCLOCK_ARM11;
 }
 
+/* Hold each frame start to a wall-clock grid of SYSCLOCK_ARM11 / fps ticks.
+ *
+ * The emulated DS's only clock is the V-blank the port raises once per
+ * OnFrame, so a frame that finishes before the display refresh must still
+ * wait. gfxSwapBuffers used to provide that wait, but it only blocks while
+ * the previous frame is still being presented: once the composite got under
+ * one refresh it returned early and the game ran at 87 Hz (log-9). This is a
+ * deadline, not a second V-blank: a frame that already overran returns
+ * without sleeping, and one more than a whole period behind starts a fresh
+ * grid instead of bursting to catch up. */
+static void WaitForFrameCap(u64 frameStart)
+{
+    u64 period = SYSCLOCK_ARM11 / (u64)sFrameCap;
+    u64 now;
+
+    if (sNextFrameTick == 0) {
+        sNextFrameTick = frameStart + period;
+    }
+    now = svcGetSystemTick();
+    if (now < sNextFrameTick) {
+        /* svcSleepThread takes nanoseconds; the grid is in ARM11 ticks. */
+        u64 ns = (sNextFrameTick - now) * 1000000000ULL / SYSCLOCK_ARM11;
+        svcSleepThread((s64)ns);
+    } else if (now - sNextFrameTick > period) {
+        sNextFrameTick = now + period;
+        return;
+    }
+    sNextFrameTick += period;
+}
+
 void NitroPort_OnFrame(void)
 {
     u64 frameStart = svcGetSystemTick();
@@ -532,6 +573,10 @@ void NitroPort_OnFrame(void)
             sScriptLoaded = false;
         }
     }
+
+    /* Last, after both blits and the swap: this is what spaces frame starts
+     * when the display work finishes early. */
+    WaitForFrameCap(frameStart);
 }
 
 /* The game stopped itself. */
@@ -699,6 +744,84 @@ static void ReadProfile(HeartgoldSettings *settings)
         settings->birthDay = birthday[1];
     }
     cfguExit();
+}
+
+/* One `key=value` from port.ini. Returns 1 and copies the trimmed value when
+ * the key is present and not empty; 0 when the file or the key is missing.
+ * The existing ScriptPath() keeps its own lenient reader; this one is for the
+ * numeric settings that need an exact key. */
+static int IniValue(const char *key, char *value, size_t size)
+{
+    FILE *file = fopen(INI_PATH, "rb");
+    char line[256];
+    size_t keyLen = strlen(key);
+
+    if (file == NULL) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *at = line;
+        char *end;
+
+        if (strncmp(at, key, keyLen) != 0) {
+            continue;
+        }
+        at += keyLen;
+        while (*at == ' ' || *at == '\t') {
+            at++;
+        }
+        if (*at != '=') {
+            continue;
+        }
+        at++;
+        while (*at == ' ' || *at == '\t') {
+            at++;
+        }
+        end = at + strlen(at);
+        while (end > at && (end[-1] == '\n' || end[-1] == '\r' ||
+                            end[-1] == ' ' || end[-1] == '\t')) {
+            *--end = '\0';
+        }
+        if (*at == '\0') {
+            continue;
+        }
+        snprintf(value, size, "%s", at);
+        fclose(file);
+        return 1;
+    }
+    fclose(file);
+    return 0;
+}
+
+/* `fps=60` (default) or `fps=30` in port.ini, read before the game's thread
+ * starts. Anything else -- including a missing file -- keeps 60 Hz. */
+static void ReadFrameCap(void)
+{
+    char value[16];
+    char *end;
+    long fps;
+
+    sFrameCap = DEFAULT_FPS;
+    if (!IniValue("fps", value, sizeof(value))) {
+        NitroPort_Log("[perf] frame cap %d Hz", sFrameCap);
+        return;
+    }
+    fps = strtol(value, &end, 10);
+    while (*end == ' ' || *end == '\t') {
+        end++;
+    }
+    if (*end != '\0' || (fps != 60 && fps != 30)) {
+        NitroPort_Log("[perf] port.ini fps=%s is not 60 or 30; using %d Hz",
+                      value, DEFAULT_FPS);
+        NitroPort_Log("[perf] frame cap %d Hz", sFrameCap);
+        return;
+    }
+    sFrameCap = (int)fps;
+    NitroPort_Log("[perf] frame cap %d Hz", sFrameCap);
+    if (sFrameCap == 30) {
+        NitroPort_Log("[perf] 30 Hz is a comparison mode: the game clock is "
+                      "per frame, so the game runs at half speed");
+    }
 }
 
 /* `script=PATH` in port.ini, or the default script path. */
@@ -933,6 +1056,9 @@ int main(int argc, char **argv)
                       isNew3ds ? "804 MHz + L2 requested"
                                : "268 MHz, the speedup is New-3DS only");
     }
+
+    /* Before the game's thread: the cap is fixed for the whole run. */
+    ReadFrameCap();
 
     /* NDSP only when the console has dspfirm.cdc; otherwise stay silent and
      * say so. Never let this stop the game. */

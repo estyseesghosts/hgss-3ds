@@ -713,6 +713,60 @@ class OverlayCheckTests(unittest.TestCase):
         error = error[:error.index("\n}")]
         self.assertIn("consoleInit(", error)
 
+    def test_shell_caps_the_frame_rate_at_60_by_default(self):
+        """A frame under the refresh is not a 60 Hz frame.
+
+        The log-9 run measured 87 Hz (mean total 11.49 ms): once the display
+        work fit under one refresh, gfxSwapBuffers returned early, and the only
+        clock the emulated DS has is the V-blank raised once per OnFrame. The
+        shell holds frame starts to SYSCLOCK_ARM11 / fps with a tick deadline.
+        port.ini's fps key may only say 60 (default) or 30; 30 is a comparison
+        mode that halves the game's speed because the clock is per frame.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("#define DEFAULT_FPS 60", text)
+        self.assertIn("sFrameCap = DEFAULT_FPS;", text)
+        self.assertIn('IniValue("fps", value, sizeof(value))', text)
+        self.assertIn('"[perf] frame cap %d Hz"', text)
+        self.assertIn("SYSCLOCK_ARM11 / (u64)sFrameCap", text)
+        self.assertIn("half speed", text)
+        # Anything other than 60 or 30 falls back to the default.
+        read = text[text.index("static void ReadFrameCap"):]
+        read = read[:read.index("\n}")]
+        self.assertIn("fps != 60 && fps != 30", read)
+        self.assertIn("DEFAULT_FPS", read)
+        # Read before the game's thread can raise its first V-blank.
+        self.assertLess(text.index("ReadFrameCap();"),
+                        text.index("threadCreate(GameThread"))
+
+    def test_shell_waits_after_the_draw_never_before_it(self):
+        """The cap is a sleep after the frame, not another V-blank before it.
+
+        Both blits and gfxSwapBuffers stay unconditional and ahead of the wait;
+        a frame that already overran returns from the wait immediately, and one
+        more than a whole period behind re-anchors the deadline instead of
+        bursting to catch up.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        draw = text[text.index("static void DrawFrame"):]
+        draw = draw[:draw.index("\n}")]
+        self.assertIn("gfxSwapBuffers()", draw)
+        self.assertNotIn("svcSleepThread", draw)
+        self.assertNotIn("WaitForFrameCap", draw)
+        frame = text[text.index("void NitroPort_OnFrame"):]
+        frame = frame[:frame.index("\n}")]
+        self.assertIn("WaitForFrameCap(frameStart)", frame)
+        self.assertLess(frame.index("DrawFrame()"),
+                        frame.index("WaitForFrameCap(frameStart)"))
+        wait = text[text.index("static void WaitForFrameCap"):]
+        wait = wait[:wait.index("\n}")]
+        self.assertIn("svcGetSystemTick()", wait)
+        self.assertIn("(sNextFrameTick - now) * 1000000000ULL / SYSCLOCK_ARM11", wait)
+        self.assertIn("svcSleepThread((s64)ns)", wait)
+        self.assertIn("now - sNextFrameTick > period", wait)
+        self.assertIn("sNextFrameTick = now + period", wait)
+        self.assertIn("sNextFrameTick += period", wait)
+
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)

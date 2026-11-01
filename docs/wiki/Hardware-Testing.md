@@ -32,15 +32,20 @@ looks like so the result can be recorded without guesswork.
    sdmc:/3ds/dspfirm.cdc     # optional: your own console's dump
    ```
 
-   `port.ini` is `key=value` and lives in the data folder; the only key today
-   is `script`. Give it an absolute path or a name inside the data folder:
+   `port.ini` is `key=value` and lives in the data folder. Two keys today:
+   `script` (the input script) and `fps` (the frame cap). Give `script` an
+   absolute path or a name inside the data folder:
 
    ```ini
    script=sdmc:/3ds/pokeheartgold/script.txt
+   fps=60
    ```
 
    Without `port.ini`, the game still picks up `script.txt` from the data
    folder on its own, so for a scripted run the file alone is enough.
+   `fps` accepts `60` (the default) or `30`; `30` is a comparison mode that
+   **halves the game's speed**, because the game clock advances once per
+   frame. Any other value (or no key) uses 60 Hz.
 
 3. `dspfirm.cdc` is the console's own DSP firmware dump. **Without it the
    game runs silent** and `log.txt` says so; that is expected, not a crash.
@@ -138,6 +143,7 @@ connected:
 
 ```text
 [perf] New 3DS: 804 MHz + L2 requested     (or "268 MHz, the speedup is New-3DS only")
+[perf] frame cap 60 Hz
 NDSP started
 audio: 32768 Hz stereo, 4 blocks of 512 frames
 ```
@@ -147,6 +153,8 @@ a failure used to be ambiguous:
 
 | Line | Meaning |
 | --- | --- |
+| `[perf] frame cap 60 Hz` | The frame cap in use. `30 Hz` means `port.ini`'s `fps=30` comparison mode: the game clock is per frame, so the game runs at half speed. |
+| `[perf] port.ini fps=… is not 60 or 30; using 60 Hz` | The `fps` value was ignored; the run uses the default. |
 | `still starting: no frame after 10 s` | Stuck inside the game's init; nothing killed it. |
 | `the HOME menu asked to close (frame N)` | APT delivered a close; the shell stops in order. |
 | `the game's thread is returning (frame N)` | `NitroMain` returned by itself. |
@@ -176,8 +184,10 @@ Send `log.txt` whole; nothing on that page needs filtering.
    renders, and nothing fans out black from the centre of the picture. `3D
    images:` rises by roughly 300 every 600 frames while 3D is up, and walking
    animates smoothly rather than once a second. The app stays at full speed (no
-   visible stutter), audio is clean, and `log.txt` ends with a frame count near
-   the script's `end` without an exception block.
+   visible stutter), and the game runs at its intended speed rather than fast:
+   the log's mean `total_us` from `tools/frametime_report.py log.txt` is near
+   **16,700** (60 Hz), not 11,500 (87 Hz). Audio is clean, and `log.txt` ends
+   with a frame count near the script's `end` without an exception block.
 4. Save a copy of `log.txt` and note the frame count and any dropped frames.
 
 ## Frame-time budget
@@ -185,8 +195,13 @@ Send `log.txt` whole; nothing on that page needs filtering.
 The shell logs a `frame N` line every 600 frames. Once the instrumentation
 build is in, the log also carries per-subsystem milliseconds; the report
 format and `tools/frametime_report.py` are described in
-`docs/progress/phase-5.md`. Target: **59.8 Hz** in menus, intro and title.
-Record the New 3DS numbers and, separately, the Old 3DS numbers.
+`docs/progress/phase-5.md`. Target: **60 Hz** in menus, intro and title. The
+frame cap sets that pace: `total_us` should average near **16,700** (the
+period is `SYSCLOCK_ARM11 / 60` = 4,468,530 ticks ≈ 16,667 us). A mean near
+11,500 (87 Hz) means the cap is not in the artifact or not reached; a mean
+near 33,400 means `fps=30` is set. `fps=30` reports as missing the 59.8 Hz
+target by design. Record the New 3DS numbers and, separately, the Old 3DS
+numbers.
 
 ## Old 3DS measurement (decision pending)
 
