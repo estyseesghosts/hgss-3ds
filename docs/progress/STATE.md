@@ -1,9 +1,9 @@
 # Current state
 
-Last verified: **2026-10-31 (session 6)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
-the tree at **72 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 54). Everything below that says
-"verified" was run on that tree on that date. If you change the patch stack, rerun the commands and update
-this page; do not trust it blindly.
+Last verified: **2026-11-01 (session 7)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
+the tree at **74 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 56). Everything below that
+says "verified" was run on that tree on that date. If you change the patch stack, rerun the commands
+and update this page; do not trust it blindly.
 
 **One line:** Phase 2's exit criterion is met — the PC program links with **0 unresolved**, the overlay
 self-check passes on the real binary (129/0), the symbol cross-check reports **0 missing**, and the 3DS
@@ -20,6 +20,7 @@ retail HeartGold and SoulSilver ROMs byte for byte.
 | 1 SDK patch stack | **Done** | 72 patches apply from scratch; `make test` 277 Python tests + 21 SDK suites; `make port-tests` (see below); both archives build; the DS gate's three stale pin classes are fixed in 1603/1762/1763, and both matching builds reproduce the retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
+| 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames, no crash through 20,000 frames. Runner parity, `boot_smoke.py`, patches 1801/1802 and `PM_KEEP_ASSERTS` landed. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) |
 | 4-11 | Not started | See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -83,9 +84,10 @@ Pokéwalker interior aliases (a missing build stage, now run).
 
 ## Next actions, in order
 
-1. **Phase 4**: use `tools/boot_smoke.py` and the real pack; fix the first crash after `NitroMain`
-   (the PC smoke above reaches frame 0). Then the headless boot-to-Oak run.
-2. **Phase 5**: the 3DS shell's drawing, input, SMDH and a hardware run.
+1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
+   replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
+   itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
+2. **Phase 5:** the 3DS shell's drawing, input, SMDH and a hardware run.
 3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 again at 72 patches.
 4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
    available for an end-to-end pack/open; record it when a dump is available.
@@ -146,6 +148,23 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-01 (session 7) — PC build reaches Oak's speech
+
+- **Four boot defects fixed** at the layer that explains them: patch 1801 (literal DS header-mirror
+  addresses), patch 1802 (main-menu work-area BSS alias), `PM_KEEP_ASSERTS` in the harness (GF_ASSERT
+  side effects), and the runner's own crash/watch plumbing. Each patch has a `gcc -E -P` identity
+  proof for the `#else` text.
+- **Runner parity:** `--stop-at-missing-file`, `--stall-seconds`, `--screenshots`,
+  `--screenshot-every`, `--press`, `--touch`, `--wav`, `--dump-3d`, `--trace-pxi`, `--trace-irq`,
+  `--events`. `pc_trace.c` uses linker wraps so `3ds_port/` stays byte-identical.
+- **`tools/boot_smoke.py` + tests**: synthetic pak reports `missing_file a/0/1/6` at frame 0; the
+  real pack reports `frame_limit` with boot stage `overlay:intro_title`.
+- **End-to-end:** real HG pack, no save, 20,000 frames: logo, full movie, title, main menu, Oak's
+  speech (portrait/text/touch buttons), gender, naming keyboard, confirmation, first bedroom. No
+  crash or stall. Calibrated `tests/inputs/{boot-title,main-menu-nosave,newgame-buttons}.txt`.
+- Open: golden captures (user), a written save + melonDS load, sanitizer, upstream drafts, 3DS shell.
+  [phase-4.md](phase-4.md)
 
 ### 2026-10-31 (session 6) — PC and 3DS link clean, Phase 3 complete
 

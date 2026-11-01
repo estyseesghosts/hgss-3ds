@@ -1,7 +1,10 @@
 # Cold boot -> Game Freak logo -> opening movie (watched in full, NOT skipped)
 # -> title screen idle.  Frame-indexed from power-on.  See tools/golden/README.md.
-# UNCALIBRATED: no input is sent, so only the 'end' frame needs tuning: it must
-# cover logo + full movie + several seconds of idle title.
+#
+# Calibrated against the PC build on 2026-11-01: the Game Freak logo is up by
+# frame ~600, the movie runs to ~5400, and the Ho-Oh title screen settles at
+# ~6300. These are PC frame numbers; the melonDS capture must be run once and
+# its first title frames compared (run.py aligns on the first matching frame).
 every: 10
 0 -
-end: 5400
+end: 7000

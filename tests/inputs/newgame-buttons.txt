@@ -1,23 +1,98 @@
-# New Game: Oak's speech -> gender -> naming (BUTTON entry) -> confirm ->
-# first bedroom frames.  Starts from a no-save boot.
-# UNCALIBRATED: all frame numbers and the naming key sequence are estimates;
-# the naming keyboard layout must be checked on the first capture.
+# New Game: title -> main menu -> Oak's speech -> gender -> naming (BUTTON
+# entry) -> confirm -> end of Oak's speech -> first bedroom frames.
+# Frame-indexed from power-on, no save file.
+#
+# Calibrated against the PC build on 2026-11-01. The first DOWN on the
+# "I will first tell you important things" page is dropped while its fade
+# runs, so the selection needs three DOWNs to reach NO INFO NEEDED. The
+# repeated A advances speech pages; the naming screen pre-fills its
+# remembered name, so A on the keyboard types it (the PC run ends with the
+# name "AAAAA"). A melonDS capture must confirm the same page boundaries;
+# run.py aligns on the first matching frame.
 every: 5
 0 -
-1800 A
-1805 -
-2100 A
-2105 -
-2400 A
-2405 -
-# Oak's speech: advance dialogue with A every ~1.5 s
-2700 A
-2705 -
-3000 A
-3005 -
-3300 A
-3305 -
-3600 A
-3605 -
-# TODO(calibrate): gender choice, name entry via D-pad + A, Start/OK, confirm
-end: 9000
+6550 START
+6556 -
+7500 DOWN
+7506 -
+7700 DOWN
+7706 -
+7900 DOWN
+7906 -
+8100 A
+8106 -
+8400 A
+8406 -
+8700 A
+8706 -
+9000 A
+9006 -
+9300 A
+9306 -
+9600 A
+9606 -
+9900 A
+9906 -
+10200 A
+10206 -
+10500 A
+10506 -
+10800 A
+10806 -
+11100 A
+11106 -
+11400 A
+11406 -
+11700 A
+11706 -
+12000 A
+12006 -
+12300 A
+12306 -
+12600 A
+12606 -
+12900 A
+12906 -
+13200 A
+13206 -
+13500 A
+13506 -
+13800 A
+13806 -
+14100 A
+14106 -
+14400 A
+14406 -
+14700 A
+14706 -
+15000 A
+15006 -
+15300 A
+15306 -
+15600 A
+15606 -
+15900 A
+15906 -
+16200 A
+16206 -
+16500 A
+16506 -
+16800 A
+16806 -
+17100 A
+17106 -
+17400 A
+17406 -
+17700 A
+17706 -
+18000 A
+18006 -
+18300 A
+18306 -
+18600 A
+18606 -
+18900 A
+18906 -
+19200 A
+19206 -
+end: 20000

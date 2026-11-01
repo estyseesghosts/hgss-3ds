@@ -1,12 +1,12 @@
 # Boot with NO save file, skip logos/movie to the title, open the main menu.
-# UNCALIBRATED: frame numbers are estimates; tune on the first capture.
-# Press Start / A on the title (title screen is reached after the movie or
-# after skipping with A), then idle on the main menu.
+# Frame-indexed from power-on.
+#
+# Calibrated against the PC build on 2026-11-01: START on the title at 6550
+# opens the main menu (overlay 74) at ~6700; the menu has faded in by ~6900.
+# The melonDS capture must be checked once and its frames aligned by run.py.
 every: 10
 0 -
-1800 A
-1805 -
-2100 A
-2105 -
-2400 -
-end: 3000
+6550 START
+6556 -
+7000 -
+end: 7600
