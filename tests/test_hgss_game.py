@@ -205,6 +205,11 @@ class AppSourceTests(unittest.TestCase):
         self.assertIn("pc_trace.c", names)
         self.assertNotIn("pc_trace.c", [p.name for p in hg.app_sources("3ds")])
 
+    def test_3ds_program_has_the_script_parser(self):
+        names = [p.name for p in hg.app_sources("3ds")]
+        self.assertIn("3ds_input.c", names)
+        self.assertNotIn("3ds_input.c", [p.name for p in hg.app_sources("host32")])
+
 
 class SanitizerFlagTests(unittest.TestCase):
     def tearDown(self):
@@ -507,9 +512,10 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("consoleClear();", text)
         self.assertIn('printf("\\n pokeheartgold-3ds', text)
         self.assertIn("Press START to exit", text)
-        # The screen text comes after the open attempt fails, not instead of it.
-        self.assertLess(text.index("Can't start: %s."), text.index("consoleClear();"))
-        self.assertLess(text.index("consoleClear();"), text.index("Press START to exit"))
+        # The error is logged when the open fails, and printed on the console
+        # after consoleClear(); the screen text must be the latter.
+        screen = text.index("Can't start: %s.", text.index("consoleClear();"))
+        self.assertLess(screen, text.index("Press START to exit"))
 
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
@@ -592,8 +598,60 @@ class ThreeDsxTests(unittest.TestCase):
         self.assertEqual(cmd, ["/dkp/tools/bin/3dsxtool",
                                "/out/game.elf", "/out/game.3dsx"])
 
+    def test_command_carries_the_smdh_when_present(self):
+        cmd = hg.three_dsx_command(Path("/dkp/tools/bin/3dsxtool"),
+                                   Path("/out/game.elf"), Path("/out/game.3dsx"),
+                                   Path("/out/game.smdh"))
+        self.assertEqual(cmd[-1], "/out/game.smdh")
+        self.assertEqual(len(cmd), 4)
+
+    def test_no_smdh_tool_means_no_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("DEVKITPRO")
+            os.environ["DEVKITPRO"] = tmp
+            try:
+                self.assertIsNone(hg.make_smdh(Path(tmp) / "game.elf"))
+            finally:
+                if old is None:
+                    os.environ.pop("DEVKITPRO", None)
+                else:
+                    os.environ["DEVKITPRO"] = old
+
     def test_host32_is_not_packaged(self):
         self.assertIsNone(hg.package_three_dsx(Path("/nonexistent.elf"), "host32"))
+
+    def test_command_takes_an_optional_smdh(self):
+        cmd = hg.three_dsx_command(Path("/dkp/tools/bin/3dsxtool"),
+                                   Path("/out/game.elf"), Path("/out/game.3dsx"),
+                                   Path("/out/game.smdh"))
+        self.assertEqual(cmd[-1], "/out/game.smdh")
+        self.assertEqual(len(cmd), 4)
+
+    def test_packages_with_the_generic_smdh_when_the_tool_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tool = root / "tools" / "bin" / "3dsxtool"
+            smdh_tool = root / "tools" / "bin" / "smdhtool"
+            tool.parent.mkdir(parents=True)
+            tool.write_text("#!/bin/sh\nprintf 'dsx' > \"$2\"\n")
+            tool.chmod(0o755)
+            smdh_tool.write_text(
+                "#!/bin/sh\nfor a in \"$@\"; do last=$a; done\nprintf 'smdh' > \"$last\"\n")
+            smdh_tool.chmod(0o755)
+            elf = root / "pokeheartgold-3ds.elf"
+            elf.write_bytes(b"elf")
+            old = os.environ.get("DEVKITPRO")
+            os.environ["DEVKITPRO"] = str(root)
+            try:
+                dsx = hg.package_three_dsx(elf, "3ds")
+            finally:
+                if old is None:
+                    os.environ.pop("DEVKITPRO", None)
+                else:
+                    os.environ["DEVKITPRO"] = old
+            self.assertEqual(dsx, root / "pokeheartgold.3dsx")
+            self.assertEqual(dsx.read_bytes(), b"dsx")
+            self.assertEqual((root / "pokeheartgold-3ds.smdh").read_bytes(), b"smdh")
 
     def test_packages_next_to_the_elf_without_the_3ds_suffix(self):
         with tempfile.TemporaryDirectory() as tmp:

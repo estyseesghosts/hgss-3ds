@@ -237,6 +237,9 @@ def app_sources(target: str) -> list[Path]:
     if target == "host32":
         # --trace-pxi/--trace-irq are host-only diagnostics (linker wraps).
         sources.append(REPO / "hgss" / "game" / "app" / "pc_trace.c")
+    else:
+        # The 3DS shell's scripted-input parser (plain C, host-testable).
+        sources.append(REPO / "hgss" / "game" / "app" / "3ds_input.c")
     return sources
 
 
@@ -654,12 +657,33 @@ def wifi_stub_command(nm: str, root: Path, objects: list[Path],
     return cmd
 
 
-def three_dsx_command(tool: Path, elf: Path, dsx: Path) -> list[str]:
+def three_dsx_command(tool: Path, elf: Path, dsx: Path,
+                      smdh: Path | None = None) -> list[str]:
     """The 3dsxtool invocation: a Homebrew Launcher program from the ELF.
 
-    No SMDH: the icon/banner and title metadata are Phase 5 (they come from
-    the user's own cartridge). 3dsxtool accepts an ELF alone."""
-    return [str(tool), str(elf), str(dsx)]
+    The SMDH is optional; when present, 3dsxtool takes it as the third
+    argument. The checked-in icon is a generic placeholder (no cart art);
+    the cart-derived icon and banner are generated locally in Phase 5."""
+    command = [str(tool), str(elf), str(dsx)]
+    if smdh is not None:
+        command.append(str(smdh))
+    return command
+
+
+def make_smdh(binary: Path) -> Path | None:
+    """Build a generic SMDH beside the ELF, or None if the tool is absent."""
+    tool = devkitpro() / "tools" / "bin" / "smdhtool"
+    icon = REPO / "hgss" / "game" / "assets" / "placeholder-icon.png"
+    smdh = binary.with_suffix(".smdh")
+    if not tool.is_file() or not icon.is_file():
+        return None
+    proc = subprocess.run([str(tool), "--create", "pokeheartgold-3ds",
+                           "HeartGold/SoulSilver on 3DS", "pokeheartgold-3ds",
+                           str(icon), str(smdh)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0 or not smdh.is_file():
+        return None
+    return smdh
 
 
 def package_three_dsx(binary: Path, target: str) -> Path | None:
@@ -678,7 +702,8 @@ def package_three_dsx(binary: Path, target: str) -> Path | None:
     if not tool.is_file():
         print(f"   note: {tool} not found; leaving {binary.name} unpackaged")
         return None
-    proc = subprocess.run(three_dsx_command(tool, binary, dsx),
+    smdh = make_smdh(binary)
+    proc = subprocess.run(three_dsx_command(tool, binary, dsx, smdh),
                           capture_output=True, text=True)
     if proc.returncode != 0:
         print(f"   note: 3dsxtool failed: {(proc.stderr or proc.stdout).strip()}")
