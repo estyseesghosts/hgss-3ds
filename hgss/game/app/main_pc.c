@@ -74,6 +74,9 @@ static long sDump3DFrame = -1;
 static const char *sEventsPath;
 static FILE *sEvents;
 static int sInSignal;
+static int sFrametime;
+static uint64_t sLastFrameNs;
+static int sHaveLastFrameNs;
 
 #define MAX_PRESSES 4096
 static struct {
@@ -555,8 +558,20 @@ void NitroPort_Log(const char *fmt, ...)
     fputc('\n', stderr);
 }
 
+static uint64_t NowNs(void)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+}
+
 void NitroPort_OnFrame(void)
 {
+    uint64_t frameStart = NowNs();
+    uint64_t totalUs = 0;
+    uint64_t drawUs;
+
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on the ARM9's thread */
     PaceGameForWav();
     sFrame++;
@@ -585,6 +600,18 @@ void NitroPort_OnFrame(void)
 
     NitroPort_SetButtons(HeldButtons(sFrame), FALSE);
     ApplyTouch(sFrame);
+    drawUs = (NowNs() - frameStart) / 1000;
+    if (sHaveLastFrameNs) {
+        totalUs = (frameStart - sLastFrameNs) / 1000;
+    }
+    sLastFrameNs = frameStart;
+    sHaveLastFrameNs = 1;
+    if (sFrametime && sFrame % 60 == 0) {
+        uint64_t logicUs = totalUs > drawUs ? totalUs - drawUs : 0;
+        NitroPort_Log("FRAMETIME frame=%d logic_us=%llu draw_us=%llu audio_us=0 total_us=%llu",
+                      sFrame, (unsigned long long)logicUs,
+                      (unsigned long long)drawUs, (unsigned long long)totalUs);
+    }
 }
 
 void NitroPort_Terminate(void)
@@ -884,7 +911,7 @@ static void Usage(const char *argv0)
             "       [--stop-at-missing-file] [--stall-seconds N] [--screenshots DIR]\n"
             "       [--screenshot-every N] [--press FRAME:BUTTONS,...]\n"
             "       [--touch FRAME:X:Y,...] [--wav FILE] [--dump-3d FRAME]\n"
-            "       [--trace-pxi] [--trace-irq] [--events FILE]\n"
+            "       [--trace-pxi] [--trace-irq] [--frametime] [--events FILE]\n"
             "       %s --check-overlays\n",
             argv0, argv0);
 }
@@ -944,6 +971,8 @@ int main(int argc, char **argv)
             tracePxi = 1;
         } else if (strcmp(arg, "--trace-irq") == 0) {
             traceIrq = 1;
+        } else if (strcmp(arg, "--frametime") == 0) {
+            sFrametime = 1;
         } else if (strcmp(arg, "--events") == 0 && i + 1 < argc) {
             sEventsPath = argv[++i];
         } else if (arg[0] == '-' && arg[1] != '\0') {

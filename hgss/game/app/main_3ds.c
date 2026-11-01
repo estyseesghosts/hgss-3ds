@@ -65,6 +65,8 @@ static volatile bool sPaused;
 static bool sAudio;
 static bool sScriptLoaded;
 static HgssScript sScript;
+static u64 sLastFrameTick;
+static bool sHaveLastFrameTick;
 
 /* The last log lines, for the exception log. */
 static char sRing[LOG_RING][LOG_LINE];
@@ -175,8 +177,17 @@ static void DrawFrame(void)
 
 /* Once a frame, from the game's idle path: keep the HOME menu serviced, feed
  * the buttons/touch and draw. */
+static unsigned long long TicksToUs(u64 ticks)
+{
+    return (unsigned long long)ticks * 1000000ULL / SYSCLOCK_ARM11;
+}
+
 void NitroPort_OnFrame(void)
 {
+    u64 frameStart = svcGetSystemTick();
+    u64 drawStart;
+    unsigned long long totalUs;
+    unsigned long long drawUs;
     uint32_t held;
     circlePosition circle;
     uint16_t buttons = 0;
@@ -214,10 +225,18 @@ void NitroPort_OnFrame(void)
 
     NitroPort_SetButtons(buttons, 0);
     NitroPort_SetTouch(touchDown, (uint16_t)touchX, (uint16_t)touchY);
+    drawStart = svcGetSystemTick();
     DrawFrame();
+    drawUs = TicksToUs(svcGetSystemTick() - drawStart);
+    totalUs = sHaveLastFrameTick ? TicksToUs(frameStart - sLastFrameTick) : 0;
+    sLastFrameTick = frameStart;
+    sHaveLastFrameTick = true;
 
     if (sFrame % 600 == 0) {
+        unsigned long long logicUs = totalUs > drawUs ? totalUs - drawUs : 0;
         NitroPort_Log("frame %lu", sFrame);
+        NitroPort_Log("FRAMETIME frame=%lu logic_us=%llu draw_us=%llu audio_us=0 total_us=%llu",
+                      sFrame, logicUs, drawUs, totalUs);
         if (sScriptLoaded && sScript.end > 0 && (long)sFrame > sScript.end) {
             NitroPort_Log("script ended at frame %ld", sScript.end);
             sScriptLoaded = false;

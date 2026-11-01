@@ -63,6 +63,27 @@ Each is a numbered patch with a `gcc -E -P` identity proof under `#else`:
   symbol and log tail. `--expect-stage` makes it a gate. Tests: `tests/test_boot_smoke.py`.
 - `tools/golden/run.py` — golden diff runner (see its section below once landed).
 
+## Sanitizer replay (P4-F)
+
+`python3 tools/hgss_game.py --target host32 --sanitize --out …` works: the container's gcc-10 `-m32`
+has i386 libasan/libubsan. The instrumented boot replay found and fixed two out-of-bounds reads that
+are harmless on the DS (they land in the next bss object) but real on the host:
+
+- **1901** `SaveData_InitSubstructs` reads `hdr[i + 1]` before checking `i + 1 <
+  gNumSaveChunkHeaders` (frame 0, `SaveData_New`).
+- **1902** `TouchscreenMenu_LoadIconResources` reads `gTouchscreenMenuLayouts[layout][index]` for
+  resource slots 8–10 although a row has eight bytes.
+
+The ASan link also needs `std::__new_handler` (the MSL throwing `operator new` is only pulled in by
+the sanitizer runtime); it is defined as a NULL pointer in `cpp_runtime.c`.
+
+**Known instrumentation limitation:** the overlay loader restores an overlay's `.data` with one
+`memcpy` over a linker section that ASan models as many separate globals, so the copy crosses global
+redzones. That is not a game bug but ASan cannot see the section as one object. The full replay
+therefore runs with `ASAN_OPTIONS=report_globals=0`; the boot phase (before the first overlay reload
+that trips it) runs with global checks on, which is how 1901 was found. Heap and stack checks stay on
+for the whole run. The 20,000-frame replay with 1901/1902 applied is the acceptance check.
+
 ## Open items
 
 - **Golden frames are still pending the user's BizHawk/melonDS run** on Linux or Windows. Until
