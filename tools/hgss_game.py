@@ -251,9 +251,6 @@ def app_sources(target: str) -> list[Path]:
         # definitions are in port_compose_pica.c, which this program does not
         # link. See the file.
         sources.append(REPO / "hgss" / "game" / "app" / "pica_classic_stubs.c")
-        # Drops the scene triangles whose vertices sit on the camera plane:
-        # the PICA's divide by w turns them into fans from the screen centre.
-        sources.append(REPO / "hgss" / "game" / "app" / "pica_scene.c")
     return sources
 
 

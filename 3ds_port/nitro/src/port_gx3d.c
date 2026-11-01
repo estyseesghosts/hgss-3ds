@@ -557,6 +557,16 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
     int i;
     memset(&out,0,sizeof(out));
     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
+    /* A vertex exactly at the camera: clip (0,0,0,0). It survives the six
+     * clip planes (w + v < 0 is false at 0), and the viewport transform
+     * below leaves it at screen (0,0), as the PC reference and the DS's
+     * own title do. The GPU cannot divide by w = 0, though: give it the
+     * smallest positive w (20.12) so the PICA divides it to that corner
+     * and the triangles keep their texture and colour instead of becoming
+     * the black shards the title showed. Its x/y, depth and inv_w are
+     * unchanged, so the software reference is unaffected. */
+    if(v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && v->clip[3]==0)
+        out.clip[3]=1;
     /* The DS's viewport transform: x = (X + W) * width / 2W + x0, and
      * y = (W - Y) * height / 2W + top, top = 191 - the viewport's top line
      * (y counts down; viewport edges are inclusive). Kept to 1/256 pixel

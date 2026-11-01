@@ -242,8 +242,8 @@ class AppSourceTests(unittest.TestCase):
         self.assertIn("port_gx3d_pica.c", names)
         self.assertIn("port_pica_abi.c", names)
         self.assertIn("pica_classic_stubs.c", names)
-        self.assertIn("pica_scene.c", names)
-        for name in ("port_gx3d_pica.c", "port_pica_abi.c", "pica_scene.c"):
+        self.assertNotIn("pica_scene.c", names)
+        for name in ("port_gx3d_pica.c", "port_pica_abi.c"):
             self.assertNotIn(name, [p.name for p in hg.app_sources("host32")])
 
     def test_shader_sources_are_in_dvle_order(self):
@@ -663,12 +663,11 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("NitroPort_Gx3dFlush()", text)
         self.assertIn("NitroPort_Gx3dThreadMain(&sGeoRunning)", text)
         self.assertIn("NitroPort_Gx3dConvertPending()", text)
-        # The camera-plane workaround runs on the acquired scene first.
-        self.assertIn("Hgss_PicaDropBehindCamera((NitroGx3dScene *)scene)", text)
-        gpu = text[text.index("static void GpuMain"):]
-        gpu = gpu[:gpu.index("\nstatic bool GpuStart")]
-        self.assertLess(gpu.index("Hgss_PicaDropBehindCamera"),
-                        gpu.index("NitroPort_PicaRender(scene"))
+        # The camera-plane workaround is gone: the port gives the exact
+        # (0,0,0,0) vertex a positive w itself, so the scene is passed on
+        # untouched.
+        self.assertNotIn("Hgss_PicaDropBehindCamera", text)
+        self.assertIn("NitroPort_PicaRender(scene, &dropped)", text)
         # The GPU thread gets the New 3DS's free core, not the game's.
         self.assertIn("sNew3ds ? 2 : -2", text)
         # A strong override: the port's default is a weak no-op.
@@ -680,6 +679,24 @@ class OverlayCheckTests(unittest.TestCase):
         frame = frame[:frame.index("\n}")]
         self.assertLess(frame.index("NitroPort_Gx3dFlush()"),
                         frame.index("DrawFrame()"))
+
+    def test_3d_camera_point_gets_a_positive_w_in_the_port(self):
+        """The exact (0,0,0,0) vertex must reach the GPU with w > 0.
+
+        The clipper keeps a vertex at the camera (w + v < 0 is false at 0),
+        and the PC reference and the DS title put it at screen (0,0). The
+        PICA cannot divide by w = 0, so the scene keeps that screen position
+        but stores the smallest positive w (20.12). The scene is passed to
+        the GPU untouched: the old HGSS-side drop workaround is gone.
+        """
+        source = (REPO / "3ds_port" / "nitro" / "src" / "port_gx3d.c").read_text()
+        self.assertIn("v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && "
+                      "v->clip[3]==0", source)
+        self.assertIn("out.clip[3]=1;", source)
+        # The workaround's file and call are gone from the program.
+        self.assertFalse((self.APP / "pica_scene.c").exists())
+        self.assertNotIn("Hgss_PicaDropBehindCamera",
+                         (self.APP / "main_3ds.c").read_text())
 
     def test_shell_falls_back_to_2d_if_the_gpu_will_not_start(self):
         """A failed PICA init or thread must not take the game down.

@@ -95,9 +95,6 @@ void NitroPort_SoundPumpReplies(void);
 int NitroPort_PicaInit(void);
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
 void NitroPort_PicaExit(void);
-/* HGSS-owned: drop the scene triangles whose vertices sit on the camera plane
- * (see pica_scene.c). */
-unsigned Hgss_PicaDropBehindCamera(NitroGx3dScene *scene);
 
 static FILE *sLog;
 static LightLock sLogLock;
@@ -268,8 +265,6 @@ static Thread sGpuThread;
 static LightEvent sGpuWake, sGpuStarted;
 static volatile bool sGpuRunning, sGpuWakeReady;
 static volatile unsigned long sGpuScenes;
-/* Triangles dropped because a vertex sat on the camera plane (pica_scene.c). */
-static volatile unsigned long sGpuBehind;
 /* A thread that would not stop: end the process rather than tear libctru and
  * citro3d down around it (Platinum's sStopFailed rule). */
 static bool sGpuStopFailed;
@@ -319,11 +314,6 @@ static void GpuMain(void *arg)
             if (scene == NULL) {
                 break;
             }
-            /* The GPU's divide by w puts a camera-plane vertex at the centre
-             * of the screen: those triangles become the black fans the title
-             * screen showed. Drop them here, while this thread owns the
-             * scene. */
-            sGpuBehind += Hgss_PicaDropBehindCamera((NitroGx3dScene *)scene);
             drawn = NitroPort_PicaRender(scene, &dropped);
             NitroPort_Gx3dReleaseScene(scene);
             if (drawn >= 0) {
@@ -565,9 +555,8 @@ void NitroPort_OnFrame(void)
         NitroPort_Log("frame %lu", sFrame);
         NitroPort_Log("FRAMETIME frame=%lu logic_us=%llu draw_us=%llu audio_us=0 total_us=%llu",
                       sFrame, logicUs, drawUs, totalUs);
-        NitroPort_Log("3D images: %lu (scenes drawn: %lu, camera-plane drops: %lu)",
-                      (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes,
-                      sGpuBehind);
+        NitroPort_Log("3D images: %lu (scenes drawn: %lu)",
+                      (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes);
         if (sScriptLoaded && sScript.end > 0 && (long)sFrame > sScript.end) {
             NitroPort_Log("script ended at frame %ld", sScript.end);
             sScriptLoaded = false;
@@ -1105,8 +1094,8 @@ int main(int argc, char **argv)
          * then the GPU. Both are no-ops if they never started. */
         GpuStopGeometry();
         GpuStop();
-        NitroPort_Log("[gx3d] %lu 3D images, %lu scenes drawn (%lu camera-plane drops)",
-                      (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes, sGpuBehind);
+        NitroPort_Log("[gx3d] %lu 3D images, %lu scenes drawn",
+                      (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes);
     }
 
     if (sAudio) {
