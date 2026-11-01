@@ -1,6 +1,6 @@
 # Current state
 
-Last verified: **2026-11-01 (session 7)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
+Last verified: **2026-11-01 (session 8)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
 the tree at **77 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 57). Everything below that
 says "verified" was run on that tree on that date. If you change the patch stack, rerun the commands
 and update this page; do not trust it blindly.
@@ -31,14 +31,15 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (72 patches applied)` |
-| Host tests | `make test` | **exit 0**; **312 Python tests** + **21 SDK suites** |
+| Host tests | `make test` | **exit 0**; **327 Python tests** + **21 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last run 46/46 at 61 patches; sources unchanged since |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/final-pc -j5` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds -j5` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,103,728 B |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds1 -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,300,752 B; `3dsxdump` rc 0 (CODE 2131, RODATA 113, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
+| 3DS PICA/symbols | `arm-none-eabi-nm /work/final-3ds1/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished` |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
 | DS-side gate (HG) | `tools/matching-build.sh /work/testapply2 HEARTGOLD` | **PASSED at 76 patches** (and at 72): `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
@@ -92,9 +93,11 @@ bug found along the way — and the rule that prevents it — is in
 [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md); [phase-5.md](phase-5.md)
 has the per-run numbers.
 
-Still open on hardware: the field's 3D layer (engine A is composed every frame
-now; not yet confirmed on the console), a full run through Oak's speech at full
-speed, the save round-trip, the Old 3DS measurement, and the `.cia` decision.
+Still open on hardware: the field's 3D layer (the GPU pipeline is built and
+packages, but has not run on a console), a full run through Oak's speech at
+full speed, the save round-trip, the Old 3DS measurement, and the `.cia`
+decision. The next hardware run should log `[gx3d] PICA ready (classic path)`,
+`[gx3d] geometry on its own thread`, and a rising `3D images:` counter.
 
 The first run's failure, for the record: the `.3dsx` never started. Luma wrote
 a dump whose registers put the fault at a `udf #0` inside the console's
@@ -123,7 +126,9 @@ before the count is trusted.
 1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
    replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
    itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
-2. **Phase 5:** the 3DS shell's drawing, input, SMDH and a hardware run.
+2. **Phase 5:** confirm the GPU pipeline on hardware (room, player sprite and
+   intro movie's 3D; rising `3D images:` count), then the remaining shell
+   items (input, SMDH and a hardware run).
 3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 again at 72 patches.
 4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
    available for an end-to-end pack/open; record it when a dump is available.
@@ -184,6 +189,31 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-01 (session 8) — the 3D GPU pipeline
+
+- **The black 3D had a missing worker, not a missing composite.** On the 3DS
+  `NitroPort_Gx3dAcquireImage` only converts an image a GPU worker handed over;
+  with none, `sPublished` stayed `-1` and engine A drew 2D only. The shell now
+  runs Platinum's classic path: a geometry thread (`NitroPort_Gx3dStartThread`
+  + `NitroPort_Gx3dThreadMain`, one `NitroPort_Gx3dFlush` per frame) and a GPU
+  thread (`NitroPort_PicaInit`, acquire → `NitroPort_PicaRender` → release →
+  `NitroPort_Gx3dConvertPending`), woken by a strong
+  `NitroPort_Gx3dScenePublished`. Both failures log and fall back to 2D.
+- **Build:** `app_sources("3ds")` now carries `port_gx3d_pica.c` and
+  `port_pica_abi.c` (the latter without `-fno-short-enums`), and the harness
+  builds the three `.v.pica` shaders with `picasso` + `bin2s` +
+  `arm-none-eabi-as`. Both tools were already in devkitPro: no new dependency.
+  `pica_classic_stubs.c` supplies the two compose-only profiler hooks.
+- **Verified:** `make test` **327 tests, OK** plus 21 SDK suites;
+  `make port-tests` **17,122 checks, 0 failed**, exit 0; 3DS build
+  1092/1092, 0 unresolved, `.3dsx` **9,300,752 B**, `3dsxdump` **rc 0**
+  (CODE 2131, RODATA 113, DATA 13, BSS 4446 pages); the PICA symbols are `T`.
+- **Pending the owner's hardware run:** whether the room/player sprite and the
+  intro 3D now draw, a rising `3D images:` counter, and the after frame-time
+  log (before: log-7, 2 samples, 24.7 ms / 40.5 Hz, 3D absent).
+  [agent-notes/s9-gpu-pipeline.md](agent-notes/s9-gpu-pipeline.md) ·
+  [phase-5.md](phase-5.md)
 
 ### 2026-11-01 (session 7) — PC build reaches Oak's speech
 

@@ -37,7 +37,7 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 | host GCC 10 | 10.5.0 | `gcc-10` | the port's `host32` build; `CC` is set to it in the image |
 | host G++ 10 | 10.5.0 | `g++-10` | same |
 | devkitARM | 16.1.0 | `arm-none-eabi-gcc` | layout probe ARM variant; future 3DS builds |
-| devkitPro tools | current | `3dsxtool`, `smdhtool` | `.3dsx` packaging after the 3DS link; SMDH/icon is Phase 5 (`bannertool`/`makerom` are not confirmed in the image) |
+| devkitPro tools | current | `3dsxtool`, `smdhtool`, `3dsxdump`, `picasso`, `bin2s` | `.3dsx` packaging, artifact validation, and the 3D vertex programs (the `.v.pica` files become one shader blob object) |
 | Wine | WineHQ **10.0** | `wine` | MWCC (`mwccarm.exe`) and the SDK tools (`makelcf.exe`) |
 | MWCC | 2.0 tree (`sp2p2`, and the patched `sp2p3` assembler) | `wine .../mwccarm.exe` | the DS matching build only |
 | Nitro SDK | 3.2-060901 | copied by `tools/install-ds-toolchain.sh` | LCF templates, `makelcf.exe` |
@@ -80,7 +80,7 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 | DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | ROM in `/work` | works; needs MWCC; **not passed at 61 patches** (last pass 10) |
 | Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
 | Game for PC | `make game-pc` | `build/pokeheartgold-pc` | **1092/1092 compile, 34 unresolved; no binary yet** ([phase-2.md](../progress/phase-2.md)) |
-| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; 3dsxtool packages the `.3dsx` (SMDH is Phase 5) |
+| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; the program also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob, and `3dsxtool` packages the `.3dsx` |
 
 There is no `make game`, `make matching` or `builder/` in this repo. See
 [Tools-Reference](Tools-Reference.md#named-in-the-docs-but-not-in-the-repo).
@@ -224,6 +224,24 @@ Current state: both libraries build with zero errors and **every suite passes**,
 `test_arm7`, `test_sound_sequence` and `test_nitrosystem`. The failure history and root causes are in
 [../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md) and
 [../progress/agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md).
+
+### The 3DS program's PICA backend
+
+`tools/hgss_game.py` compiles two vendored app sources only for the `3ds` target:
+
+- `3ds_port/game/app/port_gx3d_pica.c` — the classic 3D path: draw a scene into an off-screen
+  256×192 RGBA8 target, transfer it to linear memory, hand it to `NitroPort_Gx3dSubmitRGBA8`.
+- `3ds_port/game/app/port_pica_abi.c` — libctru's struct layout exposed to the port. It is compiled
+  **without** `-fno-short-enums` (the port's flags would make `DVLE_s`/`C3D_FrameBuf` a different
+  size from libctru's).
+
+The vertex programs are `3ds_port/game/app/gx3d_{passthrough,shadow_cast,shadow_recv}.v.pica`, in
+that DVLE order. The harness assembles them with `picasso` into one `.shbin`, turns that into an
+assembly object with `bin2s`, and links it; the symbols are `gx3d_passthrough_shbin` and
+`gx3d_passthrough_shbin_size`, which `port_gx3d_pica.c` references. Both tools ship with devkitPro
+(like `3dsxtool`/`3dsxdump`), so this is not a new dependency. `hgss/game/app/pica_classic_stubs.c`
+supplies the two compose-only profiler hooks `port_gx3d_pica.c` mentions; the real ones live in
+`port_compose_pica.c`, which this program does not link.
 
 ## 8. Troubleshooting
 

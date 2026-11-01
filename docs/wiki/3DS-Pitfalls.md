@@ -19,6 +19,7 @@ sequence.
 | Black screens, `draw_us` of 1 us | [A weak hook binds to NULL](#a-weak-hook-binds-to-null) |
 | Flicker; one screen alternating current/stale | [The blit may never be skipped](#the-blit-may-never-be-skipped) |
 | 3D scene black while 2D text draws | [Only engine B may skip composition](#only-engine-b-may-skip-composition) |
+| Black 3D, `3D images: 0` in the log, scene-builder lines present | [The 3D needs a GPU worker](#the-3d-needs-a-gpu-worker) |
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
@@ -175,6 +176,34 @@ one skipped when unchanged.
 
 **Rule.** Skip composition only where the skipped engine physically cannot
 carry the content you would lose.
+
+## The 3D needs a GPU worker
+
+**Symptom.** The 3D environment is black while the 2D layers (dialogue box,
+touch panel) draw correctly. `log.txt` carries `[gx3d] ... scenes: N vtx`
+lines and `3D images: 0`, and `NitroPort_Gx3dImageCount()` never advances.
+
+**Cause.** On the PC, `NitroPort_Gx3dAcquireImage` rasterises the newest scene
+as part of acquiring it. On the 3DS it does **not**: it can only convert an
+image that a GPU worker handed over with `NitroPort_Gx3dSubmitRGBA8`. The HGSS
+shell had no worker, so `sPublished` stayed `-1`, `AcquireImage` returned NULL,
+and engine A composited only its 2D layers. The scene-builder lines prove the
+geometry ran; they do not prove anything was drawn.
+
+**Fix.** Start Platinum's classic pipeline: a geometry thread
+(`NitroPort_Gx3dStartThread` + `NitroPort_Gx3dThreadMain`, one
+`NitroPort_Gx3dFlush` per frame), and a GPU thread that runs
+`NitroPort_PicaInit`, then acquires scenes, calls `NitroPort_PicaRender`,
+releases them and converts the handed-over image. `NitroPort_PicaRender` is in
+`3ds_port/game/app/port_gx3d_pica.c`; its shaders are Platinum's `.v.pica`
+files assembled with `picasso` and embedded with `bin2s` (both already in the
+container). The GPU thread is woken from the port's `NitroPort_Gx3dScenePublished`
+callback, which is weak by default. If PICA init or either thread fails, the
+shell logs it and stays 2D rather than crashing.
+
+**Rule.** An image API fed by a worker needs the worker started, not only its
+consumer called. Log the image counter; a scene counter is not an image
+counter.
 
 ## No console on the game's screens
 

@@ -1,10 +1,12 @@
 # Phase 5 progress
 
-Status: **runs on hardware.** The game boots, plays the intro, reaches Oak's
-speech and the player's house, draws both screens and plays audio, at roughly
-58 Hz in the scenes measured. Remaining Phase 5 exits: the field's 3D layer
-(fix built, not yet confirmed), a full-speed run through Oak's speech, the
-save round-trip, the Old 3DS decision and the `.cia` decision.
+Status: **runs on hardware; the 3D GPU pipeline is built and packages, pending
+a console run.** The game boots, plays the intro, reaches Oak's speech and the
+player's house, draws both screens and plays audio, at roughly 58 Hz in the
+scenes measured. Remaining Phase 5 exits: confirming the 3D layer on a console
+(the GPU worker is in this tree but has not run there), a full-speed run
+through Oak's speech, the save round-trip, the Old 3DS decision and the `.cia`
+decision.
 
 Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
 
@@ -34,7 +36,7 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   thread. The exit log prints `audio: N dropped frames of M`. Without
   `dspfirm.cdc` the game runs silent, `log.txt` says so, and nothing else
   changes.
-- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (9,103,728 bytes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon).
+- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,300,752 bytes** with the 3D pipeline; 9,103,728 before it) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline section below.
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
   six-frame button holds and touch positions. Without a script the console's
@@ -427,6 +429,62 @@ Rule now: **engine A is composed every frame, exactly as
 the only one skipped when its inputs are unchanged -- that is where the
 savings come from, and it cannot hide a 3D layer.
 
+## Ninth slice: the GPU pipeline (built; pending the owner's hardware run)
+
+The eighth run left the 3D environment black while the 2D text drew. The cause
+was not the composite: on the 3DS `NitroPort_Gx3dAcquireImage` can only convert
+an image a GPU worker already handed over with `NitroPort_Gx3dSubmitRGBA8`. The
+HGSS shell had no worker, so the published index stayed `-1` and engine A drew
+only its 2D layers. The `[gx3d] ... scenes: N vtx` lines came from the scene
+builder; they were never evidence that an image existed.
+
+The shell now runs Platinum's **classic** pipeline, the same architecture its
+non-remaster path uses:
+
+- **Geometry thread.** `NitroPort_Gx3dStartThread` (LightEvent ops) plus
+  `NitroPort_Gx3dThreadMain`; on a New 3DS it runs on core 2, and falls back to
+  the game's core if the kernel refuses it. `NitroPort_OnFrame` calls
+  `NitroPort_Gx3dFlush` once a frame, before the composite, exactly as both PC
+  and 3DS shells do.
+- **GPU thread.** `NitroPort_PicaInit`, then a loop over
+  `NitroPort_Gx3dAcquireScene` → `NitroPort_PicaRender` →
+  `NitroPort_Gx3dReleaseScene`, converting the handed-over image on that
+  thread. It wakes from a strong `NitroPort_Gx3dScenePublished` override (the
+  port's default is a weak no-op).
+- **Links.** `3ds_port/game/app/port_gx3d_pica.c` and `port_pica_abi.c` are
+  compiled into the program. The ABI file is built without the port's
+  `-fno-short-enums` so its `DVLE_s`/`C3D_FrameBuf` match libctru's. The
+  shaders are the three vendored `.v.pica` files assembled by `picasso` and
+  embedded with `bin2s` (both already in devkitPro; no new dependency).
+  `hgss/game/app/pica_classic_stubs.c` supplies the two compose-only profiler
+  hooks the vendored file references.
+- **Fallback.** `NitroPort_PicaInit` or a thread failing is logged
+  (`[gx3d] 3D setup failed …`, `[gx3d] couldn't start the 3D thread …`, or
+  `[gx3d] no geometry thread …`) and the shell keeps the old 2D-only
+  behaviour. It does not crash or run a half-built pipeline.
+- **Evidence in the log.** Startup: `[gx3d] PICA ready (classic path)` and
+  `[gx3d] geometry on its own thread`. Every 600 frames:
+  `3D images: N (scenes drawn: M)`. Exit:
+  `[gx3d] N 3D images, M scenes drawn` before the usual `stopping` line.
+
+**Before**, from the eighth run's log (log-7, the current pre-slice build):
+2 samples, `draw` mean 26.5 ms, `total` mean 24.7 ms → **40.5 Hz**, `logic`
+60 µs; the run was stopped at frame 1377. **After** is pending the owner's
+hardware run; record `tools/frametime_report.py log.txt` on the new artifact
+and compare the same scene.
+
+**Local verification (container, 2026-11-01).** The 3DS build compiles
+1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (9,300,752 B,
++197,024 B over the 2D-only build). `3dsxdump` exits 0 (CODE 2131, RODATA 113,
+DATA 13, BSS 4446 pages) and the harness's `validate_3dsx` accepted the
+packaged file. The PICA symbols are `T` in the ELF, including a strong
+`NitroPort_Gx3dScenePublished`; `NitroPort_PicaInit`, `PicaRender` and
+`PicaExit` are present. `make test` is 327 tests plus 21 SDK suites, all green;
+`make port-tests` is 17,122 checks, 0 failed, exit 0. Artifact
+`sha256 d494b06991745115313217990b326ebac8b5a4d602696c211fdd163fe7298248`,
+staged at `sd-card/3ds/pokeheartgold.3dsx`. None of the visual or frame-time
+claims are verified: the container cannot run a console.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
@@ -444,8 +502,12 @@ SD card or run a cartridge.
 
 ## Open gaps
 
-- Audio is initialized through NDSP but not mixed; the port's
-  `NitroPort_SoundRender` output is not yet fed to `ndspAddWave`.
+- The classic PICA pipeline is built and packages but has **not** run on a
+  console; the room, the intro movie's 3D and the frame-time cost are pending
+  the owner's run.
+- Old 3DS 3D: the classic target and images need several MB of linear memory;
+  `NitroPort_PicaInit` logs and falls back to 2D if it cannot get it, but the
+  Old 3DS case is still unmeasured.
 - `--sanitize` requires `libstdc++` at link time only for the ASan runtime;
   the normal link stays libstdc++-free.
 - SMDH: `smdhtool` can package a generic, non-ROM icon; the cart-derived icon
