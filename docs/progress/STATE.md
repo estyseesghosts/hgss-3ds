@@ -1,7 +1,7 @@
 # Current state
 
 Last verified: **2026-11-01 (session 7)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
-the tree at **74 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 56). Everything below that
+the tree at **76 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 56). Everything below that
 says "verified" was run on that tree on that date. If you change the patch stack, rerun the commands
 and update this page; do not trust it blindly.
 
@@ -31,13 +31,13 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (72 patches applied)` |
-| Host tests | `make test` | **exit 0**; **277 Python tests** + **21 SDK suites** |
+| Host tests | `make test` | **exit 0**; **312 Python tests** + **21 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last run 46/46 at 61 patches; sources unchanged since |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/final-pc -j5` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds3 -j5` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,001,956 B |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds3 -j5` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,103,728 B |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
@@ -188,7 +188,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **3DS:** `std_sprintf`/`wm_core` va_arg fixes (1701/1702), the GX type fix (1703), the ARM GAS
   `%progbits`/`%object` compat fix, 41 devkitARM-only files fixed as types (1710-1712), overlay IDs
   assembled as numbers and `.version` merged into `.rodata` for 3dsxtool. **1092/1092 compile, both
-  archives build, 0 unresolved, `pokeheartgold.3dsx` packaged (9,001,956 B).**
+  archives build, 0 unresolved, `pokeheartgold.3dsx` packaged (9,103,728 B).**
 - **Phase 3:** `verify_rom.py`, `extract_rom.py`, `pack.py` (HG/SS US, build ID
   `heartgold-nitrofs-1`), the `tests/sdk/pak_boot` suite against the real reader, the SD layout doc,
   and synthetic-image tests. The real HG pack (513 files, 125,556,080 B) opens in `pokeheartgold-pc`;

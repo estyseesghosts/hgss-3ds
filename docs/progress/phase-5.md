@@ -27,6 +27,7 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
 - **NDSP** starts only when `dspfirm.cdc` loads; otherwise the game runs
   silent, `log.txt` says so, and the pak-error screen adds a sound note. It
   never stops the game. Audio mixing into NDSP is not wired yet (see gaps).
+- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (9,103,728 bytes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon).
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
   six-frame button holds and touch positions. Without a script the console's
