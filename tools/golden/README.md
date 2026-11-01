@@ -63,3 +63,101 @@ For every scene:
 
 Committed: `capture.lua`, `compare_runs.py`, `tests/inputs/*.txt`. Never
 committed: anything under `tests/golden/`.
+
+## The PC-side runner (`run.py`)
+
+`tools/golden/run.py` replays a scene through `pokeheartgold-pc` and compares
+the screenshots. It needs no emulator:
+
+```
+python3 tools/golden/run.py --scene newgame-buttons
+#   capture + compare against tests/golden/newgame-buttons/ when it exists
+python3 tools/golden/run.py --scene boot-title \
+    --reference tests/golden/boot-title
+#   compare an existing run (regression mode) without capturing:
+python3 tools/golden/run.py --scene newgame-buttons --no-run \
+    --run /work/shots --reference /work/previous-run
+```
+
+The scene file is `tests/inputs/<scene>.txt`; `every:` becomes
+`--screenshot-every`, button lines become `--press` and `touch` lines become
+`--touch`. The PC writes `frame_%07d.png` (256×384, upper screen above
+lower); melonDS captures are `<frame>.png`, and both are accepted.
+
+**Report format.** `build/golden/<scene>/report.json` has the scene, run and
+reference directories, the alignment `{offset, first_match}`, the thresholds,
+one entry per frame `{frame, reference_frame, differing, max_delta, allowed,
+status}` and a summary. `report.html` is the human table; `heat/` holds one
+RGB PNG per failing frame (red = differing pixel, black = within tolerance).
+
+**Thresholds.** 2D frames are exact (`--tolerance 0`). The 3D frames (opening
+movie and title) allow a per-channel difference of **8/255** up to the scene's
+`--3d-until` frame (6600 for `newgame-buttons`, which is where the 3D ends).
+The 8 was chosen as the smallest value that covers the PC rasterizer's
+fixed-point rounding without hiding a structural difference; it is recorded
+in `docs/decisions.md`. Alignment uses the exact 2D frames, so a 3D tail
+cannot drag the offset.
+
+Without a reference directory the tool still captures a baseline and says so
+in the report (`pass: true`, `note` says the golden comparison is pending).
+That is regression mode; it is **not** a melonDS match.
+
+
+## The diff runner (`run.py`)
+
+`run.py` replays a scene through the PC build, captures both screens,
+aligns them against a reference directory and writes a report. It never
+needs the ROM: the pack and manifest are passed at run time.
+
+```text
+python3 tools/golden/run.py --scene newgame-buttons
+python3 tools/golden/run.py --scene boot-title --reference tests/golden/boot-title
+python3 tools/golden/run.py --scene newgame-buttons --no-run \
+    --run /work/shots --reference /work/previous-run
+```
+
+- `--scene` reads `tests/inputs/<scene>.txt` (the same `every`/`end`/input
+  format `capture.lua` uses).
+- With no `--reference`, `tests/golden/<scene>/` is used when it exists. If
+  neither exists, the run is a **regression baseline**: the report is
+  written with `pass: true` and a note that the golden comparison is still
+  pending. This is the mode to use until the user's captures exist.
+- `--no-run --run DIR` compares an existing capture directory (fruitful for
+  comparing two PC runs against each other).
+- The PC writes `frame_%07d.png` (256×384: upper above lower); melonDS
+  writes `<frame>.png`. Both are accepted.
+
+### Alignment and thresholds
+
+1. Parse the scene into `--press FRAME:BTN,...` and `--touch FRAME:X:Y,...`.
+2. Run the PC with the scene's `end` as `--frames` and `every` as
+   `--screenshot-every`.
+3. Try every frame offset in `±--align-window` (default 240) and pick the
+   one with the longest run of matching frames; report the offset and the
+   first matching frame.
+4. Compare every overlapping frame. A pixel differs when the largest RGB
+   channel delta exceeds the frame's tolerance.
+
+**2D frames must match exactly** (`--tolerance 0`). **3D frames** (the
+opening movie and title, up to `--3d-until`, default 6600) allow a
+per-channel tolerance of **8/255** (`--3d-tolerance 8`); the value is in
+`docs/decisions.md`. Raising either threshold to hide a difference is not
+allowed — fix the cause or record the gap.
+
+### Report format
+
+Under the output directory (`build/golden/<scene>/` by default):
+
+- `report.json`: `scene`, `run`, `reference`, `image`, `alignment`
+  (`offset`, `first_match`), `tolerance`, `frames` (each with `frame`,
+  `reference_frame`, `differing`, `max_delta`, `allowed`, `status`,
+  optional `heat_map`) and `summary` (`frames`, `compared`, `passed`,
+  `failed`, `reference_missing`). `pass` is true only when `failed` is 0.
+- `report.html`: the same table, with links to the heat maps.
+- `heat/frame_NNNNNNN.png`: red where a pixel differs beyond tolerance,
+  black where it matches.
+- `events.jsonl`: the PC runner's machine-readable events.
+
+Exit status: 0 when every compared frame passes (or no reference was
+available and a baseline was written), 1 on a differing frame, 2 on a setup
+error.
