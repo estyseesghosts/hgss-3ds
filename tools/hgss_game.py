@@ -251,6 +251,9 @@ def app_sources(target: str) -> list[Path]:
         # definitions are in port_compose_pica.c, which this program does not
         # link. See the file.
         sources.append(REPO / "hgss" / "game" / "app" / "pica_classic_stubs.c")
+        # Drops the scene triangles whose vertices sit on the camera plane:
+        # the PICA's divide by w turns them into fans from the screen centre.
+        sources.append(REPO / "hgss" / "game" / "app" / "pica_scene.c")
     return sources
 
 
@@ -1252,6 +1255,10 @@ def main(argv: list[str] | None = None) -> int:
         # main_3ds.c is the only file here that includes libctru's headers;
         # the game and the port keep NitroSDK's.
         app_cflags.append(f"-I{devkitpro() / 'libctru' / 'include'}")
+        # The app objects are compiled by hand, so port_cflags' lack of -O2
+        # would leave them at -O0. Platinum's own program is -O2; the PICA
+        # backend's per-frame batching benefits and the DS gate never sees it.
+        app_cflags.append("-O2")
     app_objects, app_failed = compile_objects(
         tools["cc"], app_cflags, app_jobs, args.jobs, log_dir, args.keep_going)
     if args.target == "3ds":

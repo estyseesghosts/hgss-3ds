@@ -242,7 +242,8 @@ class AppSourceTests(unittest.TestCase):
         self.assertIn("port_gx3d_pica.c", names)
         self.assertIn("port_pica_abi.c", names)
         self.assertIn("pica_classic_stubs.c", names)
-        for name in ("port_gx3d_pica.c", "port_pica_abi.c"):
+        self.assertIn("pica_scene.c", names)
+        for name in ("port_gx3d_pica.c", "port_pica_abi.c", "pica_scene.c"):
             self.assertNotIn(name, [p.name for p in hg.app_sources("host32")])
 
     def test_shader_sources_are_in_dvle_order(self):
@@ -618,6 +619,8 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("ndspChnWaveBufAdd(", text)
         self.assertIn("NitroPort_SoundPumpReplies()", text)
         self.assertIn("ndspChnSetRate(0, (float)AUDIO_RATE)", text)
+        # Above the game: a 20-30 ms composite must not starve the mixer.
+        self.assertIn("AUDIO_THREAD_PRIORITY 0x2e", text)
 
     def test_shell_skips_only_the_composite_never_the_blit(self):
         """Both screens are copied every frame; only the composite may skip.
@@ -660,6 +663,14 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("NitroPort_Gx3dFlush()", text)
         self.assertIn("NitroPort_Gx3dThreadMain(&sGeoRunning)", text)
         self.assertIn("NitroPort_Gx3dConvertPending()", text)
+        # The camera-plane workaround runs on the acquired scene first.
+        self.assertIn("Hgss_PicaDropBehindCamera((NitroGx3dScene *)scene)", text)
+        gpu = text[text.index("static void GpuMain"):]
+        gpu = gpu[:gpu.index("\nstatic bool GpuStart")]
+        self.assertLess(gpu.index("Hgss_PicaDropBehindCamera"),
+                        gpu.index("NitroPort_PicaRender(scene"))
+        # The GPU thread gets the New 3DS's free core, not the game's.
+        self.assertIn("sNew3ds ? 2 : -2", text)
         # A strong override: the port's default is a weak no-op.
         self.assertIn("void NitroPort_Gx3dScenePublished(void)", text)
         self.assertNotIn("weak", text[text.index("void NitroPort_Gx3dScenePublished"):
