@@ -37,9 +37,9 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/final-pc -j5` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds1 -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,300,752 B; `3dsxdump` rc 0 (CODE 2131, RODATA 113, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds2 -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,277,656 B; `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
-| 3DS PICA/symbols | `arm-none-eabi-nm /work/final-3ds1/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished` |
+| 3DS PICA/symbols | `arm-none-eabi-nm /work/final-3ds2/pokeheartgold-3ds.elf \| grep -E 'Hgss_Pica\|NitroPort_Pica\|Gx3dThread'` | `T` for `Hgss_PicaDropBehindCamera`, `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished` |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
 | DS-side gate (HG) | `tools/matching-build.sh /work/testapply2 HEARTGOLD` | **PASSED at 76 patches** (and at 72): `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
@@ -85,19 +85,27 @@ Pokéwalker interior aliases (a missing build stage, now run).
 
 ## Hardware: it runs
 
-Eight runs on a New 3DS in one session. Current state: the game boots, plays
-the intro, reaches Oak's speech and the player's house, draws both screens and
-plays audio; the scenes measured ran at **17 ms a frame (~58.7 Hz)** with
-`logic_us` under 100 us, and the DSP reported **0.4% dropped frames**. Every
-bug found along the way — and the rule that prevents it — is in
-[../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md); [phase-5.md](phase-5.md)
-has the per-run numbers.
+Nine runs on a New 3DS. Current state: the game boots, plays the intro,
+reaches Oak's speech and the player's house, draws both screens, plays audio
+and (since the ninth run) shows the 3D: the title's Ho-oh, the room and the
+player. The ninth run also exposed two defects, now fixed in the tree but not
+yet re-run: the GPU worker was on the game's core and rendered about **1 image
+a second** (105 images in 4,680 frames), and a `w = 0` vertex produced the
+black fan over Ho-oh. The worker moved to core 2, the camera-plane triangles
+are dropped, and the audio thread moved above the game.
 
-Still open on hardware: the field's 3D layer (the GPU pipeline is built and
-packages, but has not run on a console), a full run through Oak's speech at
-full speed, the save round-trip, the Old 3DS measurement, and the `.cia`
-decision. The next hardware run should log `[gx3d] PICA ready (classic path)`,
-`[gx3d] geometry on its own thread`, and a rising `3D images:` counter.
+The scenes measured before the pipeline ran at **17 ms a frame (~58.7 Hz)**
+with `logic_us` under 100 us, and the DSP reported **0.4% dropped frames**.
+The ninth run's samples were 24.7 ms (40.4 Hz) overall, the field 19.8-20.9 ms
+(48-50 Hz) and the intro 31-36 ms (28-32 Hz). Every bug found along the way —
+and the rule that prevents it — is in [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md);
+[phase-5.md](phase-5.md) has the per-run numbers.
+
+Still open on hardware: the re-run after these fixes (3D rate, no fan, audio
+drops, frame times), a full run through Oak's speech at full speed, the save
+round-trip, the Old 3DS measurement, and the `.cia` decision. The next log
+should show `[gx3d] display on core 2`, a rising `3D images:` near 300 per 600
+frames and a small `camera-plane drops`.
 
 The first run's failure, for the record: the `.3dsx` never started. Luma wrote
 a dump whose registers put the fault at a `udf #0` inside the console's
@@ -189,6 +197,29 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-01 (session 8, follow-up) — the 3D works; the worker was starved
+
+- **Ninth hardware run (log-8).** The staged pipeline works: the lower-screen
+  title shows Ho-oh, the game reaches the field, and the player walks through
+  the house and outside to Lyra and Marill. Two defects and a frame rate
+  problem showed in the same log.
+- **The 3D updated at ~1 fps.** `3D images: 105` over 4,680 frames, while the
+  geometry thread made 120 scenes per 240 frames. The GPU thread was on the
+  game's core below the game, so the 20-30 ms software composite left it only
+  the V-blank wait, and a long frame has none. It moved to **core 2** on a New
+  3DS (core 0 otherwise), and the app objects now build at `-O2`.
+- **Ho-oh's black fan.** The port's six-plane clip keeps a `(0,0,0,0)` vertex;
+  the PICA's divide by `w` then puts it at the screen centre. HGSS drops the
+  affected stored triangles in `hgss/game/app/pica_scene.c` (`camera-plane
+  drops` in the log) until the port's clipper gets a `w > 0` near plane.
+- **Audio.** `82 dropped frames of 23821` (0.34%) and a slow intro; the audio
+  thread was below the game and shared core 0 with the starved GPU worker. It
+  is now priority `0x2e`, above the game and geometry.
+- **Local:** build 1092/1092, 0 unresolved, `.3dsx` 9,277,656 B, `3dsxdump`
+  rc 0; `make test` 327 tests, OK; `make port-tests` 17,122 checks, 0 failed;
+  the host `tests/game/pica_scene/run.sh` passes. The re-run is the owner's.
+  [agent-notes/s10-gpu-followup.md](agent-notes/s10-gpu-followup.md)
 
 ### 2026-11-01 (session 8) — the 3D GPU pipeline
 

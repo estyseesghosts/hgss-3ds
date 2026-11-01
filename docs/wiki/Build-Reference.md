@@ -241,7 +241,10 @@ assembly object with `bin2s`, and links it; the symbols are `gx3d_passthrough_sh
 `gx3d_passthrough_shbin_size`, which `port_gx3d_pica.c` references. Both tools ship with devkitPro
 (like `3dsxtool`/`3dsxdump`), so this is not a new dependency. `hgss/game/app/pica_classic_stubs.c`
 supplies the two compose-only profiler hooks `port_gx3d_pica.c` mentions; the real ones live in
-`port_compose_pica.c`, which this program does not link.
+`port_compose_pica.c`, which this program does not link. `hgss/game/app/pica_scene.c` degenerates the
+stored scene triangles whose vertices sit on the camera plane (`w = 0`), which the PICA would draw as
+a fan from the screen's centre; `tests/game/pica_scene/run.sh` is its host test. The app objects are
+compiled at `-O2` for the 3DS, like Platinum's own program.
 
 ## 8. Troubleshooting
 

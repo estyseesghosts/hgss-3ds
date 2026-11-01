@@ -152,8 +152,9 @@ a failure used to be ambiguous:
 | `the game's thread is returning (frame N)` | `NitroMain` returned by itself. |
 | `threadJoin says the game's thread ended, but it is still running` | libctru's join lied; the shell's own flag keeps the run alive (expected on this port). |
 | `[gx3d] PICA ready (classic path)` | The GPU worker initialised; the 3D path is live. |
+| `[gx3d] display on core 2` | The GPU/display worker has the New 3DS's free core, so its render overlaps the software 2D composite. |
 | `[gx3d] geometry on its own thread` | The geometry thread started; scenes are built off the game's thread. |
-| `3D images: N (scenes drawn: M)` (every 600 frames) | `N` must **advance** while a 3D scene is up (intro, field). If it stays 0, no image was handed over and the 3D cannot show. |
+| `3D images: N (scenes drawn: M, camera-plane drops: D)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate) now the worker has a core, not 10. If it stays low, the 3D is updating slowly whatever the screen shows. `D` should be small; it is triangles near the camera plane that were removed to stop the centre-fan. |
 | `[gx3d] 3D setup failed …` / `couldn't start the 3D thread` / `no geometry thread` | The safe fallback: the game still runs 2D-only. Send the line; it names the failing step. |
 | `=== exception (type N) pc …` | A real fault in game code; map the pc with `addr2line`. |
 | `audio: N dropped frames of M` (at exit) | `N` large relative to `M` means the DSP was starved. |
@@ -171,10 +172,12 @@ Send `log.txt` whole; nothing on that page needs filtering.
    bedroom, frame-for-frame as the PC run.
 3. **Passing:** the top screen shows the same sequence as the PC screenshots
    (logo, movie, title, menu, Oak, gender, naming, bedroom); the bedroom's room
-   and player sprite are visible behind the dialogue box, and the intro
-   movie's 3D renders; `3D images:` rises during both. The app stays at full
-   speed (no visible stutter), and `log.txt` ends with a frame count near the
-   script's `end` without an exception block.
+   and player sprite are visible behind the dialogue box, the intro movie's 3D
+   renders, and nothing fans out black from the centre of the picture. `3D
+   images:` rises by roughly 300 every 600 frames while 3D is up, and walking
+   animates smoothly rather than once a second. The app stays at full speed (no
+   visible stutter), audio is clean, and `log.txt` ends with a frame count near
+   the script's `end` without an exception block.
 4. Save a copy of `log.txt` and note the frame count and any dropped frames.
 
 ## Frame-time budget

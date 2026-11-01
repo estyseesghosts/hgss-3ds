@@ -20,6 +20,8 @@ sequence.
 | Flicker; one screen alternating current/stale | [The blit may never be skipped](#the-blit-may-never-be-skipped) |
 | 3D scene black while 2D text draws | [Only engine B may skip composition](#only-engine-b-may-skip-composition) |
 | Black 3D, `3D images: 0` in the log, scene-builder lines present | [The 3D needs a GPU worker](#the-3d-needs-a-gpu-worker) |
+| 3D shows but updates about once a second; `3D images:` barely moves | [A worker on the game's core runs at 1 fps](#a-worker-on-the-games-core-runs-at-1-fps) |
+| Black shards fanning out from the centre of the 3D image | [A camera-plane vertex is a fan from the centre](#a-camera-plane-vertex-is-a-fan-from-the-centre) |
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
@@ -205,6 +207,51 @@ shell logs it and stays 2D rather than crashing.
 consumer called. Log the image counter; a scene counter is not an image
 counter.
 
+## A worker on the game's core runs at 1 fps
+
+**Symptom.** The 3D appears (the title's Ho-oh, the bedroom) but updates about
+once a second: walking looks frozen and the whole game feels unplayably slow.
+The log says `3D images: 10 (scenes drawn: 10)` per 600 frames -- **105 images
+in 4,680 frames** -- while the geometry builder reports 120 scenes every 240
+frames (30 a second).
+
+**Cause.** The GPU/display thread was created on the game's core, one priority
+below the game (`priority + 1`). The port's software 2D composite holds that
+core for 20-30 ms of every frame, so the worker only ran in the V-blank wait --
+and a frame that already overruns the V-blank never waits. It drew about one
+scene a second and the game's thread converted each image itself.
+
+**Fix.** On a New 3DS the display thread goes on **core 2**, the geometry
+thread's core (which sleeps between scenes); on an Old 3DS core 2 does not
+exist, so it stays on the game's core. The log says
+`[gx3d] display on core 2`. App objects are also compiled at `-O2` (they were
+being built at `-O0` by the harness while the port archives were `-O2`).
+
+**Rule.** A worker that must keep 30-60 fps needs a core the composite does not
+own. Priority alone cannot schedule a thread on a core another thread is
+holding.
+
+## A camera-plane vertex is a fan from the centre
+
+**Symptom.** Black triangular shards fanning out from the centre of the 3D
+image -- on the title screen, they stretch Ho-oh's wings to an off-screen
+point.
+
+**Cause.** The port clips to the DS's six planes ±x/y/z <= w. A vertex at
+`(0, 0, 0, 0)` satisfies all six, so it survives: `w + v < 0` is false for
+every one. The GPU vertex is `(ndc * w, w)`, so a `w = 0` vertex becomes
+`(0, 0, z, 0)`, and the PICA's divide by `w` puts it at the centre of the
+render target. Every triangle touching it is drawn as a fan from the centre.
+
+**Fix.** `hgss/game/app/pica_scene.c` degenerates each stored triangle with a
+`w <= 0` vertex before `NitroPort_PicaRender` (the GPU thread owns the scene
+until it releases it). The count is logged as `camera-plane drops`. The proper
+fix is a `w > 0` near plane in the port's clipper (an upstream change;
+`3ds_port/` stays byte-identical).
+
+**Rule.** The DS's `w = 0` plane is not the GPU's: a vertex the CPU accepts at
+`w = 0` cannot be divided. Test `w > 0` after clipping.
+
 ## No console on the game's screens
 
 **Symptom.** Scrolling log text drawn over the bottom screen, once the
@@ -243,14 +290,21 @@ The DS mixer side already exists: `NitroPort_SoundRender(int16_t *stereo,
 size_t frames)` mixes the ARM7's 32768 Hz stereo.
 
 **Fix.** `AudioThread` renders 512-frame blocks into four NDSP wave buffers on
-its own thread (priority below the game's); `NitroPort_OnFrame` pumps the
-ARM7's alarm replies with `NitroPort_SoundPumpReplies()`. The channel runs at
-32768 Hz against NDSP's ~32728.5 Hz (about two cents sharp, inaudible) and the
-DSP resamples. The exit log prints `audio: N dropped frames of M`, which is
-how starvation shows.
+its own thread; `NitroPort_OnFrame` pumps the ARM7's alarm replies with
+`NitroPort_SoundPumpReplies()`. The channel runs at 32768 Hz against NDSP's
+~32728.5 Hz (about two cents sharp, inaudible) and the DSP resamples. The exit
+log prints `audio: N dropped frames of M`, which is how starvation shows.
+
+The thread's priority matters on a slow frame: it was `0x31` (below the game's
+`0x30`), and a 20-30 ms software composite kept it off the core for longer than
+a 15.6 ms block. It is now `0x2e`, above the game and the geometry thread. The
+GPU/display worker also left the game's core (see "A worker on the game's core
+runs at 1 fps"), so the audio thread no longer shares it with a starving 3D
+worker.
 
 **Rule.** Initialising an output device is not connecting it. Log a counter
-that proves it was fed.
+that proves it was fed, and give the feeder a priority above the work that can
+hold its core.
 
 ## Reading a Luma crash dump
 

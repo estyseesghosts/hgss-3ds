@@ -485,6 +485,55 @@ packaged file. The PICA symbols are `T` in the ELF, including a strong
 staged at `sd-card/3ds/pokeheartgold.3dsx`. None of the visual or frame-time
 claims are verified: the container cannot run a console.
 
+## Ninth hardware run: 3D works -- and the worker was starved
+
+The staged artifact ran on the owner's New 3DS (log-8). It does what the slice
+was for: the lower-screen title now shows Ho-oh, the game reaches the field,
+and the player can walk through the house and outside to Lyra and Marill. Two
+defects showed up in the same log and photo:
+
+- **The 3D updated at about 1 fps.** `3D images:` reached **105 in 4,680
+  frames** (about 1.1 a second) while the geometry builder made 120 scenes
+  every 240 frames (30 a second). The GPU/display thread was created on the
+  game's core, one priority below the game; the 2D composite holds that core
+  for 20-30 ms of a frame, so the worker only ran in a V-blank wait that a
+  long frame never reaches. The game's thread converted each image itself.
+- **The title's Ho-oh had black shards fanning from the screen centre.** The
+  port clips to ±x/y/z <= w; a vertex at `(0,0,0,0)` satisfies all six and
+  survives. The GPU vertex is `(ndc * w, w)`, so `w = 0` becomes
+  `(0, 0, z, 0)` and the PICA's divide puts it at the centre.
+- **Audio dropped frames and felt slow** during the intro: `audio: 82 dropped
+  frames of 23821` (0.34%), and the audio thread (`0x31`) was below the game
+  and shared the game's core with the starved GPU worker.
+
+The frame-time samples: 7 samples, `total` mean **24.7 ms (40.4 Hz)**, with
+the field at 19.8-20.9 ms (48-50 Hz) and the intro at 31-36 ms (28-32 Hz).
+
+**Fixes (next artifact).**
+
+1. The GPU/display thread goes on **core 2** on a New 3DS (core 0 only if the
+   kernel refuses it), so its render overlaps the game's software composite
+   instead of queueing behind it.
+2. The app objects are compiled at `-O2` (the harness was building them at
+   `-O0`; the port archives were already `-O2`).
+3. `hgss/game/app/pica_scene.c` degenerates stored triangles with a `w <= 0`
+   vertex before `NitroPort_PicaRender`; the count is in the log as
+   `camera-plane drops`. The proper fix is a `w > 0` near plane in the port's
+   clipper (upstream; `3ds_port/` unchanged).
+4. The audio thread moves to priority `0x2e`, above the game (`0x30`) and the
+   geometry thread (`0x2f`).
+
+The next log should show `[gx3d] display on core 2`, `3D images` near 300 per
+600 frames rather than 10, a small `camera-plane drops`, and near-zero audio
+drops. The after frame times are still the owner's run.
+
+**Local build for that run:** 1092/1092, 0 unresolved; `pokeheartgold.3dsx`
+9,277,656 B (`-O2` shrank it from 9,300,752); `3dsxdump` rc 0 (CODE 2126,
+RODATA 112, DATA 13, BSS 4446 pages); `make test` 327 tests OK + 21 SDK
+suites; `make port-tests` 17,122 checks, 0 failed; the new host test
+`tests/game/pica_scene/run.sh` passes. Staged artifact
+`sha256 ce683574cfe912d4896a6db18089c6b53773bfd893e01a2c0b2138f9e9ad4afd`.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
