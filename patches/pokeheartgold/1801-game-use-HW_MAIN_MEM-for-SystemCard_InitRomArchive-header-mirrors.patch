@@ -1,0 +1,21 @@
+From 753efe453f8c1bbaafd57ff7ee04472216a3c917 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sun, 1 Nov 2026 04:35:24 +0000
+Subject: [PATCH] game: use HW_MAIN_MEM for SystemCard_InitRomArchive header
+ mirrors
+
+The function writes a copy of the cartridge header to the DS header mirrors
+at 0x027FF000 and 0x027FFA80 and uses 0x027FF00C as its "valid" word. Those
+are HW_MAIN_MEM + 0x7FF000/+0x7FFA80/+0x7FF00C. The port main memory is an
+ordinary array (NitroPort_MainMem), so the literals address unmapped host
+memory and the game crashes at frame 0, right after SystemCard_InitRomArchive
+starts.
+
+Define the three addresses from HW_MAIN_MEM under SDK_PORT_3DS; the DS text
+is under #else, unchanged. gcc-10 -E -P without SDK_PORT_3DS is
+byte-identical to the unpatched file (0 diff lines).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+-- 
+2.43.0
+

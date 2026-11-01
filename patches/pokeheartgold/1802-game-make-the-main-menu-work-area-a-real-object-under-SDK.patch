@@ -1,0 +1,27 @@
+From 1902b082932bf2faf841b5560a4b764883ca0f2e Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sun, 1 Nov 2026 05:43:44 +0000
+Subject: [PATCH] game: make the main-menu work area a real object under
+ SDK_PORT_3DS
+
+The DS build lays the main menu work area out as a run of adjacent bss
+globals (gMainMenuUtilCryptoHeapId, gMainMenuUtilWork,
+gMainMenuUtilSprites, ...) and the code aliases it with
+&gMainMenuUtilCryptoHeapId + 1. The port gives every global its own
+section, so that pointer no longer names the work area; gMainMenuUtilWork
+was also declared as 13 words while MainMenuUtilWork is several kilobytes.
+The fade state written by MainMenuUtil_StartFade landed somewhere else, so
+WaitFade always saw nextState 0 and the main menu re-ran its graphics setup
+every frame until the heap ran out (a crash in MIi_CpuClear16 with a NULL
+buffer).
+
+Under SDK_PORT_3DS, make gMainMenuUtilWork the real MainMenuUtilWork
+object, take its address everywhere the code used the adjacency trick, and
+point the sprite list at work->sprites. The DS text is under #else and
+unchanged: gcc-10 -E -P without SDK_PORT_3DS is byte-identical for both
+files (0 diff lines).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+-- 
+2.43.0
+

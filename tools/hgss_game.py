@@ -86,7 +86,13 @@ LINK_DATA_EXCLUDED = ("lib/NitroDWC/asm/dwc_gamespy_bss.o",
                       "lib/NitroDWC/asm/dwc_lib_rodata.o")
 
 PORT_DEFINES = ["-DSDK_ARM9", "-DSDK_TS", "-DSDK_4M", "-DSDK_CODE_ARM",
-                "-DSDK_FINALROM", "-DNNS_FINALROM", "-DSDK_PORT_3DS"]
+                "-DSDK_FINALROM", "-DNNS_FINALROM", "-DSDK_PORT_3DS",
+                # The DS build keeps assertions (config.mk). Several call
+                # sites rely on GF_ASSERT's operand having a side effect
+                # (e.g. SpriteTransfer_CreateAllCharTransferTasks builds the
+                # char transfer tasks inside GF_ASSERT), so without this the
+                # game links but silently skips work.
+                "-DPM_KEEP_ASSERTS"]
 
 WARNINGS = ["-Wall", "-Wuninitialized", "-Wmaybe-uninitialized"]
 SECTION_FLAGS = ["-ffunction-sections", "-fdata-sections"]
@@ -212,13 +218,17 @@ def app_sources(target: str) -> list[Path]:
     if target not in ("host32", "3ds"):
         raise ValueError(f"unknown target {target!r}")
     main = "main_pc.c" if target == "host32" else "main_3ds.c"
-    return [REPO / "hgss" / "game" / "app" / main,
-            REPO / "hgss" / "game" / "app" / "heartgold.c",
-            REPO / "hgss" / "game" / "app" / "cpp_runtime.c",
-            REPO / "hgss" / "compat" / "src" / "msl_runtime.c",
-            REPO / "hgss" / "game" / "stubs" / "wm_stubs.c",
-            REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c",
-            REPO / "hgss" / "game" / "stubs" / "mb_stubs.c"]
+    sources = [REPO / "hgss" / "game" / "app" / main,
+               REPO / "hgss" / "game" / "app" / "heartgold.c",
+               REPO / "hgss" / "game" / "app" / "cpp_runtime.c",
+               REPO / "hgss" / "compat" / "src" / "msl_runtime.c",
+               REPO / "hgss" / "game" / "stubs" / "wm_stubs.c",
+               REPO / "hgss" / "game" / "stubs" / "dsprot_stubs.c",
+               REPO / "hgss" / "game" / "stubs" / "mb_stubs.c"]
+    if target == "host32":
+        # --trace-pxi/--trace-irq are host-only diagnostics (linker wraps).
+        sources.append(REPO / "hgss" / "game" / "app" / "pc_trace.c")
+    return sources
 
 
 def object_path(out: Path, rel: str) -> Path:
@@ -681,7 +691,13 @@ def link_command(cc: str, target: str, app_objects: list[Path],
                         encoding="utf-8")
     if target == "host32":
         flags = [*HOST_FLAGS, "-no-pie", "-pthread"]
-        extra = ["-lm", "-pthread"]
+        # --trace-pxi/--trace-irq: the diagnostic wrappers in pc_trace.c (the
+        # port layer itself stays byte-identical to platinum.lock).
+        wraps = ["-Wl,--wrap=PXI_SendWordByFifo",
+                 "-Wl,--wrap=NitroPort_Arm7Reply",
+                 "-Wl,--wrap=NitroPort_RaiseIrq",
+                 "-Wl,--wrap=OS_WaitIrq"]
+        extra = ["-lm", "-pthread", *wraps]
     else:
         # devkitARM's crt0 (3dsx.specs) provides _start and calls main; the
         # program is a normal libctru/citro3d one.
