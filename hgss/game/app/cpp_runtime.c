@@ -46,8 +46,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/*
+ * std::__new_handler. The MSL operator new reads this pointer directly; the
+ * DS build gets it from lib/asm/msl_cpp_runtime_data.s, which the port's link
+ * set excludes (lib/asm/msl_* would clash with the host C library). It stays
+ * NULL, so a failed allocation takes the __throw_bad_alloc path, exactly as a
+ * game with no handler installed. The sanitizer link pulls the MSL operator
+ * new in, which is why this is needed even though the normal link never
+ * references it.
+ */
+void (*_ZSt13__new_handler)(void);
+
+
 /* `operator new[]`'s size parameter: size_t on the target (32-bit). */
 typedef uint32_t hgss_size_t;
+
+/*
+ * std::__new_handler, read by the MSL `operator new` in
+ * src/to91_msl_scalar_new.cpp. The DS build gets it from
+ * lib/asm/msl_cpp_runtime_data.s, which the port's link set excludes (its
+ * other data would clash with the host libc). It stays NULL, so the
+ * allocator takes the __throw_bad_alloc branch as when no handler is
+ * installed. Without ASan the throwing new is dropped by --gc-sections; the
+ * sanitizer runtime pulls it in, so the symbol must exist.
+ */
+void (*_ZSt13__new_handler)(void);
 
 /*
  * The lobby's C destroy routines. The class layouts put the vector/deque

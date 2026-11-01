@@ -1,0 +1,23 @@
+From 92f0b3161cd1d4e20f224edb5efe230839447ec4 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sun, 1 Nov 2026 06:40:02 +0000
+Subject: [PATCH] touchscreen-menu: do not read the layout row past its eight
+ entries
+
+TouchscreenMenu_LoadSpriteResources loads TOUCHSCREEN_MENU_NUM_RESOURCES
+(11) resource slots through TouchscreenMenu_LoadIconResources. Slots 0-6 are
+the layout icons and 7-10 are the item/button/ball slots, but the function
+reads gTouchscreenMenuLayouts[layout][index] before its index-specific
+branches, so slots 8-10 read past the eight bytes of the row. On the DS that
+lands in the next row (harmless bss); on the host UBSan reports "index 8 out
+of bounds for type u8 [8]".
+
+Under SDK_PORT_3DS, read the layout only inside the row and use
+TOUCHSCREEN_MENU_ICON_NONE for the spare slots; their branches set the
+resource ids themselves. The DS text stays under #else and gcc-10 -E -P
+without SDK_PORT_3DS is byte-identical (0 diff lines).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+-- 
+2.43.0
+

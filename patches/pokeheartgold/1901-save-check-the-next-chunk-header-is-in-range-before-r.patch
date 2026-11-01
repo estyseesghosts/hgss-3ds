@@ -1,0 +1,20 @@
+From d4290dd41f8e2a61eb1ef4505388d0d6af25f3e4 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds <port@invalid>
+Date: Sun, 1 Nov 2026 06:20:17 +0000
+Subject: [PATCH] save: check the next chunk header is in range before reading
+ it
+
+SaveData_InitSubstructs ends a block with
+    if (hdr[i].block != hdr[i + 1].block && i + 1 < gNumSaveChunkHeaders && ...)
+At the last chunk the first operand reads hdr[gNumSaveChunkHeaders], one
+entry past gSaveChunkHeaders. On the DS that address is the next bss object
+and the read is harmless; on the host it is an out-of-bounds read and ASan
+reports a global-buffer-overflow at boot (SaveData_New -> ...:762).
+
+Put the bounds check first under SDK_PORT_3DS. The DS text is the original
+order under #else; gcc-10 -E -P without SDK_PORT_3DS is byte-identical.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+-- 
+2.43.0
+
