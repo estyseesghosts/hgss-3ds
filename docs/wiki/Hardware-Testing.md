@@ -162,7 +162,7 @@ a failure used to be ambiguous:
 | `[gx3d] PICA ready (classic path)` | The GPU worker initialised; the 3D path is live. |
 | `[gx3d] display on core 2` | The GPU/display worker has the New 3DS's free core, so its render overlaps the software 2D composite. |
 | `[gx3d] geometry on its own thread` | The geometry thread started; scenes are built off the game's thread. |
-| `3D images: N (scenes drawn: M, camera-plane drops: D)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate) now the worker has a core, not 10. If it stays low, the 3D is updating slowly whatever the screen shows. `D` should be small; it is triangles near the camera plane that were removed to stop the centre-fan. |
+| `3D images: N (scenes drawn: M)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate) now the worker has a core, not 10. If it stays low, the 3D is updating slowly whatever the screen shows. There is no `camera-plane drops` field any more: the camera-point fix keeps that geometry. |
 | `[gx3d] 3D setup failed …` / `couldn't start the 3D thread` / `no geometry thread` | The safe fallback: the game still runs 2D-only. Send the line; it names the failing step. |
 | `=== exception (type N) pc …` | A real fault in game code; map the pc with `addr2line`. |
 | `audio: N dropped frames of M` (at exit) | `N` large relative to `M` means the DSP was starved. |
@@ -186,10 +186,12 @@ is the other half of the audio result.
 3. **Passing:** the top screen shows the same sequence as the PC screenshots
    (logo, movie, title, menu, Oak, gender, naming, bedroom); the bedroom's room
    and player sprite are visible behind the dialogue box, the intro movie's 3D
-   renders, and nothing fans out black from the centre of the picture. `3D
+   renders, and nothing fans out black from a corner of the picture. `3D
    images:` rises by roughly 300 every 600 frames while 3D is up, and walking
-   animates smoothly rather than once a second. The app stays at full speed (no
-   visible stutter), and the game runs at its intended speed rather than fast:
+   animates smoothly rather than once a second. The title's Ho-oh has its
+   wings and body intact (the camera-point fan is textured, not black, and
+   there is no transparent gap). The app stays at full speed (no visible
+   stutter), and the game runs at its intended speed rather than fast:
    the log's mean `total_us` from `tools/frametime_report.py log.txt` is near
    **16,700** (60 Hz), not 11,500 (87 Hz). Audio is clean by ear — no note
    hangs into the next one, which is what patch 1407 fixes — and `log.txt` ends
@@ -206,7 +208,7 @@ format and `tools/frametime_report.py` are described in
 frame cap sets that pace: `total_us` should average near **16,700** (the
 period is `SYSCLOCK_ARM11 / 60` = 4,468,530 ticks ≈ 16,667 us). A mean near
 11,500 (87 Hz) means the cap is not in the artifact or not reached; a mean
-near 33,400 means `fps=30` is set. `fps=30` reports as missing the 59.8 Hz
+near 33,400 means `fps=30` is set. `fps=30` reports as missing the 60 Hz
 target by design. Record the New 3DS numbers and, separately, the Old 3DS
 numbers.
 

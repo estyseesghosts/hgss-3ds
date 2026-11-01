@@ -1,29 +1,30 @@
 # Current state
 
-Last verified: **2026-11-01 (session 9, audio)**, inside the dev container
+Last verified: **2026-11-01 (session 9: frame cap, audio, 3D)**, inside the dev container
 (`/workspaces/pokeheartgold-3ds`), with the tree at **78 patches** (`NitroSDK` 15, `NitroSystem` 3,
-`pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date; the
-DS-side gate is the exception — it last passed at **76 patches** and has not been re-run at 78. If you
-change the patch stack, rerun the commands and update this page; do not trust it blindly.
+`pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date, and the
+DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
+this page; do not trust it blindly.
 
 **One line:** Phase 2's exit criterion is met — the PC program links with **0 unresolved**, the overlay
 self-check passes on the real binary (129/0), the symbol cross-check reports **0 missing**, and the 3DS
 program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
-**Both halves of the Phase 1 DS gate pass**, last re-run at **76 patches**; both matching
-builds reproduce the retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). The
-gate has not been re-run at **78** — patch 1407 is `SDK_PORT_3DS`-only, but the gate is the evidence.
+**Both halves of the Phase 1 DS gate pass at 78 patches**; both matching builds reproduce the retail
+ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patch 1407 is `SDK_PORT_3DS`-only, and
+the gate is the evidence.
 
 ## Phases
 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 72 patches apply from scratch; `make test` 277 Python tests + 21 SDK suites; `make port-tests` (see below); both archives build; the DS gate's three stale pin classes are fixed in 1603/1762/1763, and both matching builds reproduce the retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 78 patches apply from scratch; `make test` 330 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
-| 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames, no crash through 20,000 frames. Runner parity, `boot_smoke.py`, patches 1801/1802 and `PM_KEEP_ASSERTS` landed. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) |
-| 4-11 | Not started | See [../wiki/Architecture.md](../wiki/Architecture.md). |
+| 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
+| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, audio noise fix and camera-point 3D fix in the latest artifact; hardware re-run pending. |
+| 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
 
@@ -33,19 +34,19 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
-| Host tests | `make test` | **exit 0**; **329 Python tests** + **20 SDK suites** (21 entries in `tests/sdk/`; `port_memory.c` is not a suite) |
-| Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed** |
-| Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last run 46/46 at 61 patches; sources unchanged since |
-| Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/final-pc -j5` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
+| Host tests | `make test` | **exit 0**; **330 Python tests** + **20 SDK suites** |
+| Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **337 + 239** |
+| Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-point hunk compiles in the port build and `make port-tests` |
+| Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/slice-audio -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,592 B (`sha256 d6c56cf5…c4b`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/slice-3d -j4` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,120 B (`sha256 3f493661…b7f00`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
-| 3DS PICA/symbols | `arm-none-eabi-nm /work/final-3ds2/pokeheartgold-3ds.elf \| grep -E 'Hgss_Pica\|NitroPort_Pica\|Gx3dThread'` | `T` for `Hgss_PicaDropBehindCamera`, `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished` |
+| 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
-| DS-side gate (HG) | `tools/matching-build.sh /work/testapply2 HEARTGOLD` | **PASSED at 76 patches** (and at 72; not re-run at 78): `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
-| DS-side gate (SS) | same, `SOULSILVER` | **PASSED at 76 patches** (and at 72; not re-run at 78): `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail), `sha1sum -c` OK, exit 0 |
+| DS-side gate (HG) | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | **PASSED at 78**: `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
+| DS-side gate (SS) | same, `SOULSILVER` | **PASSED at 78**: `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail), `sha1sum -c` OK, exit 0 |
 
 ### Vendored suites: the full matrix
 
@@ -59,15 +60,12 @@ lowermenu 246, options 49, xbrz 266, shadow 375, nitrosystem **17,122** — ever
 **Nothing in the Phase 1/2/3 acceptance set.** The remaining gaps are deliberate deferrals or later
 phases:
 
-- **The PC program segfaults immediately after `NitroMain` starts** with a real pack (frame 0, under
-  qemu). The pack opens, the firmware/overlay setup runs, then the game's own boot path hits code that
-  Phase 4 has not ported. That is the Phase 4 work (headless boot to Oak's speech); it is not a Phase 3
-  data-pipeline failure, and no missing-file or pack error is reported first.
-- **SoulSilver has no ROM in the container.** `verify_rom.py` accepts its SHA-1, extraction/packing are
-  image-driven, and the synthetic tests cover the layout; the real SS run is an open gap. There is no
-  SS shell yet (`main_3ds.c` hardcodes the HG folder/name/game code).
-- **3DS depth:** the `.3dsx` links and packages but nothing draws yet; screen routing, input mapping and
-  the SMDH (icon/banner) are Phase 5.
+- **SoulSilver has no retail ROM in the container.** `verify_rom.py` accepts its SHA-1,
+  extraction/packing are image-driven, and the synthetic tests cover the layout; the real SS run is
+  an open gap. The shell is a compile-time `HGSS_SS_VARIANT`, but there is no SS data pack/ROM to
+  exercise it here.
+- **3DS depth:** the `.3dsx` runs on a New 3DS and draws both screens, audio and 3D; the latest
+  artifact's 60 Hz/audio/camera-point results are still the owner's hardware run.
 - **Web builder and CIA assets** are deferred (recorded in `docs/decisions.md` and the SD doc).
 
 The old failure classes are documented with root causes in
@@ -107,11 +105,12 @@ The ninth run's samples were 24.7 ms (40.4 Hz) overall, the field 19.8-20.9 ms
 and the rule that prevents it — is in [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md);
 [phase-5.md](phase-5.md) has the per-run numbers.
 
-Still open on hardware: the re-run after these fixes (3D rate, no fan, audio
-drops, frame times), a full run through Oak's speech at full speed, the save
-round-trip, the Old 3DS measurement, and the `.cia` decision. The next log
-should show `[gx3d] display on core 2`, a rising `3D images:` near 300 per 600
-frames and a small `camera-plane drops`.
+Still open on hardware: the re-run after these fixes (3D rate and no
+title gap/fan, no hung audio note, 60 Hz frame times), a full run through
+Oak's speech at full speed, the save round-trip, the Old 3DS measurement,
+and the `.cia` decision. The next log should show `[gx3d] display on core 2`,
+a rising `3D images:` near 300 per 600 frames, no `camera-plane drops`, and
+`audio: N dropped frames of M` near zero.
 
 The first run's failure, for the record: the `.3dsx` never started. Luma wrote
 a dump whose registers put the fault at a `udf #0` inside the console's
@@ -131,26 +130,20 @@ Fixed by patch **1903** (base read behind a `noinline` call) plus
 packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
 (`CODE 2087 pages, RODATA 109, DATA 13, BSS 3977`).
 
-**The DS gate has not been re-run at 77 patches** — patches 1901/1902/1903 are
-all `SDK_PORT_3DS`-only, but the gate is the evidence, so it must be re-run
-before the count is trusted.
+**The DS gate passed at 78 patches** for both games (HG `4fcded0e…b5a37`, SS
+`f8dc38ea…e582`), including the `1407` audio patch.
 
 ## Next actions, in order
 
-1. **Re-run the DS-side gate at 78 patches** (HG and SS). Patch 1407 is
-   `SDK_PORT_3DS`-only, but the byte-identical ROM is the evidence, and the
-   gate was last run at 76.
-2. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
+1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
    replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
    itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
-3. **Phase 5:** confirm the GPU pipeline and the 60 Hz frame cap on hardware
-   (room, player sprite and intro movie's 3D; rising `3D images:` count; mean
-   `total_us` near 16,700 rather than 11,490), then the remaining shell items
-   (input, SMDH and a hardware run). For the audio fix, the ears are the test:
-   no note may hang into the next one, and `audio: N dropped frames of M`
-   should be near zero.
-4. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 again at 72 patches.
-5. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
+2. **Phase 5:** confirm the GPU pipeline, the camera-point 3D fix, the 60 Hz frame cap and the audio
+   fix on hardware (room, player sprite and intro 3D with no gap/fan; rising `3D images:`; mean
+   `total_us` near 16,700; no hung note; `audio: N dropped frames` near zero), then the remaining
+   shell items (input, SMDH and a hardware run).
+3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 at 78 patches.
+4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
    available for an end-to-end pack/open; record it when a dump is available.
 
 ## Open decisions
@@ -176,7 +169,7 @@ devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
 python3 tools/bootstrap.py            # "already at ... with 78 patches" if in sync
-make test                            # exit 0 (329 tests + 20 SDK suites)
+make test                            # exit 0 (330 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
@@ -202,13 +195,48 @@ do it is fixed, but the rule is cheap to keep).
 | host gcc-10 | 10.5.0 (`gcc-10`), also `CC` in the image | the port's `host32` build |
 | Python | 3.12.3 | all tools; `pyelftools`, `unicorn` when noted |
 | Make | 4.3 | |
-| devkitPro tools | `3dsxtool`, `smdhtool` present | `.3dsx` packaging now, SMDH in Phase 5 |
+| devkitPro tools | `3dsxtool`, `smdhtool`, `3dsxdump`, `picasso`, `bin2s` present | `.3dsx` packaging/validation and the 3D shader blob |
 
 The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Reference.md).
 
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-01 (session 9, 3D) — the camera-point vertex and the title gap
+
+- **The title gap was our drop, not a missing near plane.** The dropped
+  triangles are real quad/quad-strip geometry with one vertex at clip
+  `(0,0,0,0)`; the G3 primitive counts in the title were quads 17,016 and
+  quad-strips 22,688, with zero triangle-strip/list occurrences, so a strip
+  sentinel is ruled out. The vertex has distinct model-space coordinates and
+  valid fixed `s/t/colour` — it is the camera point. The PC reference and the
+  DS put it at screen `(0,0)` and draw the fan from that corner; the PICA
+  cannot divide by `w = 0`, which made it black.
+- **Fix in the port:** `3ds_port/nitro/src/port_gx3d.c` `to_screen()` stores
+  `clip[3] = 1` for the exact `(0,0,0,0)` vertex and leaves its screen
+  position, depth and `inv_w` alone, so the GPU divides it to the same corner
+  with valid texture/colour. The PC software frame at title frame 4800 is
+  byte-identical to the clean reference. A viewport-centre mapping was
+  rejected: it moved the fan and cut Ho-oh's left wing off.
+- **Workaround removed:** `hgss/game/app/pica_scene.c`, its app-source line,
+  the `GpuMain` call, the `camera-plane drops` log fields and
+  `tests/game/pica_scene/` are gone. `tests/test_hgss_game.py` asserts the
+  port hunk and the absence of the drop.
+- **Regression test:** `nitro/tests/test_gx3d.c` `test_camera_point_vertex`
+  emits a triangle with a `(0,0,0,0)` vertex, checks the stored `clip[3] == 1`
+  and screen `(0,0)`, and checks the batch builder gives the GPU `w > 0`.
+- **Local:** `make test` **330 Python tests, OK** + 20 SDK suites;
+  `make port-tests` gx3d **337 + 239**, nitrosystem **17,122**, 0 failed;
+  host32 1092/1092, 0 unresolved; 3DS 1092/1092, 0 unresolved, `.3dsx`
+  **9,278,120 B** (`sha256 3f493661…b7f00`), `3dsxdump` rc 0 (CODE 2126,
+  RODATA 112, DATA 13, BSS 4446 pages). `3ds_port/` is deliberately no longer
+  byte-identical; the PR content is the one `to_screen()` hunk plus the test.
+  Hardware is the owner's run: the title fan must be textured, not black, and
+  the gap gone (commit `920c573`).
+  [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md)
+- **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
+  `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
 
 ### 2026-11-01 (session 9, audio) — the hung noise note
 
@@ -231,7 +259,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
   hold the noise word (format 3, enable and repeat clear) while `0x0E0/0x0E8`
   and channel 0 keep their sentinels. Without 1407: 24 failures, including the
   stale `0x88400040` control; with it: 122 checks, 0 failures.
-- **Local:** `bootstrap --clean` applies **78 patches**; `make test` exit 0
+- **Local (commit `2110dc8`):** `bootstrap --clean` applies **78 patches**; `make test` exit 0
   (**329 Python tests** + 20 SDK suites); 3DS build **1092/1092**, 0
   unresolved, `.3dsx` **9,278,592 B** (`sha256 d6c56cf5…c4b`), `3dsxdump` rc 0
   (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). **No hardware result:** the
@@ -247,7 +275,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
   only waits while the previous frame is still being presented; once the
   composite fit under one refresh the loop free-ran, so the game and its
   cutscenes ran 1.45x fast.
-- **The shell caps frame starts at 60 Hz.** `WaitForFrameCap` holds a
+- **The shell caps frame starts at 60 Hz (commit `952bdf2`).** `WaitForFrameCap` holds a
   `SYSCLOCK_ARM11 / fps` tick grid with `svcGetSystemTick()` and sleeps only
   the remainder; a frame that already overran waits for nothing, and one more
   than a period behind re-anchors the grid. `DrawFrame` and its swap stay
@@ -277,6 +305,8 @@ Newest first. Each entry: what changed, what was run, what it proved.
   the PICA's divide by `w` then puts it at the screen centre. HGSS drops the
   affected stored triangles in `hgss/game/app/pica_scene.c` (`camera-plane
   drops` in the log) until the port's clipper gets a `w > 0` near plane.
+  **(Superseded in session 9: the drop left a transparent gap; the port now
+  gives the camera point a positive `w` and the workaround is removed.)**
 - **Audio.** `82 dropped frames of 23821` (0.34%) and a slow intro; the audio
   thread was below the game and shared core 0 with the starved GPU worker. It
   is now priority `0x2e`, above the game and geometry.

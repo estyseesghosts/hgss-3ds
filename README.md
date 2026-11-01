@@ -2,17 +2,26 @@
 
 A native 3DS port of Pokémon HeartGold and SoulSilver, built from the [ctrl-cheeb-del/pokeheartgold](https://github.com/ctrl-cheeb-del/pokeheartgold) decompilation. The hardware layer comes from [GabeSud0/pokeplatinum-3ds](https://github.com/GabeSud0/pokeplatinum-3ds): a virtual ARM7, DS memory and I/O registers as RAM, software 2D, G3 to PICA200 3D, a sound chip model, and a raw `.sav` save service. The project is licensed under GPL-3.0.
 
-**No game runs yet.** This repo has the build scaffolding, the SDK patches, the test suites and the tools. It does not boot HeartGold or SoulSilver, and it does not produce a 3DS build.
+**It runs on a New 3DS.** The build boots HeartGold, plays the intro, reaches
+Oak's speech and the player's bedroom, draws both screens with the PICA 3D
+layer, and plays audio. The latest artifact (frame cap + audio + camera-point
+fixes) is staged for a hardware re-run; its visual/audio/timing results are
+still pending. This is not a finished port: the save round-trip, Old 3DS and
+`.cia` decisions are open. The living status is
+[docs/progress/STATE.md](docs/progress/STATE.md).
 
 The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 
 ## Current status
 
 - **Phase 0 (baseline): complete, with open items.** Both US versions of the decomp build byte-identically inside the dev container, checked against their SHA1s and (for HeartGold) against a retail dump. In the container this needs `tools/matching-build.sh`, not plain `make`: the linker there strips five sections the original keeps, and the script restores them in the generated linker file. Still open: the golden reference captures (never run), the fixture saves, and the CI matching job, which is disabled. Details: [docs/progress/phase-0.md](docs/progress/phase-0.md).
-- **Phase 1 (SDK patch stack): partly done.** 15 numbered patches apply cleanly from scratch (the list is in [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). Of the 284 NitroSDK and NitroSystem source files, 270 pass a GCC-13 syntax check under `SDK_PORT_3DS` (269 with the port's GCC 10); the 14 that fail are files the port replaces. `make test` is green: 19 Python tests and 11 SDK host suites. The save-struct layout matches MWCC for 804 values (0 differences). The vendored port layer is not wired to HGSS yet: 29 of its 46 sources compile and the host32 build stops with 44 errors in 9 objects, so its unit tests are not built and `make port-tests` fails on purpose. Details: [docs/progress/STATE.md](docs/progress/STATE.md) and [docs/progress/phase-1.md](docs/progress/phase-1.md).
-- **Phases 2 to 11: not started.** No game code is compiled or linked. There is no ROM builder (`builder/` does not exist), no 3DS shell for HGSS, and no golden frames. None of the sound, IR, wireless or GPU 2D phases has started.
+- **Phase 1 (SDK patch stack): done.** **78 patches** apply cleanly from scratch (NitroSDK 15, NitroSystem 3, pokeheartgold 60; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**330 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate at 78 reproduces both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
+- **Phase 2 (game under GCC): done for the exit criterion.** 1092/1092 game files compile on host32 and 3DS, 150/150 ARM9 `.s` assemble, both port archives build, and both programs link with **0 unresolved**.
+- **Phase 3 (data pipeline): done.** `builder/{verify_rom,extract_rom,pack}.py` make the HG/SS pack from your own cartridge; the real HG pack opens in the PC program and the boot errors are mapped.
+- **Phase 4 (boot to Oak): in progress.** The PC build reaches the logo, movie, title, main menu, Oak's speech, naming and the first bedroom; boot smoke tests and scripted inputs exist. Golden captures and the save round-trip are open.
+- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The ninth run showed the 3D at ~87 Hz; the latest tree adds a **60 Hz frame cap**, the **noise-channel register fix** and the **camera-point 3D fix**. Its artifact is staged; a hardware re-run is pending.
 
-What you can run today: `make test` (19 Python tests and 11 SDK host suites), `make layout` (the save-layout probe, 0 differences), both surveys (`make sdk-survey`, `tools/port_compile_survey.py`), the port build via `tools/hgss_nitro.py` (not green yet), and the matching builds for HeartGold and SoulSilver, if you have the toolchain.
+What you can run today: `make test`, `make port-tests`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain.
 
 ## Content rules
 
@@ -23,7 +32,7 @@ This repo never holds game content. It contains no ROMs, no extracted assets, no
 - An Apple-silicon Mac with OrbStack (tested) or Docker Desktop (documented, not tested here), and Node.js for the Dev Containers CLI. This is the setup the repo documents in full.
 - Linux: `.github/workflows/port.yml` is written to build the image and run `make test` on Ubuntu, but it has not run on GitHub yet. The DS-side steps are documented for the macOS container only.
 - Your own copies of the MWCC 2.0 archive (`mwccarm.zip`, with `license.dat`) and the Nitro SDK 3.2-060901 archive. The container refuses to set up without them.
-- Optional: your US HeartGold or SoulSilver ROM and a save. The steps below do not use them.
+- Your own US HeartGold or SoulSilver ROM to build the data pack (`builder/`) and run the game. The setup and test steps above do not use it; the game does. A save is optional.
 
 ## Quick start
 
@@ -50,9 +59,10 @@ pokeheartgold-3ds/
   gameplan.md         the plan: phases, layers, save specification, risk register
   upstream.lock       pinned decomp commit; build/upstream is fetched at it
   platinum.lock       pokeplatinum-3ds commit that 3ds_port/ comes from
-  Makefile            make test, sdk-survey, layout, port-tests (fails on purpose), clean
+  Makefile            make test, sdk-survey, layout, port-tests, game-pc, game-3ds, clean
   3ds_port/           hardware layer from pokeplatinum-3ds: nitro, nitrosystem, pak, game
-                      (game/ is still Platinum's shell; HGSS's own shell is not written)
+                      (HGSS's own shell is hgss/game/app; one deliberate upstream-style
+                      camera-point fix diverges from platinum.lock, see docs/decisions.md)
   patches/            numbered patches for the decomp, in three stacks: NitroSDK, NitroSystem, pokeheartgold
   tools/              bootstrap, toolchain install, matching build, surveys, savetool,
                       layout probe, golden capture scripts

@@ -14,14 +14,21 @@ Two options:
 1. **Inside your repo.** HGSS lives next to Platinum (`patches/pokeheartgold/`,
    a second `upstream.lock`, HGSS `game/app` files). One hardware layer, one CI.
 2. **A sister repo** (what I'm doing for now) that vendors `3ds_port/` at a
-   pinned commit, byte-identical, and keeps HGSS code in new files and patches.
-   GPL-3.0 and your notices stay intact.
+   pinned commit and keeps HGSS code in new files and patches. GPL-3.0 and
+   your notices stay intact.
 
 Either way I'd like to send generic fixes back to you as small PRs rather than
 fork the behavior: mosaic and display capture in the software 2D renderer
 (HGSS uses both), and the cart SPI / infrared path (`CARD_SpiWait*`) for the
 Pokéwalker. I'll keep the Platinum tests green and won't touch game-specific
 code.
+
+One concrete PR is ready to shape: `port_gx3d.c` `to_screen()` keeps a vertex
+at clip `(0,0,0,0)` at screen `(0,0)` but stores `clip[3] = 1`, because the
+PICA cannot divide by `w = 0`; HGSS's title quads/quad strips hit that case
+and drew black fans. The test is `test_camera_point_vertex` in
+`nitro/tests/test_gx3d.c`. It is the one place our vendored copy currently
+differs, and I would rather it live upstream.
 
 I don't ship ROMs, assets or game builds, following your CONTRIBUTING.md.
 

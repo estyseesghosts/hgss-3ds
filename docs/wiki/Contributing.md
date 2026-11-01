@@ -30,7 +30,7 @@ Every game change is guarded by `SDK_PORT_3DS`, or it is a GCC-only fix that MWC
 
 Example: patch `1101` changes one header prototype, and its message says that `gcc -E -P` of the header is identical without the macro. Patch `0401` is the one patch that edits an existing DS line, from `#ifdef SDK_ARM9` to `#elif defined(SDK_ARM9)`. It keeps the same meaning without the macro, and its message says the preprocessed output is identical for both `SDK_ARM9` and `SDK_ARM7` ([patches/NitroSDK/0401](../../patches/NitroSDK/) message).
 
-The byte-identical gate is a full rebuild and a SHA1 check. Phase 1 recorded a passing run for the SDK patches `0101` to `0901` and `NitroSystem` `0301`. It did not include `1001` or `1101` ([docs/progress/phase-1.md](../progress/phase-1.md)). A patch that changes DS text needs that run before merge.
+The byte-identical gate is a full rebuild and a SHA1 check. The gate was re-run at **78 patches** and passed for both games (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). A patch that changes DS text needs that run before merge; patch `1407` is `SDK_PORT_3DS`-only, and the run is the evidence.
 
 ## The save format never changes
 
@@ -40,13 +40,26 @@ Example: patch `1001` makes `u64` 4-byte aligned, but only under `SDK_PORT_3DS`.
 
 A second example is the decision that `savetool` discovers slot sizes from the footers instead of hard-coding them. The row says the sizes depend on compiled struct sizes, so a hard-coded value would be a guess ([docs/decisions.md](../decisions.md), 2026-10-30).
 
-## The vendored `3ds_port/` stays byte-identical
+## The vendored `3ds_port/` stays byte-identical, with one recorded exception
 
 `3ds_port/` is copied from Platinum at the commit in `platinum.lock`, and it stays identical to that commit. HGSS-only code goes in new files, or in patches meant for upstream ([CONTRIBUTING.md](../../CONTRIBUTING.md); [NOTICE.md](../../NOTICE.md)).
+
+**Exception (2026-11-01):** the camera-point 3D fix is a deliberate upstream-style change in `3ds_port/nitro/src/port_gx3d.c` `to_screen()`, plus `test_camera_point_vertex` in its vendored `test_gx3d.c`. It gives the exact clip vertex `(0,0,0,0)` a positive `w` without moving its `(0,0)` screen position, which stops the PICA's divide-by-zero black fan; a viewport-centre mapping was tried and rejected. `platinum.lock` is unchanged; the divergence and the upstream PR content are recorded in [docs/decisions.md](../decisions.md) and [agent-notes/s11-3d-camera-point.md](../progress/agent-notes/s11-3d-camera-point.md).
 
 Example: the wiring between the vendored port and HGSS's SDK is not done by editing the vendored Makefiles. `tools/hgss_nitro.py` builds a shim under `build/` and passes command-line overrides, which keeps the vendored Makefiles unchanged ([docs/port-wiring.md](../port-wiring.md), [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
 
 Another example is the rule for tests: never change a test just to make it pass ([gameplan.md](../../gameplan.md), Phase 1, step 8). The phase-1 record gives one case. The `cp_context` test expected GCC's 8-byte-aligned struct sizes. It was corrected to the DS layout that the asm implies, an overrun guard was added, and the record says this is not a weakened assertion ([docs/progress/phase-1.md](../progress/phase-1.md), "Deviations").
+
+## Never run a mutating git command in a shared worktree
+
+A `git checkout -- <file>` discards uncommitted work in a tree someone else
+may be editing. During this session one agent ran it on
+`hgss/game/app/main_pc.c` while another was working; the file happened to carry
+only an abandoned `--render-3ds` experiment, so nothing was lost, but the
+outcome was luck. Inspect `git status`, name the files in `git add`, and never
+use `git checkout`, `git reset` or `git stash` in a shared tree without the
+owner's explicit instruction. A subagent is not exempt: "read-only" means no
+mutating git commands either.
 
 ## Small commits, with the trailer
 
@@ -118,7 +131,9 @@ Use this for any patch in `patches/`. Apply the port and tool parts to changes o
 
 - [ ] `tools/bootstrap.py --clean` applies the patch cleanly, with its number in its stack.
 - [ ] `upstream.lock` and `platinum.lock` are unchanged, unless the change is a pin bump, which is its own task.
-- [ ] `3ds_port/` is unchanged, unless the change is meant for upstream and kept small.
+- [ ] `3ds_port/` is unchanged, or the change is a recorded upstream-style exception with its PR content and tests (the camera-point hunk is the current one).
+- [ ] After adding/editing a patch, `bootstrap.py --clean` is re-run and the applied count matches `patches/` before any build is trusted.
+- [ ] After a decomp/SDK patch, the DS gate at the new patch count passes for **both** HG and SS.
 
 **Content and trailer**
 

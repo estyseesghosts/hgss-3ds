@@ -33,11 +33,10 @@ Reproduce the file inventory: `python3 tools/sdk_inventory.py <pokeheartgold> <n
   structures and behavior.**
 - The vendored `3ds_port/common.mk` expects `build/NitroSDK/include/nitro.h`
   with `<nitro/…>` headers under `$(SDK)/include`, and its `nitro/Makefile`
-  lists Platinum-layout sources. HGSS needs `lib/include` on the include path
-  and its own source list. Because `3ds_port/` must stay byte-identical, this
-  needs an HGSS make fragment passed on the command line or a patch to the
-  vendored Makefiles flagged for upstream. **Open decision, see
-  `docs/progress/phase-1.md`.**
+  lists Platinum-layout sources. HGSS resolves this with the shim and
+  command-line overrides in `tools/hgss_nitro.py`; the vendored Makefiles stay
+  unchanged. `3ds_port/` has one deliberate upstream-style 3D fix (the
+  camera-point hunk), recorded in `docs/decisions.md`.
 - `bootstrap.py` links `build/NitroSDK` → `build/upstream/lib/NitroSDK` so the
   vendored paths resolve; the include-path part is not solved yet.
 - **Resolution (no `3ds_port/` edits).** `tools/hgss_nitro.py` builds an
@@ -434,5 +433,5 @@ The DS build runs `tools/object_aliases.py` over objects with an
 `.alias-map.json` to add labels *inside* a section: the five
 `gPokewalkerIr{ImageSizes,StrollSizes,MessageQueue,Transfer,SendBuffer}` aliases
 inside `gPokewalkerIrBuffers`/`Sync`/`Progress` (offsets 0x4c/0x54, 0x7c/0x80,
-0xc0), and runs of Thumb entry points. The PC harness does not run it yet; the
-five aliases are among the last 34 unresolved symbols.
+0xc0), and runs of Thumb entry points. The PC harness runs the same stage
+now; the link is clean.

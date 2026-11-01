@@ -81,8 +81,8 @@ bash tests/sdk/fx/run.sh build/upstream
 
 `make port-tests` runs the vendored `3ds_port` suites (`pak`, `nitro`, `nitrosystem`) against HGSS's
 SDK. It is its own target, not part of `make test`, because it needs a full `host32` build. Current
-state (61 patches): **exit 0**; every suite passes, including `test_arm7` (676), `test_sound_sequence`
-(12) and `nitrosystem` (17,122 checks). See [../progress/STATE.md](../progress/STATE.md).
+state (78 patches): **exit 0**; every suite passes, including `test_arm7`, `test_sound_sequence`,
+`gx3d` (337+239) and `nitrosystem` (17,122 checks). See [../progress/STATE.md](../progress/STATE.md).
 
 ## The port layer
 
@@ -106,10 +106,9 @@ python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> test
 - `--subproject {pak,nitro,nitrosystem,all}` narrows `test`; the default for `test` is all three.
 - `python3 tools/hgss_nitro.py list` prints the HGSS source lists and the excluded files; `shim` recreates the shims and prints the overrides.
 
-Current state (2026-10-31, 61 patches): `libnitro.a` and `libnitrosystem.a` build with 0 errors;
-`make port-tests` exits 0 — pak 120, the whole nitro sequence (arm7 676, sound_sequence 12, render
-2071, gx3d 326+228, vram 24, shadow 375, …) and nitrosystem 17,122. The failure history, including
-every segfault and root cause, is in
+Current state (2026-11-01, 78 patches): `libnitro.a` and `libnitrosystem.a` build with 0 errors;
+`make port-tests` exits 0 — pak 120, the whole nitro sequence and nitrosystem 17,122; gx3d
+337+239. The failure history, including every segfault and root cause, is in
 [../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md) and
 [../progress/agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md).
 
@@ -271,10 +270,14 @@ These come from things the repo already recorded.
 - **Outputs that contain game code stay local.** The matching ROM, the decomp build and any `.3dsx` or `.cia` belong in `/work` or on your own machine, never in the repo, a CI artifact or a message.
 - **Golden frames are git-ignored.** `tests/golden/` shows game art. Only the input scripts and the capture tools are committed. See [tools/golden/README.md](../../tools/golden/README.md).
 - **The vendored `3ds_port/` tests are wired and green.** `make port-tests` is real and runs `pak`,
-  `nitro` and `nitrosystem` against HGSS's SDK; at 61 patches it exits 0 (nitrosystem 17,122 checks).
+  `nitro` and `nitrosystem` against HGSS's SDK; at 78 patches it exits 0 (nitrosystem 17,122 checks).
   To debug a vendored test, see
   [Build-Reference](Build-Reference.md#a-vendored-test-segfaults-or-hangs-at-100--cpu); never edit the
   test to make it pass.
+- **A worker's `build/upstream` can be mid-apply.** During session 9 one report said 78 patches while
+  a concurrent check saw 77; `python3 tools/bootstrap.py` and
+  `git -C build/upstream rev-list --count <pin>..HEAD` are the truth. Re-run bootstrap yourself before
+  trusting a build or a test count from another session; if the count differs, `--clean`.
 - **Do not run `make test` and a harness build at the same time.** Both use the shared
   `build/hgss-sdk`/`build/hgss-nns` symlinks. A test that called `make_shim()` with a fake root once
   re-pointed them at `/up`, and a concurrent harness failed in 763 files with NNS incomplete-type

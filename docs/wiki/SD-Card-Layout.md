@@ -21,7 +21,7 @@ Both folders may also contain:
 | File | What it is |
 | --- | --- |
 | `manifest.json` | The pack's index sidecar: the ROM's SHA-1, and each file's original NitroFS ID, path and size. Written by the extractor; copy it **with** the pack. |
-| `port.ini` | Optional `key=value` settings. The only key today is `script=PATH` (absolute, `sdmc:/…`, or a name resolved inside the folder). Without it the shell still picks up `script.txt` from the folder on its own. |
+| `port.ini` | Optional `key=value` settings. Keys: `script=PATH` (absolute, `sdmc:/…`, or a name resolved inside the folder) and `fps=60` or `fps=30` (the frame cap; 30 is a half-speed comparison mode). Without it the shell still picks up `script.txt` from the folder on its own and uses 60 Hz. |
 | `script.txt` | Optional `tests/inputs`-style script the shell replays, frame for frame. |
 
 The DSP firmware is not in that folder: libctru loads a fixed path.
@@ -130,7 +130,9 @@ vendored tree: `tools/hgss_game.py` generates a build-private copy of
 `3ds_port/pak/src/pak.c` with the two digests above (from
 `builder/verify_rom.py`) prepended, compiles it as a program object and links
 it before `libnitro.a`; the archive's own `pak_reader.o` member is then never
-loaded. `3ds_port/` stays byte-identical to `platinum.lock`. The host boot
+loaded. The one deliberate `3ds_port/` divergence is the camera-point 3D
+hunk in `nitro/src/port_gx3d.c` (recorded in [decisions.md](../decisions.md));
+the pak reader itself is untouched. The host boot
 test `tests/sdk/pak_boot` covers the OK path and every other result.
 
 ## Read cache

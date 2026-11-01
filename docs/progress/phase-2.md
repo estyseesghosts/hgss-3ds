@@ -4,13 +4,11 @@ Status: **complete for the Phase 2 exit criterion.** `pokeheartgold-pc` links wi
 symbols**, `--check-overlays` passes on the real binary (129 overlays, 0 failed), and
 `tools/symbol_crosscheck.py` reports **0 missing** against the DS reference. The 3DS side compiles
 1092/1092 game files, builds both archives and links `pokeheartgold.3dsx` with 0 unresolved. Phase 1's
-DS gate is the remaining formal gate (see below).
+DS gate passed at **78 patches** (HG and SS; see [STATE.md](STATE.md)).
 
-Status: **in progress — the game compiles completely and the host link is 34 symbols from zero.** 1092 of
-1092 C/C++ files compile on host32, 150/150 ARM9 `.s` assemble, both port archives build, and the
-host link is down from **966 to 34 unique unresolved symbols**. `--check-overlays` and
-`tools/symbol_crosscheck.py` exist but have not run against a real linked binary yet. The 3DS target
-still has its own blockers (`std_sprintf`, the ARM7 C-file rule, ~45 devkitARM-only compile errors).
+> **Update 2026-11-01:** the old "34 unresolved / no binary yet" paragraph was the 2026-10-31 record;
+> both links are clean now and the 3DS `.3dsx` packages and runs. The rest of this page is the detailed
+> Phase 2 history.
 
 > **Update 2026-10-31 (session 5).** This supersedes the 39-patch measurement below.
 >

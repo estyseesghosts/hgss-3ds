@@ -3,7 +3,8 @@
 Everything on this page was found on hardware, in one session, in this order.
 Each entry is a symptom, the cause, the fix, and the rule to keep. The shells
 are `hgss/game/app/main_3ds.c` (3DS) and `main_pc.c` (PC); the port layer
-(`3ds_port/`) is vendored and byte-identical, so all of this is shell-side
+(`3ds_port/`) is vendored from Platinum and carries one recorded 3D fix, so all
+of this is shell-side
 unless stated.
 
 Read this before changing the display, the audio output, or the startup
@@ -21,7 +22,7 @@ sequence.
 | 3D scene black while 2D text draws | [Only engine B may skip composition](#only-engine-b-may-skip-composition) |
 | Black 3D, `3D images: 0` in the log, scene-builder lines present | [The 3D needs a GPU worker](#the-3d-needs-a-gpu-worker) |
 | 3D shows but updates about once a second; `3D images:` barely moves | [A worker on the game's core runs at 1 fps](#a-worker-on-the-games-core-runs-at-1-fps) |
-| Black shards fanning out from the centre of the 3D image | [A camera-plane vertex is a fan from the centre](#a-camera-plane-vertex-is-a-fan-from-the-centre) |
+| Black shards fanning out from a corner of the 3D image | [A camera-plane vertex is a fan from the top-left corner](#a-camera-plane-vertex-is-a-fan-from-the-top-left-corner) |
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
@@ -233,26 +234,33 @@ being built at `-O0` by the harness while the port archives were `-O2`).
 own. Priority alone cannot schedule a thread on a core another thread is
 holding.
 
-## A camera-plane vertex is a fan from the centre
+## A camera-plane vertex is a fan from the top-left corner
 
-**Symptom.** Black triangular shards fanning out from the centre of the 3D
+**Symptom.** Black triangular shards fanning out from a corner of the 3D
 image -- on the title screen, they stretch Ho-oh's wings to an off-screen
 point.
 
 **Cause.** The port clips to the DS's six planes ±x/y/z <= w. A vertex at
 `(0, 0, 0, 0)` satisfies all six, so it survives: `w + v < 0` is false for
-every one. The GPU vertex is `(ndc * w, w)`, so a `w = 0` vertex becomes
-`(0, 0, z, 0)`, and the PICA's divide by `w` puts it at the centre of the
-render target. Every triangle touching it is drawn as a fan from the centre.
+every one. The GPU vertex is `(ndc * w, w)`, and with `w = 0` that is
+`(0, 0, z, 0)`: the PICA cannot divide it, and the triangles touching it
+were drawn black. The PC reference and the DS put the vertex at screen
+`(0, 0)`; every triangle touching it is a fan from that corner.
 
-**Fix.** `hgss/game/app/pica_scene.c` degenerates each stored triangle with a
-`w <= 0` vertex before `NitroPort_PicaRender` (the GPU thread owns the scene
-until it releases it). The count is logged as `camera-plane drops`. The proper
-fix is a `w > 0` near plane in the port's clipper (an upstream change;
-`3ds_port/` stays byte-identical).
+**Fix.** `3ds_port/nitro/src/port_gx3d.c` (`to_screen`) detects the exact
+`(0, 0, 0, 0)` vertex and stores `clip[3] = 1` (20.12) while leaving its
+screen position, depth and `inv_w` alone. The GPU then divides it to
+`(0, 0)` with valid texture and colour. This is a deliberate divergence from
+`platinum.lock` (upstream PR: "gx3d: give a camera-plane vertex a positive
+w"), recorded in `docs/decisions.md`; the synthetic case in
+`nitro/tests/test_gx3d.c` (`test_camera_point_vertex`) covers it. The old
+HGSS-side drop workaround (`pica_scene.c`) is removed: it deleted the
+geometry and left a transparent gap.
 
 **Rule.** The DS's `w = 0` plane is not the GPU's: a vertex the CPU accepts at
-`w = 0` cannot be divided. Test `w > 0` after clipping.
+`w = 0` cannot be divided. Give exactly that vertex a positive `w`; do not
+move it (the corner is the DS's own projection) and do not drop its
+triangles.
 
 ## No console on the game's screens
 

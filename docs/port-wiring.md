@@ -10,7 +10,7 @@
 > The sections below are the original wiring analysis; the numbers in them are from before the wiring
 > landed and are kept as history.
 
-`3ds_port/` is vendored byte-identical from pokeplatinum-3ds and was written against the ntrtwl NitroSDK
+`3ds_port/` is vendored from pokeplatinum-3ds and was written against the ntrtwl NitroSDK
 (`libraries/<lib>/src/*.c`, `include/nitro/**`). HGSS's SDK is a flat reconstruction (`lib/NitroSDK/src/<lib>/*.c`,
 public headers in `lib/include/nitro/**` plus flat internal headers in `lib/NitroSDK/include`). The vendored
 Makefiles therefore cannot drive it. Measure progress with `python3 tools/port_compile_survey.py` (inside the

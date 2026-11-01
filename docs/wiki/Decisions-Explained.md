@@ -122,7 +122,7 @@ Where the repo does not give a reason, this page says so.
 
 ### Keep `3ds_port/` byte-identical to Platinum
 
-**Decided:** Phase 1, step 1. The vendored port stays byte-identical at first. HGSS changes go in new files, or in patches meant for upstream (plan).
+**Decided:** Phase 1, step 1. The vendored port stays byte-identical at first. HGSS changes go in new files, or in patches meant for upstream (plan). **Exception (2026-11-01):** the camera-point 3D fix is a one-hunk upstream-style change in `3ds_port/nitro/src/port_gx3d.c` `to_screen()` plus its test; `platinum.lock` is unchanged and the divergence is recorded in [docs/decisions.md](../decisions.md).
 
 **Reason given:** the plan's risk register says drift causes "fixes duplicated or lost", and asks for generic fixes to go upstream as PRs ([gameplan.md](../../gameplan.md), risk 7).
 
@@ -203,6 +203,14 @@ These choices are explained in full inside the patch messages in `patches/`. Eac
 - **The DS secure-area images are excluded from the PC/3DS build.** They are embedded MWCC asm, no source references them, and the bytes are proprietary firmware.
 - **The overlay self-check disables static initializers while it loads.** It tests the loader (`.data` restored, `.bss` cleared), not the game's init code; an application overlay's initializer may touch game state. The `.sinit` pointers are still validated against `FS_LoadOverlayInfo`.
 - **The symbol cross-check is an allowlist, not a silent pass.** A missing symbol means a source file was left out; every absent symbol needs an explicit replaced/stubbed reason in `tools/symbol_crosscheck_allowlist.txt`.
+
+## Part 4: Hardware-fix decisions (session 9)
+
+- **Frame starts are capped at 60 Hz** with a `svcGetSystemTick()` deadline (`SYSCLOCK_ARM11 / fps`) and `svcSleepThread` for the remainder; `port.ini`'s `fps` accepts 60 (default) or 30 (a comparison mode at half game speed). The emulated DS's clock is the V-blank raised once per `NitroPort_OnFrame`; `gfxSwapBuffers` is not a clock once a frame fits under the refresh. Log-9 measured 87 Hz. `DrawFrame`/blits stay before the wait. [docs/decisions.md](../decisions.md) · [3DS-Pitfalls](3DS-Pitfalls.md#a-frame-under-the-refresh-is-not-a-60-hz-frame).
+- **The GPU/display worker runs on core 2 on a New 3DS**, with the game's core as the fallback. On the game's core at `priority + 1`, the 20-30 ms software composite left it only the V-blank wait; log-8 drew 105 images in 4,680 frames. [docs/decisions.md](../decisions.md).
+- **Patch 1407 fixes `SND_SetupChannelNoise`'s register offsets.** After 1405 made the port array absolute, the two noise writes still used the relative index, landed in the `0x0E0` hole, and left a looped PCM control word for the mixer: the hung note. [3DS-Pitfalls](3DS-Pitfalls.md#a-noise-note-writes-an-unused-hole).
+- **The title camera-point fan is drawn, not dropped.** `to_screen()` gives the exact clip vertex `(0,0,0,0)` `clip[3] = 1` and keeps its `(0,0)` screen position; the PICA can divide it and interpolate the texture, and the software reference at frame 4800 is byte-identical. The HGSS drop workaround was removed, and `3ds_port/` diverges deliberately (upstream PR: "gx3d: give a camera-plane vertex a positive w"). [docs/decisions.md](../decisions.md) · [agent-notes/s11](../progress/agent-notes/s11-3d-camera-point.md).
+- **The DS gate at 78 passed for both games**; patch 1407 is `SDK_PORT_3DS`-only and its `#else` text is unchanged.
 
 ## Notes on the record
 

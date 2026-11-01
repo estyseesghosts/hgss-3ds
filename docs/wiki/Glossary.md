@@ -30,6 +30,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 ## C
 
+**Camera point.** A vertex that transforms exactly to clip `(0,0,0,0)` (at the camera). The DS and the PC reference put it at screen `(0,0)` and draw the triangles touching it as a fan from that corner. HGSS's title quads/quad strips use one; the PICA cannot divide by `w = 0`, so the port gives it `clip[3] = 1` in `to_screen()` ([3DS-Pitfalls](3DS-Pitfalls.md#a-camera-plane-vertex-is-a-fan-from-the-top-left-corner)).
+
 **Capture (display capture).** A DS feature that copies the output of a 2D screen, or the 3D output, into VRAM. The plan names motion blur, encounter particles and a legendary cinematic as users. The port's version is planned in Phase 6 ([gameplan.md](../../gameplan.md), Phase 6b).
 
 **CARD_SpiWait.** A family of SDK functions that drive the cart's SPI bus directly. The Pokéwalker infrared code uses them. The port stubs them now, with the IR chip reported as present but without a peer ([patches/NitroSDK/0701](../../patches/NitroSDK/) message).
@@ -67,6 +69,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **dsprot.** The game's copy-protection check. The plan replaces it with a stub that reports a genuine cart ([gameplan.md](../../gameplan.md), Phase 2, step 7).
 
 ## F
+
+**Frame cap.** The shell's 60 Hz wall-clock deadline (`SYSCLOCK_ARM11 / fps`, `fps=60` default; `fps=30` is a half-speed comparison mode). The emulated DS clock is the V-blank raised once per `NitroPort_OnFrame`, not `gfxSwapBuffers` ([3DS-Pitfalls](3DS-Pitfalls.md#a-frame-under-the-refresh-is-not-a-60-hz-frame)).
 
 **Fixture save.** A save file used as a known starting point for a scripted test, in place of a savestate. The port has no savestates ([gameplan.md](../../gameplan.md), Phase 8).
 
@@ -133,6 +137,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **MWCC.** The Metrowerks ARM compiler that builds the retail ROM. The repo calls it `mwccarm`. Its inline `asm` blocks are why the SDK needs C versions for GCC ([docs/sdk-diff.md](../sdk-diff.md), section 2).
 
 ## N
+
+**Noise channel.** Sound channels 14 and 15, driven by `SND_SetupChannelNoise`. After patch 1405 the port array is indexed by the DS low 16-bit address, so the control is at `0x400 + 16c`, not `16c`; patch 1407 fixes the two writes ([3DS-Pitfalls](3DS-Pitfalls.md#a-noise-note-writes-an-unused-hole)).
 
 **NARC.** The DS's archive format for game data files. Its generated index headers have the extension `.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4).
 
@@ -236,4 +242,4 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 ## Terms that are planned
 
-These names appear in the plan, not yet in the repo: `builder/`, `port_capture.c`, `port_cardspi.c`, `backend/ir_3ds.c`, `port_mic.c`, `backend/uds_3ds.c`, `port_render2d_gpu.c`, `--dump-state`, and `port.ini`. Their roles are listed in [gameplan.md](../../gameplan.md), "HGSS-specific additions to the port layer".
+These names appear in the plan, not yet in the repo: `port_capture.c`, `port_cardspi.c`, `backend/ir_3ds.c`, `port_mic.c`, `backend/uds_3ds.c`, `port_render2d_gpu.c`, and `--dump-state`. `builder/` and `port.ini` exist now. Their roles are listed in [gameplan.md](../../gameplan.md), "HGSS-specific additions to the port layer".

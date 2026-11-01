@@ -21,7 +21,7 @@ So the decomp is pinned, fetched at build time, and the port's changes are kept 
 | Role | Repository | Commit | Lock file |
 | --- | --- | --- | --- |
 | Decomp, built and patched at build time | `ctrl-cheeb-del/pokeheartgold` | `8cbb4a19ab781611ff1767035dcaea6b47baeded` | `upstream.lock` |
-| Hardware layer, vendored byte-identical | `GabeSud0/pokeplatinum-3ds` | `359fbec80a5c0664d4fa72caaae87465b640f9d6` | `platinum.lock` |
+| Hardware layer, vendored from | `GabeSud0/pokeplatinum-3ds` | `359fbec80a5c0664d4fa72caaae87465b640f9d6` | `platinum.lock` |
 
 These are the same values as in [docs/BASE.md](../BASE.md). The pins were taken on 2026-10-30. The plan says to bump them only at phase boundaries, because the decomp renames types often ([gameplan.md](../../gameplan.md), Phase 0, step 3).
 
@@ -49,7 +49,7 @@ A patch name is four digits and a short slug, for example `0701-card-CARD_SpiWai
 - **The numbers are per stack.** `NitroSDK/0301` and `NitroSystem/0301` are different patches. The first number is the stack's own counter, not a shared one.
 - **The NitroSDK numbers are grouped by area.** The phase-1 log gives the groups: `01xx` fx matrix code, `02xx` small hardware, lock and FIFO functions, `03xx` one-off GCC fixes, `04xx` os_system, `05xx` context and divider, `06xx` port hooks, `07xx` card, `08xx` qsort, `09xx` IRQ handler ([docs/decisions.md](../decisions.md), 2026-10-31).
 - **The numbers are not Platinum's.** Platinum's series runs 0001 to 0027. The plan expected to rebase those ([gameplan.md](../../gameplan.md), Phase 1, step 4). They could not be applied to HGSS's SDK, so the HGSS series is its own ([docs/progress/phase-1.md](../progress/phase-1.md), "Deviations").
-- **The `pokeheartgold` stack is grouped the same way:** `10xx` types and ABI, `11xx` NitroSystem headers, `12xx` GCC-only fixes, `13xx` memory map, `14xx` ARM7 sound, GX and static initializers, `15xx` Phase 2 game GCC fixes, `16xx` decomp build metadata, `17xx` Phase 2/3 runtime and 3DS build fixes. It holds `1001`, `1101`, `1201`-`1203`, `1301`-`1305`, `1401`-`1406`, `1501`-`1525`, `1601`-`1603`, `1701`-`1703`, `1710`-`1712` and `1760`-`1762` today (53 patches). The NitroSystem stack adds `0301`-`0303`; the NitroSDK stack `0101`-`0901` with gaps (`15` patches). Patches that touch more than one tree (or the decomp root) go here rather than in an SDK stack. Total at session 6: **71 patches**.
+- **The `pokeheartgold` stack is grouped the same way:** `10xx` types and ABI, `11xx` NitroSystem headers, `12xx` GCC-only fixes, `13xx` memory map, `14xx` ARM7 sound, GX and static initializers, `15xx` Phase 2 game GCC fixes, `16xx` decomp build metadata, `17xx` Phase 2/3 runtime and 3DS build fixes, `18xx` boot fixes, `19xx` sanitizer and relocation fixes. It holds `1001`, `1101`, `1201`-`1203`, `1301`-`1305`, `1401`-`1407`, `1501`-`1525`, `1601`-`1603`, `1701`-`1703`, `1710`-`1712`, `1760`-`1763`, `1801`-`1802` and `1901`-`1903` today (60 patches). The NitroSystem stack adds `0301`-`0303`; the NitroSDK stack `0101`-`0901` with gaps (`15` patches). Patches that touch more than one tree (or the decomp root) go here rather than in an SDK stack. Total: **78 patches**.
 
 ## The guard
 
@@ -80,7 +80,7 @@ Two forms appear in the patch files. Both were counted from the `#if`, `#else` a
 - **Replacement with an `#else`.** A hunk replaces an MWCC `asm` function, or a declaration GCC cannot parse, with a C version. The original text stays under `#else`. Most of `0101`, `0201`, `0301`, `0701` and `0901` work this way, and so do some hunks in `0501` and `0601`.
 - **Additive guard with no `#else`.** A hunk adds a guarded block and leaves the DS text as it was. Several blocks in `0501` and `0601` are like this, and so is the whole of `1101`.
 
-Only one patch edits an existing DS line. In `0401` the original `#ifdef SDK_ARM9` becomes `#elif defined(SDK_ARM9)` under the new `#ifdef SDK_PORT_3DS`. Patches `0801` and `0901` wrap an existing forward declaration in `#ifndef SDK_PORT_3DS` without changing its text. Across all 61 patches the only removed lines are that one in `0401` and the reformatted lines listed in each patch's message; every patch states a `gcc -E -P` identity check.
+Only one patch edits an existing DS line. In `0401` the original `#ifdef SDK_ARM9` becomes `#elif defined(SDK_ARM9)` under the new `#ifdef SDK_PORT_3DS`. Patches `0801` and `0901` wrap an existing forward declaration in `#ifndef SDK_PORT_3DS` without changing its text. Across all 78 patches the only removed lines are that one in `0401` and the reformatted lines listed in each patch's message; every patch states a `gcc -E -P` identity check.
 
 The macro is `SDK_PORT_3DS` and not Platinum's `SDK_CW` or `__MWERKS__`. Patch `0101` gives the reason: the port's rule is one guard for port-only behaviour, so the MWCC build never takes a port branch ([patches/NitroSDK/0101](../../patches/NitroSDK/) message).
 
@@ -89,7 +89,7 @@ The macro is `SDK_PORT_3DS` and not Platinum's `SDK_CW` or `__MWERKS__`. Patch `
 There are three pieces of evidence, and they are not the same strength.
 
 1. **Preprocessor identity (per patch, by hand).** The patch messages say that the output of `gcc -E -P` for each touched file is identical with and without the patch when `SDK_PORT_3DS` is not defined. The messages of `0201`, `0401`, `0501`, `0801`, `1101`, `1201`, `1301` and `1302` state this check. The phase-1 record says the same for `1001`. There is no automated check in the repo yet. The plan's patch-guard job is not in `port.yml` ([gameplan.md](../../gameplan.md), "CI workflows").
-2. **The byte-identical ROM gate.** This is the strong one. The phase-1 record says the tree with the NitroSDK patches `0101` to `0901` and NitroSystem `0301` built the HeartGold US ROM, and its SHA1 was `4fcded0e2713dc03929845de631d0932ea2b5a37` with 0 failed checks ([docs/progress/phase-1.md](../progress/phase-1.md), "DS-side matching"). That run took 18 minutes 43 seconds and did not include anything after the 10-patch stack. All later patches are guarded and their preprocessor output is unchanged, but no full rebuild with them has been run. The gate at 61 patches is blocked by build-tool input pins, not by a code difference: five tools pin headers, producer source hashes and the complete producer object, and the MSL/DWC producer pins embed the absolute source path. Patches `1601`/`1602` re-pin the first two classes; the MSL `*-shape.json` debug-info pin is still stale after `1519` (adding `#ifdef` lines shifts source line numbers). See [agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md) §7. The gate must run from `/work/pokeheartgold`.
+2. **The byte-identical ROM gate.** This is the strong one. The gate was re-run at **78 patches** from `/work/pokeheartgold`: both matching builds reproduced the retail ROMs, HeartGold `4fcded0e2713dc03929845de631d0932ea2b5a37` and SoulSilver `f8dc38ea20c17541a43b58c5e6d18c1732c7e582`, `sha1sum -c` OK. The five build-tool input-pin classes were fixed in `1601`/`1602`/`1603`/`1762`/`1763`; patch `1407` is `SDK_PORT_3DS`-only and its `#else` text is unchanged. See [docs/progress/STATE.md](../progress/STATE.md). The gate must run from `/work/pokeheartgold`.
 3. **The layout probe.** The MWCC reference values in `tools/layout_probe/mwcc.txt` were produced by MWCC itself. The probe compares GCC against them. This is about struct layout, not code. See [Save-Compatibility](Save-Compatibility.md).
 
 A matching build needs one extra step. `tools/matching-build.sh` adds five `KEEP_SECTION` blocks to the generated `main.lcf`, because the linker in the dev container strips five sections that the retail ROM keeps. The step edits a build artifact, not the decomp. The root cause is not established ([tools/matching-build.sh](../../tools/matching-build.sh) header; [docs/progress/phase-0.md](../progress/phase-0.md)).
@@ -136,6 +136,7 @@ Every patch in `patches/`, in stack order. The "Verified by" column names what t
 | pokeheartgold | 1404 | `lib/NitroSDK/src/snd/SND_command.c`, `snd_flush_command.c` | Keeps the ARM9 command flush with the state it updates: the decomp mixes a 4-byte `sFreeList` pointer with a 40-byte `CommandState`. | `tests/sdk/arm7_sound/test_arm9_flush.c` (24 checks); vendored `test_arm7` 676/0 (was a spin). |
 | pokeheartgold | 1405 | five `sub/lib/src/sound_*.c` | Absolute sound-register offsets (the array is indexed by the low 16 bits of the DS address) and the real 724-entry volume table. | `test_sound_sequence` 12/0 (was silent); `test_arm7`, `test_sound_chip`. |
 | pokeheartgold | 1406 | `lib/NitroSDK/src/gx/gx_load3d.c` | Maps the 3D texture/palette LCDC pages onto `NitroPort_LcdcVram`; zero entries stay zero. | `test_vram_transfer` 24/0 (segfaulted before). |
+| pokeheartgold | 1407 | `sub/lib/src/sound_channel.c` | `SND_SetupChannelNoise` writes `0x400 + 16c`/`0x408 + 16c` after the 1405 absolute-index change; the two writes had kept the old relative index and left a looped PCM control word, so a noise note hung until the next PCM setup. | `tests/sdk/arm7_sound` noise-channel checks (122 checks, 0 failed; 24 fail without it); DS gate at 78. |
 | pokeheartgold | 1501 | `lib/src/NitroCrypto` RC4 | Plain-C RC4 under the port. | Crypto checks in the game build. |
 | pokeheartgold | 1502 | files where an internal header declares a function non-static | Drops `static` on the port branch (GCC rejects the linkage mismatch). | host32 compile; same pattern reused by 1512/1523/1524. |
 | pokeheartgold | 1503 | `src/field/weather_manager.c` | Types the snow tables and copies them instead of assigning arrays. | host32 compile. |
@@ -200,6 +201,7 @@ patches/pokeheartgold/
   1401-sound-arm7-driver-and-static-initializers-SDK_PORT_3DS.patch
   1402-sdk-headers-port-hooks-for-timers-overlays-3d-SDK_PORT_3DS.patch
   1403-sound-do-not-write-the-finished-command-tag-before-t.patch
+  1407-sound-write-noise-channel-registers-at-their-real-offsets.patch
   1501-nitrocrypto-plain-C-RC4-under-SDK_PORT_3DS.patch
   1502-Drop-static-where-an-internal-header-declares-the-fu.patch
   1503-weather_manager-type-the-snow-tables-and-copy-them.patch
@@ -210,6 +212,11 @@ patches/pokeheartgold/
   1508-Initialize-the-battle-locals-MWCC-left-unset.patch
   1601-build-re-pin-the-headers-the-port-patch-stack-touche.patch
 ```
+
+This block is the early catalog. The current 60-patch pokeheartgold stack also
+contains `1404`-`1406`, `1509`-`1525`, `1602`/`1603`, `1701`-`1703`,
+`1710`-`1712`, `1760`-`1763`, `1801`/`1802` and `1901`-`1903`; `ls
+patches/pokeheartgold/` is authoritative.
 
 ### Added in session 4
 
@@ -235,7 +242,7 @@ patches/pokeheartgold/
 
 ## The port-side symbols the patches call
 
-Several patches call functions the port layer defines. These exist in the vendored `3ds_port/nitro`: `NitroPort_DmaStart`, `NitroPort_Gx3dSyncResults`, `NitroPort_IrqThreadSwitch`, `NitroPort_SaveContext`, `NitroPort_LoadContext`, `NitroPort_RaiseIrq`, `NitroPort_Halt`, `CPi_PortUpdateDiv` and `CPi_PortUpdateSqrt`, and the saved CPSR `OSi_PortCpsr`. The check was a text search of the vendored tree. No HGSS link has been made, so the contract is checked by reading, not by a build.
+Several patches call functions the port layer defines. These exist in the vendored `3ds_port/nitro`: `NitroPort_DmaStart`, `NitroPort_Gx3dSyncResults`, `NitroPort_IrqThreadSwitch`, `NitroPort_SaveContext`, `NitroPort_LoadContext`, `NitroPort_RaiseIrq`, `NitroPort_Halt`, `CPi_PortUpdateDiv` and `CPi_PortUpdateSqrt`, and the saved CPSR `OSi_PortCpsr`. The contract is exercised by the HGSS host32 and 3DS links (0 unresolved) and by `make port-tests`; the 3D port's camera-point hunk is the one deliberate divergence from `platinum.lock` (see [docs/decisions.md](../decisions.md)).
 
 ## Coverage after session 4
 
