@@ -19,19 +19,51 @@ looks like so the result can be recorded without guesswork.
    sdmc:/3ds/pokeheartgold/
      heartgold3ds.pak        # builder/pack.py from your cartridge
      manifest.json
+     heartgold.sav           # created by the game; a raw 512 KiB save
+     log.txt                 # created by the game (rewritten each start)
      port.ini                # optional, see below
      script.txt              # optional: a tests/inputs scene
-     dspfirm.cdc             # optional: only if you dumped your console's
    ```
 
-   `port.ini` is `key=value`; the only key today is `script`:
+   The DSP firmware is **not** in that folder — libctru looks for it at a
+   fixed path:
+
+   ```text
+   sdmc:/3ds/dspfirm.cdc     # optional: your own console's dump
+   ```
+
+   `port.ini` is `key=value` and lives in the data folder; the only key today
+   is `script`. Give it an absolute path or a name inside the data folder:
 
    ```ini
-   script=script.txt
+   script=sdmc:/3ds/pokeheartgold/script.txt
    ```
+
+   Without `port.ini`, the game still picks up `script.txt` from the data
+   folder on its own, so for a scripted run the file alone is enough.
 
 3. `dspfirm.cdc` is the console's own DSP firmware dump. **Without it the
    game runs silent** and `log.txt` says so; that is expected, not a crash.
+
+## Installing without 3dslink
+
+The `.3dsx` is the **program**, not a ROM — the ROM-derived data is
+`heartgold3ds.pak`. Copy it anywhere the Homebrew Launcher scans, normally
+the top of `/3ds`:
+
+```text
+sdmc:/3ds/pokeheartgold.3dsx   # the payload (about 8.7 MiB)
+```
+
+The Homebrew Launcher lists it by file name, so `pokeheartgold.3dsx` reads
+better than `rom.3dsx`. Only the `.3dsx` is needed: the SMDH metadata and
+icon are already embedded in it by `3dsxtool --smdh=…`, so
+`pokeheartgold-3ds.smdh` does **not** go on the card. Put the payload next
+to the `pokeheartgold/` folder rather than inside it — the folder is
+created by the game if missing.
+
+The data pack is about 120 MiB, so leave room on a FAT32 card (the 3DS does
+not read exFAT).
 
 ## Deploying with 3dslink
 
@@ -78,8 +110,9 @@ map the pc with `addr2line -e build/game-3ds/pokeheartgold-3ds.elf <pc>`.
 
 ## The scripted New 3DS run
 
-1. Copy `tests/inputs/newgame-buttons.txt` to `sdmc:/3ds/pokeheartgold/script.txt`
-   and set `script=script.txt` in `port.ini`.
+1. Copy `tests/inputs/newgame-buttons.txt` to `sdmc:/3ds/pokeheartgold/script.txt`.
+   That is enough on its own; if you want to name it something else, add
+   `script=sdmc:/3ds/pokeheartgold/<name>.txt` to `port.ini`.
 2. Start the app and leave the console alone. The script presses START on the
    title, selects **NO INFO NEEDED**, advances Oak's speech and enters the
    bedroom, frame-for-frame as the PC run.

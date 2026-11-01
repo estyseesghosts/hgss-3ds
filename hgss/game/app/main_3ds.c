@@ -347,7 +347,15 @@ static const char *ScriptPath(void)
             *--end = '\0';
         }
         if (*value != '\0') {
-            snprintf(path, sizeof(path), "%s", value);
+            /* A bare name (script=run.txt) is taken relative to the data
+             * folder; an absolute path or an sdmc:/ path is used as
+             * written. Without this the relative name would resolve against
+             * the loader's working directory, which is not DATA_DIR. */
+            if (value[0] == '/' || strncmp(value, "sdmc:", 5) == 0) {
+                snprintf(path, sizeof(path), "%s", value);
+            } else {
+                snprintf(path, sizeof(path), DATA_DIR "/%s", value);
+            }
             fclose(file);
             return path;
         }

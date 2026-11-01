@@ -9,8 +9,8 @@ and update this page; do not trust it blindly.
 self-check passes on the real binary (129/0), the symbol cross-check reports **0 missing**, and the 3DS
 program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
-**Both halves of the Phase 1 DS gate pass** at 72 patches: the matching builds reproduce the
-retail HeartGold and SoulSilver ROMs byte for byte.
+**Both halves of the Phase 1 DS gate pass**, re-run at the current **76 patches**: both matching
+builds still reproduce the retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`).
 
 ## Phases
 
@@ -41,8 +41,8 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
-| DS-side gate (HG) | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | **PASSED** at 72 patches: `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail) |
-| DS-side gate (SS) | same, `SOULSILVER` | **PASSED** at 72 patches: `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail) |
+| DS-side gate (HG) | `tools/matching-build.sh /work/testapply2 HEARTGOLD` | **PASSED at 76 patches** (and at 72): `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
+| DS-side gate (SS) | same, `SOULSILVER` | **PASSED at 76 patches** (and at 72): `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail), `sha1sum -c` OK, exit 0 |
 
 ### Vendored suites: the full matrix
 
