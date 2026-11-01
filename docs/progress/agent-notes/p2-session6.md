@@ -15,7 +15,7 @@ Headline results:
 | `symbol_crosscheck.py` | never on a real binary | **match 21,407 · allowlisted 3,328 · missing 0** |
 | 3DS archives | `std_sprintf` + ARM7 rule fail | **`libnitro.a` + `libnitrosystem.a` build, 0 errors** |
 | 3DS game compile | 1051/1092, 41 fail | **1092/1092, 0 fail** |
-| 3DS link | none | **0 unresolved, `pokeheartgold.3dsx` (9,001,496 bytes) packaged** |
+| 3DS link | none | **0 unresolved, `pokeheartgold.3dsx` (9,001,956 bytes) packaged** |
 | Python tests | 204 | **277** |
 | DS gate | not passed at 61 | see the gate section |
 

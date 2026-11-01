@@ -10,8 +10,10 @@
 #                    decomp's generated .naix headers (run the decomp's make once), MWCC only with --update-mwcc
 #   make game-pc     compile the HGSS game + data + port libraries with gcc-10 -m32 and link
 #                    build/game-pc/pokeheartgold-pc (the Phase 2 harness; --keep-going reports every error)
-#   make game-3ds    the same with devkitARM and a static link attempt (build/game-3ds/pokeheartgold-3ds.elf;
-#                    no 3DS shell yet). Both need `python3 tools/bootstrap.py` first.
+#   make game-3ds    the same with devkitARM and the libctru/citro3d shell; links
+#                    build/game-3ds/pokeheartgold-3ds.elf and packages
+#                    build/game-3ds/pokeheartgold.3dsx with 3dsxtool (no SMDH yet). Both
+#                    need `python3 tools/bootstrap.py` first.
 #   make clean
 # ---------------------------------------------------------------------------
 

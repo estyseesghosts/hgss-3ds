@@ -36,7 +36,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/final-pc -j5` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds3 -j5` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,001,496 B |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds3 -j5` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,001,956 B |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
@@ -157,7 +157,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **3DS:** `std_sprintf`/`wm_core` va_arg fixes (1701/1702), the GX type fix (1703), the ARM GAS
   `%progbits`/`%object` compat fix, 41 devkitARM-only files fixed as types (1710-1712), overlay IDs
   assembled as numbers and `.version` merged into `.rodata` for 3dsxtool. **1092/1092 compile, both
-  archives build, 0 unresolved, `pokeheartgold.3dsx` packaged (9,001,496 B).**
+  archives build, 0 unresolved, `pokeheartgold.3dsx` packaged (9,001,956 B).**
 - **Phase 3:** `verify_rom.py`, `extract_rom.py`, `pack.py` (HG/SS US, build ID
   `heartgold-nitrofs-1`), the `tests/sdk/pak_boot` suite against the real reader, the SD layout doc,
   and synthetic-image tests. The real HG pack (513 files, 125,556,080 B) opens in `pokeheartgold-pc`;

@@ -37,7 +37,7 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 | host GCC 10 | 10.5.0 | `gcc-10` | the port's `host32` build; `CC` is set to it in the image |
 | host G++ 10 | 10.5.0 | `g++-10` | same |
 | devkitARM | 16.1.0 | `arm-none-eabi-gcc` | layout probe ARM variant; future 3DS builds |
-| devkitPro tools | current | `3dsxtool`, `smdhtool` | Phase 5 packaging (`bannertool`/`makerom` are not confirmed in the image) |
+| devkitPro tools | current | `3dsxtool`, `smdhtool` | `.3dsx` packaging after the 3DS link; SMDH/icon is Phase 5 (`bannertool`/`makerom` are not confirmed in the image) |
 | Wine | WineHQ **10.0** | `wine` | MWCC (`mwccarm.exe`) and the SDK tools (`makelcf.exe`) |
 | MWCC | 2.0 tree (`sp2p2`, and the patched `sp2p3` assembler) | `wine .../mwccarm.exe` | the DS matching build only |
 | Nitro SDK | 3.2-060901 | copied by `tools/install-ds-toolchain.sh` | LCF templates, `makelcf.exe` |
@@ -80,7 +80,7 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 | DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | ROM in `/work` | works; needs MWCC; **not passed at 61 patches** (last pass 10) |
 | Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
 | Game for PC | `make game-pc` | `build/pokeheartgold-pc` | **1092/1092 compile, 34 unresolved; no binary yet** ([phase-2.md](../progress/phase-2.md)) |
-| Game for 3DS | `make game-3ds` | `build/pokeheartgold.3dsx` | compiles ~1049/1094; 3DS `libnitro.a` blocked by `std_sprintf` and the ARM7 rule; no binary yet |
+| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; 3dsxtool packages the `.3dsx` (SMDH is Phase 5) |
 
 There is no `make game`, `make matching` or `builder/` in this repo. See
 [Tools-Reference](Tools-Reference.md#named-in-the-docs-but-not-in-the-repo).
