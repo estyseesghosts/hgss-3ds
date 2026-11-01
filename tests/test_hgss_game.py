@@ -585,6 +585,34 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("PTMSYSM_ConfigureNew3DSCPU", text)
         self.assertLess(text.index("osSetSpeedupEnable"), text.index("gfxInitDefault()"))
 
+    def test_shell_feeds_the_sound_mixer_to_ndsp(self):
+        """The DS mixer has to reach NDSP, or the game is silent.
+
+        NitroPort_SoundRender mixes 32768 Hz stereo; the shell renders it into
+        NDSP wave buffers on its own thread and pumps the ARM7's alarm replies
+        on the game thread.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("NitroPort_SoundRender(", text)
+        self.assertIn("ndspChnWaveBufAdd(", text)
+        self.assertIn("NitroPort_SoundPumpReplies()", text)
+        self.assertIn("ndspChnSetRate(0, (float)AUDIO_RATE)", text)
+
+    def test_shell_redraws_only_a_changed_engine(self):
+        """NitroPort_RenderScreens composites both engines every frame.
+
+        The per-engine call skips the one whose inputs did not move. The swap
+        must stay unconditional: waiting on the display refresh is the clock
+        the emulated DS runs on.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("NitroPort_Render2DIfChanged(0,", text)
+        self.assertIn("NitroPort_Render2DIfChanged(1,", text)
+        self.assertNotIn("NitroPort_RenderScreens(top, bottom);", text)
+        frame = text[text.index("static void DrawFrame"):]
+        frame = frame[:frame.index("\n}")]
+        self.assertIn("gfxSwapBuffers()", frame)
+
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)

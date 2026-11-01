@@ -67,6 +67,13 @@ void NitroPort_SetButtons(uint16_t held, int lidClosed);
 void NitroPort_SetTouch(int down, uint16_t x, uint16_t y);
 void NitroPort_CardFlush(void);
 void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
+/* Per engine: draw only when that engine's inputs changed (returns 1 when
+ * drawn). BOOL is int on NitroSDK; the type is spelled out here because the
+ * SDK header cannot be included next to libctru's. */
+int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
+int NitroPort_EngineAOnTop(void);
+void NitroPort_SoundRender(int16_t *stereo, size_t frames);
+void NitroPort_SoundPumpReplies(void);
 
 static FILE *sLog;
 static LightLock sLogLock;
@@ -173,23 +180,39 @@ static uint16_t DsButtons(uint32_t held, circlePosition circle)
     return out;
 }
 
-/* Draw both screens from the port's 2D renderer. */
+/* Draw both screens from the port's 2D renderer, skipping an engine whose
+ * inputs did not change: NitroPort_Render2DIfChanged composites that engine
+ * only when its registers, palettes, OAM or VRAM moved, and leaves the
+ * buffer alone otherwise, so a still screen costs nothing.
+ *
+ * The swap stays unconditional on purpose. gfxSwapBuffers waits for the
+ * display's refresh, and that wait is the only clock the emulated DS has --
+ * the port raises a V-blank once per OnFrame -- so skipping it would make the
+ * game run fast instead of saving time. Only the composite and the blit are
+ * skipped. */
 static void DrawFrame(void)
 {
     static uint16_t top[256 * 192], bottom[256 * 192];
     u16 width = 0, height = 0;
     uint8_t *topFb;
     uint8_t *bottomFb;
+    int aOnTop = NitroPort_EngineAOnTop();
+    int drewA = NitroPort_Render2DIfChanged(0, aOnTop ? top : bottom);
+    int drewB = NitroPort_Render2DIfChanged(1, aOnTop ? bottom : top);
+    int drewTop = aOnTop ? drewA : drewB;
+    int drewBottom = aOnTop ? drewB : drewA;
 
-    NitroPort_RenderScreens(top, bottom);
-
-    topFb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
-    if (topFb != NULL) {
-        Blit(top, (uint16_t *)topFb, (400 - 256) / 2, (240 - 192) / 2, 240);
+    if (drewTop) {
+        topFb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+        if (topFb != NULL) {
+            Blit(top, (uint16_t *)topFb, (400 - 256) / 2, (240 - 192) / 2, 240);
+        }
     }
-    bottomFb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
-    if (bottomFb != NULL) {
-        Blit(bottom, (uint16_t *)bottomFb, (320 - 256) / 2, (240 - 192) / 2, 240);
+    if (drewBottom) {
+        bottomFb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
+        if (bottomFb != NULL) {
+            Blit(bottom, (uint16_t *)bottomFb, (320 - 256) / 2, (240 - 192) / 2, 240);
+        }
     }
     gfxFlushBuffers();
     gfxSwapBuffers();
@@ -229,6 +252,10 @@ void NitroPort_OnFrame(void)
         svcSleepThread(16 * 1000000LL);
         return;
     }
+
+    /* The ARM7's alarm replies (sound ticks and the sequencer) are delivered
+     * on this thread, as the PC shell does. */
+    NitroPort_SoundPumpReplies();
 
     hidScanInput();
     held = hidKeysHeld();
@@ -315,6 +342,92 @@ static void HgssOnException(ERRF_ExceptionInfo *info, CpuRegisters *regs)
 }
 
 /* ------------------------------------------------------------- starting */
+
+/* ---------------------------------------------------------------- audio */
+
+/* The DS sound chip mixes into NitroPort_SoundRender: 32768 Hz stereo, the
+ * same stream the PC shell writes to a WAV. NDSP's own rate is
+ * SYSCLOCK_SOC/512 (~32728.5 Hz), so running the channel at 32768 is 0.12%
+ * flat -- about two cents -- and lets the DSP do the resampling. Four blocks
+ * of 15.6 ms keep it fed while the game thread is busy; the mixer takes its
+ * own lock, so this thread never holds the game up. */
+#define AUDIO_RATE 32768
+#define AUDIO_FRAMES 512                       /* per block, per channel */
+#define AUDIO_BLOCKS 4
+#define AUDIO_THREAD_STACK (16 * 1024)
+#define AUDIO_THREAD_PRIORITY 0x31             /* below the game's 0x30 */
+
+static Thread sAudioThread;
+static volatile bool sAudioRunning;
+static int16_t *sAudioData;
+static ndspWaveBuf sAudioWave[AUDIO_BLOCKS];
+
+static void AudioThread(void *arg)
+{
+    (void)arg;
+    while (sAudioRunning) {
+        int slot = -1;
+        int i;
+
+        for (i = 0; i < AUDIO_BLOCKS; i++) {
+            if (sAudioWave[i].status == NDSP_WBUF_FREE ||
+                sAudioWave[i].status == NDSP_WBUF_DONE) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            svcSleepThread(1000000LL);   /* all four queued: let the DSP work */
+            continue;
+        }
+        NitroPort_SoundRender(sAudioData + (size_t)slot * AUDIO_FRAMES * 2u,
+                              AUDIO_FRAMES);
+        ndspChnWaveBufAdd(0, &sAudioWave[slot]);
+    }
+}
+
+static void AudioStart(void)
+{
+    size_t bytes = sizeof(int16_t) * 2u * AUDIO_FRAMES * AUDIO_BLOCKS;
+    int i;
+
+    sAudioData = linearAlloc(bytes);
+    if (sAudioData == NULL) {
+        NitroPort_Log("audio: out of linear memory; staying silent");
+        return;
+    }
+    memset(sAudioData, 0, bytes);
+    memset(sAudioWave, 0, sizeof(sAudioWave));
+    ndspChnReset(0);
+    ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
+    ndspChnSetRate(0, (float)AUDIO_RATE);
+    ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+    for (i = 0; i < AUDIO_BLOCKS; i++) {
+        sAudioWave[i].data_pcm16 = sAudioData + (size_t)i * AUDIO_FRAMES * 2u;
+        sAudioWave[i].nsamples = AUDIO_FRAMES;
+        sAudioWave[i].looping = false;
+    }
+    sAudioRunning = true;
+    sAudioThread = threadCreate(AudioThread, NULL, AUDIO_THREAD_STACK,
+                                AUDIO_THREAD_PRIORITY, -2, false);
+    if (sAudioThread == NULL) {
+        sAudioRunning = false;
+        NitroPort_Log("audio: can't start its thread; staying silent");
+        return;
+    }
+    NitroPort_Log("audio: %d Hz stereo, %d blocks of %d frames",
+                  AUDIO_RATE, AUDIO_BLOCKS, AUDIO_FRAMES);
+}
+
+static void AudioStop(void)
+{
+    if (sAudioThread != NULL) {
+        sAudioRunning = false;
+        threadJoin(sAudioThread, 1000 * 1000000LL);
+        threadFree(sAudioThread);
+        sAudioThread = NULL;
+    }
+}
 
 /* The console's profile stands in for the DS's user settings. */
 static void ReadProfile(HeartgoldSettings *settings)
@@ -579,7 +692,9 @@ int main(int argc, char **argv)
     if (R_SUCCEEDED(ndspInit())) {
         sAudio = true;
         ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+        ndspSetMasterVol(1.0f);
         NitroPort_Log("NDSP started");
+        AudioStart();
     } else {
         NitroPort_Log("no dspfirm.cdc: running silent");
     }
@@ -603,6 +718,12 @@ int main(int argc, char **argv)
         aptUnhook(&hook);
     }
 
+    if (sAudio) {
+        AudioStop();
+        NitroPort_Log("audio: %lu dropped frames of %lu",
+                      (unsigned long)ndspGetDroppedFrames(),
+                      (unsigned long)ndspGetFrameCount());
+    }
     NitroPort_Log("stopping (frame %lu)", sFrame);
     NitroPort_CardFlush();
     if (sLog != NULL) {

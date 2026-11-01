@@ -306,6 +306,44 @@ budget, with the game itself at ~1 ms.
    on the 3DS. NDSP is initialised and idle.
 4. `-O0` game objects (see below) — now worth ~1 ms, so it waits.
 
+## Sound, and drawing only what changed
+
+Two shell changes, both independent of the patch stack.
+
+### Audio plays
+
+`NitroPort_SoundRender` already mixed the DS sound chip at 32768 Hz stereo (the
+PC shell writes the same stream to a WAV); nothing consumed it on the 3DS.
+`AudioThread` now renders it into four NDSP wave buffers of 512 frames
+(15.6 ms each) on its own thread at priority 0x31 -- the mixer takes its own
+lock, so it never holds the game up -- and `NitroPort_OnFrame` pumps the ARM7's
+alarm replies on the game thread, as the PC shell does.
+
+NDSP's own rate is `SYSCLOCK_SOC/512` (~32728.5 Hz), so the channel runs at
+32768 and the DSP resamples: 0.12%, about two cents, inaudible. The exit log
+now ends with `audio: N dropped frames of M`, which is the direct measure of
+whether the DSP was ever starved.
+
+### Drawing only the engine that moved
+
+`DrawFrame` used `NitroPort_RenderScreens`, which composites both engines every
+frame regardless. It now calls `NitroPort_Render2DIfChanged(engine, out)`,
+which skips an engine whose registers, palettes, OAM and VRAM did not move, and
+blits only the screen that was redrawn.
+
+The swap stays unconditional on purpose: `gfxSwapBuffers` waits for the
+display's refresh, and that wait is the only clock the emulated DS has (the
+port raises one V-blank per `OnFrame`). Skipping it would make the game run
+fast rather than save time; only the composite and the blit are skipped.
+
+### What to read in the next log
+
+- `audio: 32768 Hz stereo, 4 blocks of 512 frames` at startup, and
+  `audio: N dropped frames of M` at exit.
+- `draw_us` per frame now varies with what actually changed: near zero while a
+  screen is still, the full composite when it moves. `total_us` is still the
+  number that decides whether it feels smooth.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
