@@ -197,8 +197,13 @@ void NitroPort_OnFrame(void)
 
     sFrame++;
     if (!aptMainLoop()) {
+        /* The only thread that may ask APT: the close is handled here, once
+         * per frame, and this thread leaves so the main thread's join
+         * succeeds and teardown happens in order. */
+        NitroPort_Log("the HOME menu asked to close (frame %lu)", sFrame);
+        NitroPort_CardFlush();
         sQuit = true;
-        return;
+        threadExit(0);
     }
     if (sPaused) {
         svcSleepThread(16 * 1000000LL);
@@ -443,14 +448,29 @@ static void AptHook(APT_HookType hook, void *param)
 /* Wait for the game's thread; the HOME menu's close ends the wait. */
 static void WaitForGame(Thread thread)
 {
+    unsigned long quiet = 0;
+
+    /* APT belongs to the game thread: NitroPort_OnFrame calls aptMainLoop
+     * once a frame, which is what libctru documents ("call this at the
+     * beginning of every frame"). Calling it here as well is that
+     * function's misuse, and a poll 100 ms after start returned false while
+     * the game was still loading overlays: the program stopped at frame 0
+     * with the game thread alive (docs/progress/phase-5.md). Come to think
+     * of it, this loop only has to wait for the thread. */
     while (!sQuit) {
         if (R_SUCCEEDED(threadJoin(thread, 100 * 1000000LL))) {
+            NitroPort_Log("the game's thread ended at frame %lu", sFrame);
             threadFree(thread);
-            break;
+            return;
         }
-        if (!aptMainLoop()) {
-            sQuit = true;
+        if (sFrame == 0 && ++quiet == 100) {
+            NitroPort_Log("still starting: no frame after 10 s");
         }
+    }
+    /* The game thread saw the close request and left; let it finish. */
+    NitroPort_Log("closing at frame %lu", sFrame);
+    if (R_SUCCEEDED(threadJoin(thread, 1000 * 1000000LL))) {
+        threadFree(thread);
     }
 }
 

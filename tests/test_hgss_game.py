@@ -537,6 +537,25 @@ class OverlayCheckTests(unittest.TestCase):
         screen = text.index("Can't start: %s.", text.index("consoleClear();"))
         self.assertLess(screen, text.index("Press START to exit"))
 
+    def test_only_the_game_thread_polls_apt(self):
+        """aptMainLoop is per frame, on one thread (libctru's contract).
+
+        The main thread polling it while the game was still loading overlays
+        returned false and stopped the program at frame 0 on hardware.
+        """
+        def code(text):
+            return "\n".join(line for line in text.splitlines()
+                             if not line.strip().startswith(("*", "/*", "//")))
+
+        text = (self.APP / "main_3ds.c").read_text()
+        wait = text[text.index("static void WaitForGame"):]
+        wait = code(wait[:wait.index("\n}")])
+        self.assertNotIn("aptMainLoop", wait)
+        frame = text[text.index("void NitroPort_OnFrame"):]
+        frame = code(frame[:frame.index("\n}")])
+        self.assertIn("aptMainLoop", frame)
+        self.assertIn("threadExit(0)", frame)
+
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)

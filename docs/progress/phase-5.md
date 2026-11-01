@@ -98,6 +98,45 @@ and `validate_3dsx` reports 0 problems, while the old one reports 1.
 the DS gate never look at the `.3dsx`. That is why this is now a build-time
 check rather than a note.
 
+## Second hardware run: the program stopped itself at frame 0
+
+With the relocation fixed, the loader accepted the file and the app started.
+`log.txt` from the console:
+
+```text
+[0] pokeheartgold-3ds starting
+[0] NDSP started
+[0] replaying sdmc:/3ds/pokeheartgold/script.txt: 42 inputs, end frame 20000
+[0] running the game
+[0] [heartgold] save file: sdmc:/3ds/pokeheartgold/heartgold.sav
+[0] [heartgold] starting the game
+[0] stopping (frame 0)
+```
+
+What that rules out is as useful as what it shows:
+
+- `[heartgold] NitroMain returned` and the port's
+  `[nitro] OS_Terminate: the game stopped itself` are **both absent**, so the
+  game thread neither returned nor terminated: it was still initialising.
+- `sFrame++` happens *before* `NitroPort_OnFrame`'s `aptMainLoop` check, so a
+  close reported by the first frame would have printed `frame 1`.
+
+So `main()` stopped the process: `WaitForGame` polled `aptMainLoop()` 100 ms
+after the thread started, got `false`, and set the quit flag. `aptMainLoop()`
+is `aptHandleSleep(); aptHandleJumpToHome(); return !aptShouldClose();` and
+libctru documents it as "call this at the beginning of every frame" -- one
+caller, per frame. Platinum's shell never polls it from its wait loop either
+(`Watch()` waits on an event).
+
+Fix: `WaitForGame` only joins the thread (and logs a "still starting" line
+after 10 s without a frame); the game thread is the sole `aptMainLoop` caller
+and, when APT asks to close, logs `the HOME menu asked to close (frame N)`,
+flushes the card and leaves its thread so teardown stays ordered. A text test
+now fails if `WaitForGame` ever polls APT again.
+
+If APT really did deliver a close/cancel at launch, the next run will say so
+in `log.txt` instead of dying silently, and that is the thing to chase.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
