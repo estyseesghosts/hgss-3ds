@@ -274,6 +274,38 @@ the 16.7 ms budget, nothing else is needed for menus and the intro.
    change, but a moving 3D image counts as a change, so it does not help the
    intro — it helps static menus.
 
+## Sixth hardware run: 35.7 Hz
+
+With the speedup on (`[perf] New 3DS: 804 MHz + L2 requested`), eight samples:
+
+```text
+draw  mean 26.9 ms  (22.2-35.8)      was 78.1 ms
+logic mean  1.1 ms  (0.06-5.7)
+total mean 28.0 ms  (22.3-37.9)  ->  35.7 Hz
+```
+
+So the clock/L2 request bought **2.7x**. The owner's verdict: choppy, visually
+correct. The remaining gap is the 2D composite: ~27 ms against a 16.7 ms
+budget, with the game itself at ~1 ms.
+
+## Where the performance work goes next
+
+`## Next levers` below is the working list; the short version:
+
+1. **Per-engine change detection.** `NitroPort_Render2DIfChanged(engine, out)`
+   draws only when that engine's inputs changed, so a static screen costs
+   nothing. `DrawFrame` currently calls `NitroPort_RenderScreens`, which
+   always composites both engines. This is small, safe, and should help
+   everywhere one screen is still — menus and dialogs especially.
+2. **The composite on core 1**, as Platinum's shell does, overlapping it with
+   the game thread instead of adding to it. Bigger change; worth it if 1
+   leaves the budget short.
+3. **Audio**, which is independent of the above and is the most visible gap
+   left: `NitroPort_SoundRender(stereo, frames)` already mixes the DS's
+   32768 Hz stereo (the PC build writes it to a WAV); it simply has no output
+   on the 3DS. NDSP is initialised and idle.
+4. `-O0` game objects (see below) — now worth ~1 ms, so it waits.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
