@@ -1,27 +1,129 @@
-From 1902b082932bf2faf841b5560a4b764883ca0f2e Mon Sep 17 00:00:00 2001
+From 8c7880f9f184fd6704ba4f2f3dab44b952081e8f Mon Sep 17 00:00:00 2001
 From: pokeheartgold-3ds <port@invalid>
-Date: Sun, 1 Nov 2026 05:43:44 +0000
-Subject: [PATCH] game: make the main-menu work area a real object under
+Date: Sun, 1 Nov 2026 07:00:46 +0000
+Subject: [PATCH 2/4] game: make the main-menu work area a real object under
  SDK_PORT_3DS
 
-The DS build lays the main menu work area out as a run of adjacent bss
-globals (gMainMenuUtilCryptoHeapId, gMainMenuUtilWork,
-gMainMenuUtilSprites, ...) and the code aliases it with
-&gMainMenuUtilCryptoHeapId + 1. The port gives every global its own
-section, so that pointer no longer names the work area; gMainMenuUtilWork
-was also declared as 13 words while MainMenuUtilWork is several kilobytes.
-The fade state written by MainMenuUtil_StartFade landed somewhere else, so
-WaitFade always saw nextState 0 and the main menu re-ran its graphics setup
-every frame until the heap ran out (a crash in MIi_CpuClear16 with a NULL
-buffer).
+The DS build aliases a run of adjacent bss globals with &gMainMenuUtilCryptoHeapId + 1; the port gives each its own section, so the fade state was lost and the menu re-ran its graphics setup every frame until the heap ran out. Make gMainMenuUtilWork the real object and use its address; the DS text is unchanged.
+---
+ src/application/main_menu/main_menu_shared.c | 20 ++++++++++++++++++++
+ src/application/main_menu/main_menu_util.c   | 20 ++++++++++++++++++++
+ 2 files changed, 40 insertions(+)
 
-Under SDK_PORT_3DS, make gMainMenuUtilWork the real MainMenuUtilWork
-object, take its address everywhere the code used the adjacency trick, and
-point the sprite list at work->sprites. The DS text is under #else and
-unchanged: gcc-10 -E -P without SDK_PORT_3DS is byte-identical for both
-files (0 diff lines).
-
-Co-Authored-By: Claude <noreply@anthropic.com>
+diff --git a/src/application/main_menu/main_menu_shared.c b/src/application/main_menu/main_menu_shared.c
+index 38e9d68..7400e4f 100644
+--- a/src/application/main_menu/main_menu_shared.c
++++ b/src/application/main_menu/main_menu_shared.c
+@@ -22,9 +22,21 @@ u16 MATH_CalcCRC16(const MATHCRC16Table *table, const void *data, u32 dataLength
+ BOOL CTRDG_IsAgbCartridge(void);
+ void CTRDG_TerminateForPulledOut(void);
+ 
++/* SDK_PORT_3DS: the DS build lays this work area out as a run of adjacent
++ * bss globals (gMainMenuUtilCryptoHeapId, gMainMenuUtilWork,
++ * gMainMenuUtilSprites, ...) and the code aliases it with
++ * &gMainMenuUtilCryptoHeapId + 1. The port places each global in its own
++ * section, so that pointer no longer names the work area and a 13-word
++ * gMainMenuUtilWork is far smaller than MainMenuUtilWork. Make the work
++ * area a real object and use its address. */
++#ifdef SDK_PORT_3DS
++MainMenuUtilWork gMainMenuUtilWork;
++#define sMainMenuUtilWork (&gMainMenuUtilWork)
++#else
+ u32 gMainMenuUtilWork[13];
+ 
+ #define sMainMenuUtilWork ((MainMenuUtilWork *)gMainMenuUtilWork)
++#endif
+ 
+ static void MainMenuUtil_CartridgeIrqHandler(void);
+ static void MainMenuUtil_IgnoreCartridgeIrqHandler(void);
+@@ -186,7 +198,11 @@ void MainMenuUtil_StartSave(SaveData *saveData) {
+ }
+ 
+ int MainMenuUtil_RunSave(void) {
++#ifdef SDK_PORT_3DS
++    MainMenuUtilWork *work = &gMainMenuUtilWork;
++#else
+     MainMenuUtilWork *work = (MainMenuUtilWork *)(&gMainMenuUtilCryptoHeapId + 1);
++#endif
+     int result;
+ 
+     switch (sMainMenuUtilWork->saveState) {
+@@ -217,7 +233,11 @@ int MainMenuUtil_RunSave(void) {
+ }
+ 
+ void MainMenuUtil_ResumeSave(void) {
++#ifdef SDK_PORT_3DS
++    MainMenuUtilWork *work = &gMainMenuUtilWork;
++#else
+     MainMenuUtilWork *work = (MainMenuUtilWork *)(&gMainMenuUtilCryptoHeapId + 1);
++#endif
+ 
+     if (sMainMenuUtilWork->saveState == SAVE_STATE_PAUSED) {
+         work->saveState = SAVE_STATE_WRITING;
+diff --git a/src/application/main_menu/main_menu_util.c b/src/application/main_menu/main_menu_util.c
+index 81b4453..50bddfb 100644
+--- a/src/application/main_menu/main_menu_util.c
++++ b/src/application/main_menu/main_menu_util.c
+@@ -153,7 +153,11 @@ BOOL MainMenuUtil_ReadCartridgeGift(void *dest, int size) {
+ }
+ 
+ void MainMenuUtil_InitWork(enum HeapID heapID) {
++#ifdef SDK_PORT_3DS
++    memset(&gMainMenuUtilWork, 0, sizeof(MainMenuUtilWork));
++#else
+     memset(&gMainMenuUtilCryptoHeapId + 1, 0, sizeof(MainMenuUtilWork));
++#endif
+     gMainMenuUtilWork.unk_004 = 1;
+     gMainMenuUtilWork.heapId = heapID;
+ }
+@@ -196,7 +200,11 @@ void MainMenuUtil_SetFadeWhite(u32 fadeWhite) {
+ }
+ 
+ void MainMenuUtil_StartFade(enum FadeType fadeType, u32 nextState, int *state, u32 waitingState) {
++#ifdef SDK_PORT_3DS
++    MainMenuUtilWork *work = &gMainMenuUtilWork;
++#else
+     MainMenuUtilWork *work = (MainMenuUtilWork *)(&gMainMenuUtilCryptoHeapId + 1);
++#endif
+     if (!gMainMenuUtilWork.fadeWhite) {
+         BeginNormalPaletteFade(FADE_BOTH_SCREENS, fadeType, fadeType, RGB_BLACK, 6, 1, work->heapId);
+     } else {
+@@ -339,7 +347,11 @@ u32 MainMenuUtil_SpritesActive(void) {
+ }
+ 
+ void MainMenuUtil_InitSprites(void) {
++#ifdef SDK_PORT_3DS
++    MainMenuUtilWork *work = &gMainMenuUtilWork;
++#else
+     MainMenuUtilWork *work = (MainMenuUtilWork *)(&gMainMenuUtilCryptoHeapId + 1);
++#endif
+     int i;
+     NNS_G2dInitOamManagerModule();
+     OamManager_Create(0, 126, 0, 32, 0, 126, 0, 32, gMainMenuUtilWork.heapId);
+@@ -352,7 +364,11 @@ void MainMenuUtil_InitSprites(void) {
+ }
+ 
+ MainMenuUtilSprites *MainMenuUtil_GetSpriteList(void) {
++#ifdef SDK_PORT_3DS
++    MainMenuUtilWork *work = &gMainMenuUtilWork;
++#else
+     MainMenuUtilWork *work = (MainMenuUtilWork *)(&gMainMenuUtilCryptoHeapId + 1);
++#endif
+     GF_ASSERT(gMainMenuUtilWork.sprites.spriteList != NULL);
+     return &work->sprites;
+ }
+@@ -451,7 +467,11 @@ Sprite *MainMenuUtil_CreateSprite(u32 screen, Sprite *sprite, u32 x, u32 y, u32
+ 
+ void MainMenuUtil_FreeSprites(void) {
+     MainMenuUtilWork *work = &gMainMenuUtilWork;
++#ifdef SDK_PORT_3DS
++    MainMenuUtilSprites *sprites = &work->sprites;
++#else
+     MainMenuUtilSprites *sprites = &gMainMenuUtilSprites;
++#endif
+     int i;
+     if (gMainMenuUtilGiftSpriteWork[2]) {
+         Sprite_Delete(work->giftSprite);
 -- 
 2.43.0
 

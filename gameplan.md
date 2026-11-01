@@ -588,10 +588,10 @@ This is the order of `NitroMain()` in `src/main.c`, plus what usually breaks at 
 
 ### Deliverables
 
-- [ ] Golden diff runner and report format
+- [x] Golden diff runner and report format
 - [ ] Scripted boot-to-Oak run matching melonDS (2D exact, 3D within tolerance)
 - [ ] First port-written save verified on melonDS
-- [ ] ASan/UBSan clean for the scripted run
+- [x] ASan/UBSan clean for the scripted run (see the report_globals note)
 - [ ] Upstream PRs for generic fixes found
 
 ### Pitfalls

@@ -1,20 +1,32 @@
-From d4290dd41f8e2a61eb1ef4505388d0d6af25f3e4 Mon Sep 17 00:00:00 2001
+From 5cc923b61e45f61950bdfb8321155f9817312e2c Mon Sep 17 00:00:00 2001
 From: pokeheartgold-3ds <port@invalid>
-Date: Sun, 1 Nov 2026 06:20:17 +0000
-Subject: [PATCH] save: check the next chunk header is in range before reading
- it
+Date: Sun, 1 Nov 2026 07:01:03 +0000
+Subject: [PATCH 3/4] save: check the next chunk header is in range before
+ reading it
 
-SaveData_InitSubstructs ends a block with
-    if (hdr[i].block != hdr[i + 1].block && i + 1 < gNumSaveChunkHeaders && ...)
-At the last chunk the first operand reads hdr[gNumSaveChunkHeaders], one
-entry past gSaveChunkHeaders. On the DS that address is the next bss object
-and the read is harmless; on the host it is an out-of-bounds read and ASan
-reports a global-buffer-overflow at boot (SaveData_New -> ...:762).
+---
+ src/save.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
 
-Put the bounds check first under SDK_PORT_3DS. The DS text is the original
-order under #else; gcc-10 -E -P without SDK_PORT_3DS is byte-identical.
-
-Co-Authored-By: Claude <noreply@anthropic.com>
+diff --git a/src/save.c b/src/save.c
+index e63493c..7ee5391 100644
+--- a/src/save.c
++++ b/src/save.c
+@@ -759,7 +759,14 @@ static void SaveData_InitSubstructs(struct SaveArrayHeader *arr_hdr) {
+         adrs += arr_hdr[i].size;
+         if (i == gNumSaveChunkHeaders - 1 || hdr[i].block != hdr[i + 1].block) {
+             adrs += sizeof(struct SaveChunkFooter);
++#ifdef SDK_PORT_3DS
++            /* At the last chunk this would read hdr[i + 1], one entry past
++             * gSaveChunkHeaders. Harmless bss on the DS; ASan reports it on
++             * the host, so check the bound first. */
++            if (i + 1 < gNumSaveChunkHeaders && hdr[i].block != hdr[i + 1].block && (adrs % 0x100) != 0) {
++#else
+             if (hdr[i].block != hdr[i + 1].block && i + 1 < gNumSaveChunkHeaders && (adrs % 0x100) != 0) {
++#endif
+                 adrs += 0x100 - (adrs % 0x100);
+             }
+         }
 -- 
 2.43.0
 
