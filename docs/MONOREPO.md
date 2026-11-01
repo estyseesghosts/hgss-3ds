@@ -1,5 +1,9 @@
 # Staging the work as one monorepo
 
+This repository is published at **https://github.com/estyseesghosts/hgss-3ds**. The fork's
+original Platinum `main` is preserved as the `platinum-upstream` branch, so the newer Platinum
+history (web builder, CIA forwarder) is still recoverable from the fork.
+
 This repository is the monorepo: the HGSS port layer, shell, patch stack,
 builder, tools, tests, docs **and** the vendored Platinum port (`3ds_port/`,
 with our one local fix). The decompilation, the ROM/data pack, the proprietary
@@ -49,7 +53,10 @@ either proprietary piece.
 
 ## Creating the GitHub repository
 
-The repository has no remote yet. From the checkout:
+The repository is already published at
+`https://github.com/estyseesghosts/hgss-3ds` (public, `main` tracks
+`origin/main`). The steps below are what was run; use them to recreate it
+elsewhere or as the checklist before a push.
 
 ```sh
 # 0. Preflight (see below)
@@ -58,17 +65,28 @@ make test
 git status --short            # only local scratch, never game content
 
 # 1. Create the remote and push main
-gh repo create <owner>/pokeheartgold-3ds --public --source=. --remote=origin --push
+gh repo create <owner>/hgss-3ds --public --source=. --remote=origin --push
 # or, with an existing empty repository:
-git remote add origin git@github.com:<owner>/pokeheartgold-3ds.git
+git remote add origin git@github.com:<owner>/hgss-3ds.git
 git push -u origin main
 
 # 2. Repository settings
-#    description: A native 3DS port of Pokémon HeartGold/SoulSilver
+#    description: a 3ds build of hgss, based off a native port of platinum
 #    topics: 3ds, pokemon, heartgold, soulsilver, decompilation, homebrew, devkitpro
 #    license: GPL-3.0
 #    Actions: enabled (port.yml); the matching job is disabled by design
 ```
+
+This fork's original Platinum `main` was preserved before the force-push:
+
+```sh
+git push origin <old-main-sha>:refs/heads/platinum-upstream
+git push --force-with-lease=refs/heads/main:<old-main-sha> origin main
+```
+
+`main` is this monorepo; `platinum-upstream` is the unmodified fork state. Do
+not delete it until the newer Platinum changes have been reviewed for the
+port layer.
 
 No release asset is needed to share the source. If a `.3dsx` is ever attached
 to a release, it is a build artifact made from the user's own cartridge and
