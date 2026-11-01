@@ -25,6 +25,7 @@ sequence.
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
+| A note hangs until the next note starts; sounds distort | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 
 ## A weak hook binds to NULL
@@ -306,6 +307,36 @@ worker.
 **Rule.** Initialising an output device is not connecting it. Log a counter
 that proves it was fed, and give the feeder a priority above the work that can
 hold its core.
+
+## A noise note writes an unused hole
+
+**Symptom.** A note hangs and is only replaced when the next note starts;
+single sounds and slower songs/percussion are distorted.
+
+**Cause.** Patch 1405 changed `NitroPort_SoundRegisters` from "relative to
+0x400" to the DS low 16-bit address (channel *c*'s control at `0x400 + 16c`,
+timer at `0x408 + 16c`, which is what `port_sound_chip.c`'s `CHANNEL_BASE`
+reads), but two direct writes in `SND_SetupChannelNoise` kept the old relative
+index (`sub/lib/src/sound_channel.c:127,133`). A noise note (channels 14 and
+15) therefore wrote DS `0x040000E0`/`0x040000E8` — an unused hole inside the
+array, not the channel's control word — and left the previously set PCM
+control in place. If that word came from a looped PCM (enable bit 31 and
+repeat bit 27 set), the mixer kept reading it and retriggering the loop until
+a PCM setup replaced it: the note that hung until the next one. The
+pre-1405 relative index made the same write mean channel 14; either way the
+mixer reads channel 14 at `0x4E0`, never `0x0E0`.
+
+**Fix.** Patch **1407** writes `0x400 + channelOffset` and
+`0x408 + channelOffset`, like the Psg branch. `tests/sdk/arm7_sound` leaves a
+running looped PCM on 14/15, runs the noise setup, and checks the real
+registers (`0x4E0/0x4E8`, `0x4F0/0x4F8`) while `0x0E0/0x0E8` and channel 0 stay
+at their sentinels. Before the patch the suite reports 24 failures; after it,
+122 checks, 0 failures.
+
+**Rule.** After the 1405 remap, every `NitroPort_SoundRegisters[...]` index is
+a DS low 16-bit address: channel *c* at `0x400 + 16c`, `SOUNDCNT` at `0x500`,
+captures at `0x508`-`0x51C`. Never add a relative channel offset without
+`0x400`.
 
 ## A frame under the refresh is not a 60 Hz frame
 

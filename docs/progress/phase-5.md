@@ -574,6 +574,41 @@ RODATA 112, DATA 13, BSS 4446 pages) and the ELF carries
 `sha256 a25cbee94bbe59a3c496a6734cc5c7777d04f3e99b0cacf3f0f02f3a3cdaf910`.
 None of the timing claims are verified: the container cannot run a console.
 
+## The hung noise note: a missed 0x400 offset
+
+The audio symptom after the hardware runs was a note that hangs and is only
+replaced by the next note, with individual sounds and slower songs/percussion
+distorted. The cause was in the ARM7 driver, not the mixer. Patch 1405 moved
+`NitroPort_SoundRegisters` to the DS low 16-bit address (channel *c*'s control
+at `0x400 + 16c`, timer at `0x408 + 16c` — the addresses
+`port_sound_chip.c`'s `CHANNEL_BASE` reads) but missed the two direct writes in
+`SND_SetupChannelNoise` (`sub/lib/src/sound_channel.c:127,133`). They kept the
+pre-1405 relative index, so a noise note wrote DS `0x040000E0`/`0x040000E8` —
+an unused hole inside the array — and left the channel's previous control word
+alone. If that word came from a looped PCM (enable bit 31 and repeat bit 27
+set), the mixer kept reading the stale PCM control and retriggering its loop
+until a later PCM setup replaced it: the note that hung until the next note.
+
+Patch **1407** writes `0x400 + channelOffset` and `0x408 + channelOffset`,
+matching the Psg branch, and leaves the `#else` DS text untouched (`gcc-10 -E
+-P` without `SDK_PORT_3DS`: **0 diff lines**). A grep of the ARM7 sound
+sources confirms no other `NitroPort_SoundRegisters` access lacks its
+`0x400`/`0x500` base. `tests/sdk/arm7_sound` now leaves a running looped PCM on
+noise channels 14 and 15 and checks the noise write: the control/timer at
+`0x4E0`/`0x4E8` and `0x4F0`/`0x4F8` become the noise word (format 3, enable
+and repeat clear), while `0x0E0`/`0x0E8` and channel 0 keep their sentinels.
+Before the patch that suite reports 24 failures, including the stale
+`0x88400040` control; after it, 122 checks, 0 failures.
+
+**Local verification (container, 2026-11-01).** `python3 tools/bootstrap.py
+--clean` applies **78 patches**; `make test` exits 0 with **329 Python tests**
+and the `tests/sdk/*` suites; the 3DS build compiles **1092/1092**, links with
+**0 unresolved** and packages `pokeheartgold.3dsx` (**9,278,592 bytes**,
+`sha256 d6c56cf59e3b1ab0b55827668a57927880e42119122caa4555044ffc223a5c4b`);
+`3dsxdump` exits **0** (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). **No
+hardware result:** the next run's log and ears should show no note hanging into
+the next one and `audio: N dropped frames of M` near zero.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the

@@ -307,6 +307,9 @@ int SND_NoteOn(struct SNDExChannel *chn, int key, int velocity, int length,
 /* ---- the functions under test ---- */
 void SND_Init(int priority);
 void SND_CommandProc(void);
+void SND_SetupChannelPcm(int c, u32 src, int format, int repeat, int loop, u32 len,
+                         int volume, int shift, int timer, int pan);
+void SND_SetupChannelNoise(int c, int volume, int shift, int timer, int pan);
 void SND_SetupAlarm(int index, OSTick tick, OSTick period, int id);
 void SND_StartAlarm(int index);
 void SND_StopAlarm(int index);
@@ -466,12 +469,79 @@ static void CheckSharedLock(void)
     CHECK(sharedUnlocks == 4, "unlocks %d, want 4", sharedUnlocks);
 }
 
+static u8 ReadReg8(u32 offset)
+{
+    return NitroPort_SoundRegisters[offset];
+}
+
+static u16 ReadReg16(u32 offset)
+{
+    return *(volatile u16 *)&NitroPort_SoundRegisters[offset];
+}
+
+static u32 ReadReg32(u32 offset)
+{
+    return *(volatile u32 *)&NitroPort_SoundRegisters[offset];
+}
+
+/* Noise channels (14 and 15). Before patch 1405 the register array was addressed
+ * relative to 0x400; after it, indexes are the DS low 16-bit addresses, so channel
+ * c's control is at 0x400 + c*16 (port_sound_chip.c's CHANNEL_BASE). The two
+ * SND_SetupChannelNoise writes kept the relative index, which now lands in the
+ * unused 0x0E0/0x0F0 hole and leaves the channel's previous PCM word, enable and
+ * loop included, for the mixer to keep playing. */
+static void CheckNoiseChannel(int c)
+{
+    u32 real = 0x400u + (u32)c * 16u;
+    u32 hole = (u32)c * 16u;
+    u32 staleControl;
+    u32 i;
+
+    for (i = 0; i < 0x600; i++) {
+        NitroPort_SoundRegisters[i] = 0;
+    }
+    sMasterPan = -1;
+    sSurroundDecay = 0;
+
+    /* A PCM channel left running with repeat (loop) set: control 0x08400040,
+     * then the enable bit the port's channel start sets. */
+    SND_SetupChannelPcm(c, 0x08000000u, 0, 1, 0x1234, 0x1000, 0x40, 0, 1000, 0x40);
+    NitroPort_SoundRegisters[real + 3] |= 0x80;
+    staleControl = ReadReg32(real);
+    EQU32("stale PCM control", staleControl, 0x88400040);
+    EQU32("stale PCM timer", ReadReg16(real + 8), 0xFC18);
+
+    /* Poison the old relative index (the hole the buggy writes hit) and channel
+     * 0, so a stray write is visible and is not mistaken for a real update. */
+    for (i = 0; i < 16; i++) {
+        NitroPort_SoundRegisters[hole + i] = 0x5A;
+        NitroPort_SoundRegisters[0x400 + i] = 0x5A;
+    }
+
+    SND_SetupChannelNoise(c, 0x20, 2, 500, 0x30);
+
+    /* The mixer reads the control word at CHANNEL_BASE(c) = 0x400 + c*16. */
+    EQU32("noise control", ReadReg32(real), 0x60300220);
+    EQU32("noise timer", ReadReg16(real + 8), 0xFE0C);
+    EQU32("noise format", (ReadReg32(real) >> 29) & 3u, 3);
+    EQU32("noise repeat", (ReadReg32(real) >> 27) & 1u, 0);
+    EQU32("noise enable", ReadReg32(real) >> 31, 0);
+    CHECK(ReadReg32(real) != staleControl, "noise left the stale PCM control word");
+
+    for (i = 0; i < 16; i++) {
+        EQU32("stray write to the relative hole", ReadReg8(hole + i), 0x5A);
+        EQU32("stray write to channel 0", ReadReg8(0x400 + i), 0x5A);
+    }
+}
+
 int main(void)
 {
     CheckInit();
     CheckCommandProc();
     CheckAlarms();
     CheckSharedLock();
+    CheckNoiseChannel(14);
+    CheckNoiseChannel(15);
     printf("%s: %d checks, %d failures\n", fails == 0 ? "PASS" : "FAIL", checks, fails);
     return fails != 0;
 }

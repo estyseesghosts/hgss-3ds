@@ -1,0 +1,67 @@
+From 4a215b925fc1858cc3b427d62c1b923f131b5a80 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Sun, 1 Nov 2026 20:04:21 +0000
+Subject: [PATCH] sound: write noise-channel registers at their real offsets
+ (SDK_PORT_3DS)
+
+Patch 1405 changed NitroPort_SoundRegisters from "relative to 0x400" to the
+DS low 16-bit address: a channel's control is now at 0x400 + 16*c and its
+timer at 0x408 + 16*c (3ds_port/nitro/src/port_sound_chip.c's
+CHANNEL_BASE). It updated SND_SetupChannelPsg, SND_StopChannel and
+ApplyChannelSurroundDecay but missed the two direct writes in
+SND_SetupChannelNoise (sub/lib/src/sound_channel.c:127,133). They still
+index [channelOffset] and [8 + channelOffset].
+
+After 1405 those indexes mean DS 0x040000E0/0x040000E8, an unused hole
+inside the port's 0x600-byte array, not channel 14/15's 0x040004E0/
+0x040004E8. A noise note therefore leaves the channel's previous control
+word in place. If that word came from a looped PCM (enable bit 31 and
+repeat bit 27 set), the mixer keeps reading the stale PCM control and
+retriggering its loop until a later PCM setup overwrites it: the note that
+hangs until the next note.
+
+Write 0x400 + channelOffset and 0x408 + channelOffset, matching the Psg
+branch. The #else DS text is unchanged; gcc-10 -E -P of the file without
+SDK_PORT_3DS is identical to HEAD (0 diff lines; -DSDK_ARM7, the survey
+defines/CFLAGS/includes minus the port macro).
+
+A grep of the ARM7 sound sources for NitroPort_SoundRegisters finds these
+two indexes and no other access missing its 0x400/0x500 base: sound_main.c
+captures use 0x508-0x51C, sound_command.c 0x403/0x509, sound_driver.c
+0x500/0x501/0x508/0x509, sound_ex_channel.c 0x403.
+
+tests/sdk/arm7_sound now leaves a running looped PCM on noise channels 14
+and 15, calls SND_SetupChannelNoise, and checks the control/timer at
+0x4E0/0x4E8 and 0x4F0/0x4F8 hold the noise word (format 3, enable and
+repeat clear) while 0x0E0/0x0E8 and channel 0 keep their sentinels. Without
+this patch the suite reports 24 failures, including the stale 0x88400040
+control; with it, 122 checks, 0 failures.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ sub/lib/src/sound_channel.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sub/lib/src/sound_channel.c b/sub/lib/src/sound_channel.c
+index e6a5202..248e43d 100644
+--- a/sub/lib/src/sound_channel.c
++++ b/sub/lib/src/sound_channel.c
+@@ -124,13 +124,13 @@ void SND_SetupChannelNoise(int c, int volume, int shift, int timer, int pan) {
+     {
+         u32 control = ((u32)pan << 16) | 0x60000000u | ((u32)shift << 8);
+ #ifdef SDK_PORT_3DS
+-        *(volatile u32 *)&NitroPort_SoundRegisters[channelOffset] = (u32)volume | control;
++        *(volatile u32 *)&NitroPort_SoundRegisters[0x400 + channelOffset] = (u32)volume | control;
+ #else
+         *(volatile u32 *)(0x04000400u + channelOffset) = (u32)volume | control;
+ #endif
+     }
+ #ifdef SDK_PORT_3DS
+-    *(volatile u16 *)&NitroPort_SoundRegisters[8 + channelOffset] = 0x10000u - (u32)timer;
++    *(volatile u16 *)&NitroPort_SoundRegisters[0x408 + channelOffset] = 0x10000u - (u32)timer;
+ #else
+     *(volatile u16 *)(0x04000408u + channelOffset) = 0x10000u - (u32)timer;
+ #endif
+-- 
+2.43.0
+

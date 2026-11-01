@@ -170,6 +170,11 @@ a failure used to be ambiguous:
 
 Send `log.txt` whole; nothing on that page needs filtering.
 
+The noise-channel fix (patch 1407) has no log line of its own: its pass is by
+ear. Play a field and a battle and confirm no note sustains into the next one
+and single sounds are not distorted. `audio: N dropped frames of M` near zero
+is the other half of the audio result.
+
 ## The scripted New 3DS run
 
 1. Copy `tests/inputs/newgame-buttons.txt` to `sdmc:/3ds/pokeheartgold/script.txt`.
@@ -186,8 +191,10 @@ Send `log.txt` whole; nothing on that page needs filtering.
    animates smoothly rather than once a second. The app stays at full speed (no
    visible stutter), and the game runs at its intended speed rather than fast:
    the log's mean `total_us` from `tools/frametime_report.py log.txt` is near
-   **16,700** (60 Hz), not 11,500 (87 Hz). Audio is clean, and `log.txt` ends
+   **16,700** (60 Hz), not 11,500 (87 Hz). Audio is clean by ear — no note
+   hangs into the next one, which is what patch 1407 fixes — and `log.txt` ends
    with a frame count near the script's `end` without an exception block.
+   `audio: N dropped frames of M` should be near zero relative to `M`.
 4. Save a copy of `log.txt` and note the frame count and any dropped frames.
 
 ## Frame-time budget

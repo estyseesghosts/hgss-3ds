@@ -1,16 +1,18 @@
 # Current state
 
-Last verified: **2026-11-01 (session 8)**, inside the dev container (`/workspaces/pokeheartgold-3ds`), with
-the tree at **77 patches** (`NitroSDK` 15, `NitroSystem` 3, `pokeheartgold` 57). Everything below that
-says "verified" was run on that tree on that date. If you change the patch stack, rerun the commands
-and update this page; do not trust it blindly.
+Last verified: **2026-11-01 (session 9, audio)**, inside the dev container
+(`/workspaces/pokeheartgold-3ds`), with the tree at **78 patches** (`NitroSDK` 15, `NitroSystem` 3,
+`pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date; the
+DS-side gate is the exception — it last passed at **76 patches** and has not been re-run at 78. If you
+change the patch stack, rerun the commands and update this page; do not trust it blindly.
 
 **One line:** Phase 2's exit criterion is met — the PC program links with **0 unresolved**, the overlay
 self-check passes on the real binary (129/0), the symbol cross-check reports **0 missing**, and the 3DS
 program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
-**Both halves of the Phase 1 DS gate pass**, re-run at the current **76 patches**: both matching
-builds still reproduce the retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`).
+**Both halves of the Phase 1 DS gate pass**, last re-run at **76 patches**; both matching
+builds reproduce the retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). The
+gate has not been re-run at **78** — patch 1407 is `SDK_PORT_3DS`-only, but the gate is the evidence.
 
 ## Phases
 
@@ -30,20 +32,20 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (72 patches applied)` |
-| Host tests | `make test` | **exit 0**; **327 Python tests** + **21 SDK suites** |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
+| Host tests | `make test` | **exit 0**; **329 Python tests** + **20 SDK suites** (21 entries in `tests/sdk/`; `port_memory.c` is not a suite) |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last run 46/46 at 61 patches; sources unchanged since |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/final-pc -j5` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds2 -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,277,656 B; `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/slice-audio -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,592 B (`sha256 d6c56cf5…c4b`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/final-3ds2/pokeheartgold-3ds.elf \| grep -E 'Hgss_Pica\|NitroPort_Pica\|Gx3dThread'` | `T` for `Hgss_PicaDropBehindCamera`, `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished` |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
-| DS-side gate (HG) | `tools/matching-build.sh /work/testapply2 HEARTGOLD` | **PASSED at 76 patches** (and at 72): `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
-| DS-side gate (SS) | same, `SOULSILVER` | **PASSED at 76 patches** (and at 72): `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail), `sha1sum -c` OK, exit 0 |
+| DS-side gate (HG) | `tools/matching-build.sh /work/testapply2 HEARTGOLD` | **PASSED at 76 patches** (and at 72; not re-run at 78): `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
+| DS-side gate (SS) | same, `SOULSILVER` | **PASSED at 76 patches** (and at 72; not re-run at 78): `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail), `sha1sum -c` OK, exit 0 |
 
 ### Vendored suites: the full matrix
 
@@ -135,15 +137,20 @@ before the count is trusted.
 
 ## Next actions, in order
 
-1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
+1. **Re-run the DS-side gate at 78 patches** (HG and SS). Patch 1407 is
+   `SDK_PORT_3DS`-only, but the byte-identical ROM is the evidence, and the
+   gate was last run at 76.
+2. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
    replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
    itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
-2. **Phase 5:** confirm the GPU pipeline and the 60 Hz frame cap on hardware
+3. **Phase 5:** confirm the GPU pipeline and the 60 Hz frame cap on hardware
    (room, player sprite and intro movie's 3D; rising `3D images:` count; mean
    `total_us` near 16,700 rather than 11,490), then the remaining shell items
-   (input, SMDH and a hardware run).
-3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 again at 72 patches.
-4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
+   (input, SMDH and a hardware run). For the audio fix, the ears are the test:
+   no note may hang into the next one, and `audio: N dropped frames of M`
+   should be near zero.
+4. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 again at 72 patches.
+5. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
    available for an end-to-end pack/open; record it when a dump is available.
 
 ## Open decisions
@@ -168,8 +175,8 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
-python3 tools/bootstrap.py            # "already at ... with 72 patches" if in sync
-make test                            # exit 0 (277 tests + 21 SDK suites)
+python3 tools/bootstrap.py            # "already at ... with 78 patches" if in sync
+make test                            # exit 0 (329 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
@@ -202,6 +209,35 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-01 (session 9, audio) — the hung noise note
+
+- **Symptom:** a note sustained until the next note, and individual sounds and
+  slower songs/percussion distorted. The cause was in the ARM7 driver, not the
+  mixer: patch 1405 made `NitroPort_SoundRegisters` absolute (channel *c* at
+  `0x400 + 16c`, timer at `0x408 + 16c`) but missed the two direct writes in
+  `SND_SetupChannelNoise` (`sound_channel.c:127,133`), which still used the
+  pre-1405 relative index. A noise note on 14/15 therefore wrote
+  `0x040000E0`/`0x040000E8`, an unused hole, and left the channel's previous
+  PCM control word (enable + repeat) for the mixer to keep looping until the
+  next PCM setup.
+- **Fix:** patch **1407** writes `0x400 + channelOffset` and
+  `0x408 + channelOffset`, matching the Psg branch. The `#else` DS text is
+  unchanged; `gcc-10 -E -P` without `SDK_PORT_3DS` is byte-identical (0 diff
+  lines). A grep confirms no other `NitroPort_SoundRegisters` access lacks its
+  `0x400`/`0x500` base.
+- **Test:** `tests/sdk/arm7_sound` leaves a running looped PCM on channels
+  14/15, calls the noise setup, and checks `0x4E0/0x4E8` and `0x4F0/0x4F8`
+  hold the noise word (format 3, enable and repeat clear) while `0x0E0/0x0E8`
+  and channel 0 keep their sentinels. Without 1407: 24 failures, including the
+  stale `0x88400040` control; with it: 122 checks, 0 failures.
+- **Local:** `bootstrap --clean` applies **78 patches**; `make test` exit 0
+  (**329 Python tests** + 20 SDK suites); 3DS build **1092/1092**, 0
+  unresolved, `.3dsx` **9,278,592 B** (`sha256 d6c56cf5…c4b`), `3dsxdump` rc 0
+  (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). **No hardware result:** the
+  next log and ears should show no note hanging into the next one and
+  `audio: N dropped frames of M` near zero.
+  [phase-5.md](phase-5.md) · [3DS-Pitfalls](../wiki/3DS-Pitfalls.md)
 
 ### 2026-11-01 (session 8, follow-up 2) — the 60 Hz frame cap
 
