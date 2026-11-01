@@ -1,7 +1,7 @@
 # Phase 1 progress
 
 > **Update 2026-11-01 (session 9):** the tree is at **78 patches** (NitroSDK 15, NitroSystem 3,
-> pokeheartgold 60). `make test` is **330 Python tests + 20 SDK suites**; `make port-tests` is green;
+> pokeheartgold 60). `make test` is **334 Python tests + 20 SDK suites**; `make port-tests` is green;
 > the DS gate at **78** reproduces both retail ROMs (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patch
 > 1407 fixes the ARM7 noise-channel offsets. The 72-patch text below is the 2026-10-31 record and is
 > kept as history; the living status is [STATE.md](STATE.md).

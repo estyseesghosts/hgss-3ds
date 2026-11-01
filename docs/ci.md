@@ -26,6 +26,7 @@ the same for `SOULSILVER`.
 
 Public, GitHub-hosted, synthetic data only. `.github/workflows/port.yml` builds the dev container image,
 then runs `python3 tools/bootstrap.py && make test` (tool tests + the `tests/sdk` host suites). It has not run on
-GitHub yet (no remote); a local dry run of the same steps in a fresh clone passes. The layout probe needs MWCC
+GitHub yet (no remote); a local dry run of the same steps in a fresh clone passes. It runs
+`tools/check_repo_content.py` before the image build. The layout probe needs MWCC
 and is not part of it. The DS gate (`matching.yml`) was run locally at **78 patches** and passed for both
 games; the workflow remains disabled until the private runner and variable exist.

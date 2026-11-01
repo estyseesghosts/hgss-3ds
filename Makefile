@@ -3,6 +3,8 @@
 #
 #   make test        Python tool tests + the SDK_PORT_3DS host suites in tests/sdk (synthetic data only;
 #                    needs `python3 tools/bootstrap.py` first). This is what CI runs.
+#   make content-check  fail if the git index contains game content, build artifacts or oversized files
+#                    (tools/check_repo_content.py); also covered by a test under `make test`.
 #   make sdk-survey  syntax-check lib/NitroSDK and lib/NitroSystem with GCC under SDK_PORT_3DS (progress count)
 #   make port-tests  the vendored 3ds_port unit tests (pak, nitro, nitrosystem) against the
 #                    HGSS SDK, via tools/hgss_nitro.py. Deliberately not part of `make test`.
@@ -20,13 +22,16 @@
 PORT := 3ds_port
 SDK_TESTS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard tests/sdk/*/run.sh)))))
 
-.PHONY: test tool-tests sdk-tests sdk-survey port-tests layout game-pc game-3ds clean check-bootstrap
+.PHONY: test tool-tests sdk-tests sdk-survey port-tests layout game-pc game-3ds content-check clean check-bootstrap
 
 check-bootstrap:
 	@test -f build/upstream/lib/NitroSDK/include/nitro.h || \
 	    { echo "Run first: python3 tools/bootstrap.py"; exit 1; }
 
 test: tool-tests sdk-tests
+
+content-check:
+	python3 tools/check_repo_content.py
 
 tool-tests:
 	python3 -I -m unittest discover -s tests

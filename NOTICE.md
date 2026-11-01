@@ -23,11 +23,18 @@ covered by this project's license, the GNU General Public License v3.0 (see
 
 ## Code reused from other projects
 
-`3ds_port/` and part of `tools/` are vendored unmodified from
+`3ds_port/` and part of `tools/` are vendored from
 [GabeSud0/pokeplatinum-3ds](https://github.com/GabeSud0/pokeplatinum-3ds)
 (GPL-3.0) at the commit named in `platinum.lock`. Their copyright notices and
 license headers are kept. HGSS-specific changes go in new files, or in patches
 intended for upstream.
+
+The vendored copy has **one deliberate local change**, the camera-point
+`to_screen()` hunk in `nitro/src/port_gx3d.c` plus its test; it is recorded in
+[`3ds_port/LOCAL-CHANGES.md`](3ds_port/LOCAL-CHANGES.md) and
+[`docs/upstream/platinum-camera-point.patch`](docs/upstream/platinum-camera-point.patch),
+and is the content of an upstream PR. Everything else in `3ds_port/` is the
+pinned Platinum tree.
 
 ## Rules for contributors
 

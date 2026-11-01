@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check the tracked index for game content
+        run: python3 tools/check_repo_content.py
+
       - name: Build the dev container image
         run: docker build --platform linux/amd64 -t hgss-dev .devcontainer
 

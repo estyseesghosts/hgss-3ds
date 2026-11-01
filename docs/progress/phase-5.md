@@ -640,7 +640,7 @@ upstream PR content is the one `to_screen()` hunk plus
 `test_camera_point_vertex` in `nitro/tests/test_gx3d.c`. The audit is
 [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md).
 
-**Local verification (container, 2026-11-01).** `make test` **330 Python
+**Local verification (container, 2026-11-01).** `make test` **334 Python
 tests**, OK, plus 20 SDK suites; `make port-tests` gx3d **337 + 239** and
 nitrosystem **17,122 checks, 0 failed**; host32 1092/1092, 0 unresolved;
 3DS 1092/1092, 0 unresolved, `pokeheartgold.3dsx` **9,278,120 bytes**

@@ -1,0 +1,149 @@
+# Staging the work as one monorepo
+
+This repository is the monorepo: the HGSS port layer, shell, patch stack,
+builder, tools, tests, docs **and** the vendored Platinum port (`3ds_port/`,
+with our one local fix). The decompilation, the ROM/data pack, the proprietary
+DS toolchain and built game artifacts are deliberately not in it. This page is
+the staging plan for a public GitHub repository; the repo itself is ready
+apart from the remote and the final preflight.
+
+## What is in the monorepo
+
+```text
+pokeheartgold-3ds/
+  README.md, LICENSE, NOTICE.md, AI_DISCLOSURE.md
+  3ds_port/            Platinum's hardware layer (GPL-3.0) + one local fix
+                      see 3ds_port/LOCAL-CHANGES.md
+  hgss/                HGSS shell, game-facing glue, compat headers/runtime
+  patches/             78 patches against the pinned decomp (three stacks)
+  builder/             ROM verify/extract/pack (the user's own cartridge)
+  tools/               harness, bootstrap, surveys, matching build, reports
+  tests/               Python, SDK host suites, layout probe, input scripts
+  docs/                wiki, progress records, decisions, upstream patches
+  upstream.lock        decomp repository + exact commit
+  platinum.lock        Platinum repository + exact base commit
+  .github/workflows/   port.yml (public test gate), matching.yml (disabled)
+```
+
+The only third-party source tree copied into the repo is `3ds_port/`
+(Platinum, GPL-3.0). Its license headers and READMEs are kept; the one local
+change is visible in `3ds_port/LOCAL-CHANGES.md` and
+`docs/upstream/platinum-camera-point.patch`.
+
+## What is deliberately outside it
+
+| Not in the repo | Why | Where it comes from |
+| --- | --- | --- |
+| The decompilation (`ctrl-cheeb-del/pokeheartgold`) | Separate project with its own terms; huge and frequently changing; the pin is the contract | `python3 tools/bootstrap.py` fetches `upstream.lock` into `build/upstream/` and applies `patches/` |
+| The ROM, save, extracted files, data pack | Game content; never redistributed | The user's own cartridge; `builder/` |
+| MWCC, Nitro SDK, `license.dat` | Proprietary | The user's `~/hgss-private`; git-ignored |
+| `build/`, `.3dsx`, `.smdh`, `.elf`, `.map`, `.shbin` | Build artifacts, some derived from the game/SDK | Local build; `build/` is a Docker volume |
+| Golden frames, screenshots, `tests/golden/` | Game art | The user's captures; git-ignored |
+| CI secrets/private runner | No secret belongs in the repo | GitHub repository settings |
+
+The decomp being fetched rather than vendored is what keeps this a code
+monorepo instead of a source dump. `make test` and the 3DS build need network
+once for the fetch; the matching-build gate additionally needs MWCC and the
+Nitro SDK from the private folder. A public clone can build and test without
+either proprietary piece.
+
+## Creating the GitHub repository
+
+The repository has no remote yet. From the checkout:
+
+```sh
+# 0. Preflight (see below)
+make content-check
+make test
+git status --short            # only local scratch, never game content
+
+# 1. Create the remote and push main
+gh repo create <owner>/pokeheartgold-3ds --public --source=. --remote=origin --push
+# or, with an existing empty repository:
+git remote add origin git@github.com:<owner>/pokeheartgold-3ds.git
+git push -u origin main
+
+# 2. Repository settings
+#    description: A native 3DS port of Pokémon HeartGold/SoulSilver
+#    topics: 3ds, pokemon, heartgold, soulsilver, decompilation, homebrew, devkitpro
+#    license: GPL-3.0
+#    Actions: enabled (port.yml); the matching job is disabled by design
+```
+
+No release asset is needed to share the source. If a `.3dsx` is ever attached
+to a release, it is a build artifact made from the user's own cartridge and
+data pack; do not attach a pack, save, ROM or golden capture.
+
+## The Platinum port change
+
+`3ds_port/` is not a submodule and is not byte-identical any more. Keeping it
+in the monorepo was the deliberate choice:
+
+- A submodule would make the GitHub clone incomplete without a second repo,
+  which defeats "one monorepo".
+- The local change is one hunk in `nitro/src/port_gx3d.c` plus its test. It is
+  copied from `platinum.lock` and carries `3ds_port/LOCAL-CHANGES.md`.
+- The same patch is in `docs/upstream/platinum-camera-point.patch`, ready to
+  apply from Platinum's root. If the upstream PR lands, drop the local hunk
+  and the patch, then re-vendor at the new pin.
+
+To update Platinum later:
+
+1. Change `platinum.lock`, re-vendor `3ds_port/`, and apply
+   `docs/upstream/platinum-camera-point.patch` if it is still needed.
+2. Update `3ds_port/LOCAL-CHANGES.md` and `docs/decisions.md`.
+3. Run `make port-tests` and `make test`; the camera-point test must pass.
+
+To update the decomp later:
+
+1. Change `upstream.lock` deliberately.
+2. `python3 tools/bootstrap.py --clean`; fix any patch that no longer applies,
+   using the patch-authoring workflow.
+3. Run `make test`, `make game-pc`, `make game-3ds`, and the DS gate for both
+   games (`tools/matching-build.sh` from `/work/pokeheartgold`).
+4. Update `docs/progress/STATE.md` and the phase record.
+
+## Preflight and content rules
+
+`make content-check` (and `tests/test_repo_content.py` under `make test`) reads
+`git ls-files` and fails if the index contains a ROM, save, pak, `.3dsx`,
+`.smdh`, CIA, dump, proprietary archive, build directory, golden capture, or a
+tracked file over the size limit. It allowlists the three original Platinum /
+project images/chime that are already in the tree. It is a safety net, not a
+license to add content.
+
+Before the first push:
+
+```sh
+git status --short                    # no untracked game content that could be added later
+git ls-files | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'   # must be empty
+git log --all --oneline --stat | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'  # history audit
+git count-objects -vH                 # about 2 MB, no LFS needed
+make test                             # 334 Python tests + 20 SDK suites
+make content-check
+```
+
+If a content file was ever committed, do not rewrite it with a normal commit:
+remove it and purge history (for example `git filter-repo`) before the first
+public push. The current history has none; keep it that way.
+
+## CI and branches
+
+- `port.yml` is the public gate: it builds the dev container image and runs
+  `bootstrap.py` + `make test` on synthetic data. It does not need a ROM, MWCC
+  or the Nitro SDK.
+- `matching.yml` is disabled: it needs the proprietary toolchain and a
+  self-hosted private runner. The gate can be run locally; the result is
+  recorded in `docs/progress/STATE.md`.
+- Keep `main` green. One branch per change, a pull request, `make test` and
+  `make content-check` green before merge. Patch changes additionally need the
+  DS gate for both HG and SS.
+
+## Current pins and state
+
+- `upstream.lock`: `8cbb4a19ab781611ff1767035dcaea6b47baeded`
+- `platinum.lock`: `359fbec80a5c0664d4fa72caaae87465b640f9d6`
+  plus `docs/upstream/platinum-camera-point.patch`
+- Patches: **78** (NitroSDK 15, NitroSystem 3, pokeheartgold 60)
+- DS gate at 78: HG and SS retail SHA1s pass
+- Latest `.3dsx`: 9,278,120 bytes; not in git

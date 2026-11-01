@@ -15,13 +15,13 @@ The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 ## Current status
 
 - **Phase 0 (baseline): complete, with open items.** Both US versions of the decomp build byte-identically inside the dev container, checked against their SHA1s and (for HeartGold) against a retail dump. In the container this needs `tools/matching-build.sh`, not plain `make`: the linker there strips five sections the original keeps, and the script restores them in the generated linker file. Still open: the golden reference captures (never run), the fixture saves, and the CI matching job, which is disabled. Details: [docs/progress/phase-0.md](docs/progress/phase-0.md).
-- **Phase 1 (SDK patch stack): done.** **78 patches** apply cleanly from scratch (NitroSDK 15, NitroSystem 3, pokeheartgold 60; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**330 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate at 78 reproduces both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
+- **Phase 1 (SDK patch stack): done.** **78 patches** apply cleanly from scratch (NitroSDK 15, NitroSystem 3, pokeheartgold 60; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**334 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate at 78 reproduces both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
 - **Phase 2 (game under GCC): done for the exit criterion.** 1092/1092 game files compile on host32 and 3DS, 150/150 ARM9 `.s` assemble, both port archives build, and both programs link with **0 unresolved**.
 - **Phase 3 (data pipeline): done.** `builder/{verify_rom,extract_rom,pack}.py` make the HG/SS pack from your own cartridge; the real HG pack opens in the PC program and the boot errors are mapped.
 - **Phase 4 (boot to Oak): in progress.** The PC build reaches the logo, movie, title, main menu, Oak's speech, naming and the first bedroom; boot smoke tests and scripted inputs exist. Golden captures and the save round-trip are open.
 - **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The ninth run showed the 3D at ~87 Hz; the latest tree adds a **60 Hz frame cap**, the **noise-channel register fix** and the **camera-point 3D fix**. Its artifact is staged; a hardware re-run is pending.
 
-What you can run today: `make test`, `make port-tests`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain.
+What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain.
 
 ## Content rules
 
@@ -64,10 +64,12 @@ pokeheartgold-3ds/
                       (HGSS's own shell is hgss/game/app; one deliberate upstream-style
                       camera-point fix diverges from platinum.lock, see docs/decisions.md)
   patches/            numbered patches for the decomp, in three stacks: NitroSDK, NitroSystem, pokeheartgold
+  builder/            verify/extract/pack the user's own ROM into the data pack
   tools/              bootstrap, toolchain install, matching build, surveys, savetool,
-                      layout probe, golden capture scripts
+                      layout probe, golden capture scripts, content check
   tests/              Python tests, SDK host suites (tests/sdk/*), layout probe runner, input scripts
-  docs/               progress records, decision log, pins, and the wiki in docs/wiki/
+  docs/               progress records, decision log, pins, the wiki, and docs/upstream/ patches
+                      for third-party projects (the Platinum camera-point fix)
   .devcontainer/      dev container image and its setup scripts
   .github/workflows/  port.yml (public CI; not yet run on GitHub) and matching.yml (disabled)
   build/              git-ignored output; a Docker volume inside the container
@@ -76,6 +78,7 @@ pokeheartgold-3ds/
 ## Where to read next
 
 - [docs/wiki/Home.md](docs/wiki/Home.md): the wiki index.
+- [docs/MONOREPO.md](docs/MONOREPO.md): what is in the monorepo, what is deliberately outside, and how to stage/push it to GitHub, including the Platinum port patch.
 - [docs/wiki/Build-Reference.md](docs/wiki/Build-Reference.md): the toolchain, every build target and its exact command.
 - [docs/wiki/Getting-Started.md](docs/wiki/Getting-Started.md): setup, step by step, with troubleshooting.
 - [docs/wiki/Daily-Workflow.md](docs/wiki/Daily-Workflow.md): the loop for working on the port.

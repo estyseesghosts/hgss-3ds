@@ -19,7 +19,7 @@ the gate is the evidence.
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 78 patches apply from scratch; `make test` 330 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 78 patches apply from scratch; `make test` 334 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
@@ -34,7 +34,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
-| Host tests | `make test` | **exit 0**; **330 Python tests** + **20 SDK suites** |
+| Host tests | `make test` | **exit 0**; **334 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **337 + 239** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-point hunk compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
@@ -169,7 +169,7 @@ devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
 python3 tools/bootstrap.py            # "already at ... with 78 patches" if in sync
-make test                            # exit 0 (330 tests + 20 SDK suites)
+make test                            # exit 0 (334 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
@@ -226,7 +226,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **Regression test:** `nitro/tests/test_gx3d.c` `test_camera_point_vertex`
   emits a triangle with a `(0,0,0,0)` vertex, checks the stored `clip[3] == 1`
   and screen `(0,0)`, and checks the batch builder gives the GPU `w > 0`.
-- **Local:** `make test` **330 Python tests, OK** + 20 SDK suites;
+- **Local:** `make test` **334 Python tests, OK** + 20 SDK suites;
   `make port-tests` gx3d **337 + 239**, nitrosystem **17,122**, 0 failed;
   host32 1092/1092, 0 unresolved; 3DS 1092/1092, 0 unresolved, `.3dsx`
   **9,278,120 B** (`sha256 3f493661…b7f00`), `3dsxdump` rc 0 (CODE 2126,

@@ -116,7 +116,7 @@ is removed. `3ds_port/` is deliberately no longer byte-identical to
 
 ## Verification
 
-- `make test`: **330 Python tests, OK**, 20 SDK suites, 0 failed.
+- `make test`: **334 Python tests, OK**, 20 SDK suites, 0 failed.
 - `make port-tests`: **exit 0**; gx3d **337 + 239**, nitrosystem **17,122
   checks, 0 failed**.
 - host32: 1092/1092, 0 unresolved.

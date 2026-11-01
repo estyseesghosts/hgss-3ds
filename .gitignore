@@ -40,5 +40,10 @@ tools/.*.sh
 tools/.*.py
 tools/.*
 
+# ---- Agent/worktree scratch ----
+.worktrees/
+.opencode/
+.claude/
+
 # ---- macOS ----
 .DS_Store

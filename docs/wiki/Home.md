@@ -26,6 +26,7 @@ These are not wiki pages, but the wiki links to them.
 - [gameplan.md](../../gameplan.md): the plan, the phases, the layers, the save specification and the risk register.
 - [docs/progress/STATE.md](../progress/STATE.md): **the living status page**: what is green today, the exact commands and results, the next actions, the decisions still open, and a dated session log.
 - [docs/progress/README.md](../progress/README.md): how the progress records are structured and how to update them.
+- [docs/MONOREPO.md](../MONOREPO.md): what is in this monorepo, what is outside it, and how to stage/push it to GitHub (including the Platinum patch).
 - [docs/progress/phase-0.md](../progress/phase-0.md): what Phase 0 delivered, the matching SHA1s and the open items.
 - [docs/progress/phase-1.md](../progress/phase-1.md): the SDK patch stack, the layout probe, the DS-side gate, and what is not done.
 - [docs/progress/agent-notes/](../progress/agent-notes/): per-slice raw notes (commands, measurements, hand-off).
