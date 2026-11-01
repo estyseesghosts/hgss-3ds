@@ -71,7 +71,11 @@ void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
  * drawn). BOOL is int on NitroSDK; the type is spelled out here because the
  * SDK header cannot be included next to libctru's. */
 int NitroPort_Render2DIfChanged(int engine, uint16_t *out);
+void NitroPort_Render2D(int engine, uint16_t *out);
 int NitroPort_EngineAOnTop(void);
+/* How many 3D images the port has produced: a change here means the engine
+ * showing the 3D must be composited again, whatever its 2D state says. */
+uint32_t NitroPort_Gx3dImageCount(void);
 void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
 
@@ -196,23 +200,35 @@ static void DrawFrame(void)
     u16 width = 0, height = 0;
     uint8_t *topFb;
     uint8_t *bottomFb;
+    static uint32_t last3dImages;
+    uint32_t images = NitroPort_Gx3dImageCount();
     int aOnTop = NitroPort_EngineAOnTop();
-    int drewA = NitroPort_Render2DIfChanged(0, aOnTop ? top : bottom);
-    int drewB = NitroPort_Render2DIfChanged(1, aOnTop ? bottom : top);
-    int drewTop = aOnTop ? drewA : drewB;
-    int drewBottom = aOnTop ? drewB : drewA;
 
-    if (drewTop) {
-        topFb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
-        if (topFb != NULL) {
-            Blit(top, (uint16_t *)topFb, (400 - 256) / 2, (240 - 192) / 2, 240);
-        }
+    /* Engine A carries the 3D layer. A new 3D image is a change even when the
+     * engine's 2D inputs are identical, and the port's own renderer only
+     * knows that when a particular DISPCNT combination is set (its uses3D
+     * test); the field does not always set it, and the field froze. Comparing
+     * the image count here covers every case. */
+    if (images != last3dImages) {
+        last3dImages = images;
+        NitroPort_Render2D(0, aOnTop ? top : bottom);
+    } else {
+        (void)NitroPort_Render2DIfChanged(0, aOnTop ? top : bottom);
     }
-    if (drewBottom) {
-        bottomFb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
-        if (bottomFb != NULL) {
-            Blit(bottom, (uint16_t *)bottomFb, (320 - 256) / 2, (240 - 192) / 2, 240);
-        }
+    (void)NitroPort_Render2DIfChanged(1, aOnTop ? bottom : top);
+
+    /* Both screens are blitted every frame, always. The framebuffer is
+     * double buffered: skipping the blit of an unchanged screen leaves the
+     * other buffer showing an older picture, and the display alternates
+     * between them -- that is exactly the flicker the intro showed. Only the
+     * composite may be skipped; the copy is what makes each buffer whole. */
+    topFb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+    if (topFb != NULL) {
+        Blit(top, (uint16_t *)topFb, (400 - 256) / 2, (240 - 192) / 2, 240);
+    }
+    bottomFb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
+    if (bottomFb != NULL) {
+        Blit(bottom, (uint16_t *)bottomFb, (320 - 256) / 2, (240 - 192) / 2, 240);
     }
     gfxFlushBuffers();
     gfxSwapBuffers();
@@ -626,6 +642,7 @@ static void WaitForGame(Thread thread)
 static void PakErrorScreen(const char *error)
 {
     NitroPort_Log("Can't start: %s.", error);
+    consoleInit(GFX_BOTTOM, NULL);
     consoleClear();
     printf("\n pokeheartgold-3ds\n\n Can't start: %s.\n\n"
            " Put heartgold3ds.pak and manifest.json\n"
@@ -669,7 +686,10 @@ int main(int argc, char **argv)
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
-    consoleInit(GFX_BOTTOM, NULL);
+    /* No console: the screens belong to the game. NitroPort_Log writes to
+     * stderr, and with a console up every log line was drawn over the bottom
+     * screen (and, once the per-engine skip was added, never repainted). The
+     * console is brought up only for the "can't start" screen. */
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);

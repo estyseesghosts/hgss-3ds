@@ -598,20 +598,38 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("NitroPort_SoundPumpReplies()", text)
         self.assertIn("ndspChnSetRate(0, (float)AUDIO_RATE)", text)
 
-    def test_shell_redraws_only_a_changed_engine(self):
-        """NitroPort_RenderScreens composites both engines every frame.
+    def test_shell_skips_only_the_composite_never_the_blit(self):
+        """Both screens are copied every frame; only the composite may skip.
 
-        The per-engine call skips the one whose inputs did not move. The swap
-        must stay unconditional: waiting on the display refresh is the clock
-        the emulated DS runs on.
+        The framebuffer is double buffered. Skipping the copy of an unchanged
+        screen leaves the other buffer showing an older picture and the
+        display alternates between them -- the flicker the intro showed, and
+        a stale/black field in the bedroom. A new 3D image also forces engine
+        A, because the port's own uses3D test does not cover every field.
         """
         text = (self.APP / "main_3ds.c").read_text()
-        self.assertIn("NitroPort_Render2DIfChanged(0,", text)
-        self.assertIn("NitroPort_Render2DIfChanged(1,", text)
+        self.assertIn("NitroPort_Render2DIfChanged(", text)
+        self.assertIn("NitroPort_Gx3dImageCount()", text)
         self.assertNotIn("NitroPort_RenderScreens(top, bottom);", text)
         frame = text[text.index("static void DrawFrame"):]
         frame = frame[:frame.index("\n}")]
+        self.assertIn("Blit(top,", frame)
+        self.assertIn("Blit(bottom,", frame)
         self.assertIn("gfxSwapBuffers()", frame)
+        self.assertEqual(frame.count("if (topFb != NULL)"), 1)
+        self.assertEqual(frame.count("if (bottomFb != NULL)"), 1)
+
+    def test_no_console_over_the_game_screens(self):
+        """NitroPort_Log writes to stderr, which the console draws on screen.
+
+        A console initialised at startup put every log line over the bottom
+        screen; it belongs to the "can't start" path only.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertEqual(text.count("consoleInit("), 1)
+        error = text[text.index("static void PakErrorScreen"):]
+        error = error[:error.index("\n}")]
+        self.assertIn("consoleInit(", error)
 
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()

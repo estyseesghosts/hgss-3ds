@@ -344,6 +344,36 @@ fast rather than save time; only the composite and the blit are skipped.
   screen is still, the full composite when it moves. `total_us` is still the
   number that decides whether it feels smooth.
 
+## Seventh run: 58.7 Hz and sound, and what the display fixes broke
+
+The run reached the bedroom. Eleven samples put `total_us` at **17.0 ms
+(~58.7 Hz)** with `logic_us` under 100 us, and the exit line read
+`audio: 265 dropped frames of 61592` (0.4%). Both of the intended fixes
+worked.
+
+Three display bugs in the same run, two of them introduced by the per-engine
+skip and one older:
+
+1. **Flicker, and a stale screen.** The framebuffer is double buffered and the
+   code skipped the *blit* of an unchanged engine. Frame N fills buffer A and
+   shows it; frame N+1 skips the copy, swaps, and shows buffer B -- which still
+   holds the picture from two frames ago. Every skipped screen therefore
+   alternates between current and stale, which is exactly the intro flicker.
+   Only the composite may be skipped; `DrawFrame` now copies both screens
+   every frame.
+2. **The field froze.** Engine A carries the 3D layer, and a new 3D image is a
+   change even when that engine's 2D inputs are identical.
+   `NitroPort_Render2DIfChanged` knows that, but only when its `uses3D` test
+   `(dispcnt & 0x0108) == 0x0108` holds, and the field does not always set it.
+   The shell now compares `NitroPort_Gx3dImageCount()` itself and calls
+   `NitroPort_Render2D(0, ...)` whenever a new image exists. (Worth an upstream
+   report: the port's own gate is what let a 3D scene go undetected.)
+3. **The console was over the game.** `consoleInit(GFX_BOTTOM, NULL)` ran at
+   startup, and `NitroPort_Log` writes to stderr, so every log line was drawn
+   over the bottom screen -- visible in the owner's photo as scrolling text
+   around the game's UI. The console now comes up only for the "can't start"
+   screen.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
