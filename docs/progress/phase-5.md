@@ -224,6 +224,56 @@ Two notes for the next run:
 - **Audio is still silent by design**: NDSP starts, `audio_us=0`, and the
   port's mixer is not fed yet. That is a separate piece of work, not this bug.
 
+## Fifth hardware run: it draws — at 13 Hz
+
+The strong hook fixed the display: the logo, intro and title are visible. The
+owner stopped the run at frame 2122 because it was very slow. Three samples:
+
+```text
+FRAMETIME frame=600  logic_us=0    draw_us=96759 audio_us=0 total_us=88148
+FRAMETIME frame=1200 logic_us=583  draw_us=71744 audio_us=0 total_us=72327
+FRAMETIME frame=1800 logic_us=681  draw_us=65792 audio_us=0 total_us=66473
+```
+
+`tools/frametime_report.py`: **13.2 Hz**, draw mean **78.1 ms** (65.8–96.8),
+logic 0.4 ms. So the port's 2D compositor is the entire cost; the game itself
+is free at this point.
+
+Reading the numbers carefully: `draw_us` includes `gfxSwapBuffers`' wait for
+the previous frame to be presented, which is why the first sample has
+`draw_us > total_us`. The component to watch is the difference between them,
+not `draw_us` alone.
+
+### Why it was that slow: the shell never asked for the New 3DS clock
+
+Platinum's shell starts with `osSetSpeedupEnable(true)` and
+`PTMSYSM_ConfigureNew3DSCPU(3)`; the HGSS shell did neither, so the program
+ran at the **Old-3DS clock with the L2 cache off** while doing a memory-bound
+software composite of two 256×192 screens. The shell now makes both calls
+(before `gfxInitDefault`) and logs which mode it got:
+
+```text
+[perf] New 3DS: 804 MHz + L2 requested
+```
+
+That is the first thing to measure again; if 804 MHz + L2 brings draw under
+the 16.7 ms budget, nothing else is needed for menus and the intro.
+
+### Known next levers, in order
+
+1. **The speedup above** (cheap, expected to dominate).
+2. **Game/app objects are compiled at `-O0`.** `port_cflags` in
+   `tools/hgss_game.py` passes no `-O`, while the vendored SDK is built at
+   `-O2`; the 3D-heavy logic frames cost 33–35 ms this way. Changing codegen
+   for the whole game is not free: it needs the PC smoke run and the DS gate
+   re-run before it is trusted.
+3. **Drawing on core 1.** Platinum's architecture; it overlaps the composite
+   with the game thread instead of adding to it. Bigger change, and only worth
+   it if 1 and 2 leave the budget short.
+4. `NitroPort_Render2DSplitIfChanged` skips an engine whose inputs did not
+   change, but a moving 3D image counts as a change, so it does not help the
+   intro — it helps static menus.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the

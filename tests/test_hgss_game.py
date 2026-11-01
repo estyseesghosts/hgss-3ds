@@ -574,6 +574,17 @@ class OverlayCheckTests(unittest.TestCase):
             for line in declarations:
                 self.assertNotIn("weak", line, hook)
 
+    def test_shell_enables_the_new_3ds_speedup(self):
+        """Without it the app runs at 268 MHz with the L2 off.
+
+        The port's software 2D compositor is memory-bound and measured
+        65-97 ms a frame that way on hardware.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("osSetSpeedupEnable(true)", text)
+        self.assertIn("PTMSYSM_ConfigureNew3DSCPU", text)
+        self.assertLess(text.index("osSetSpeedupEnable"), text.index("gfxInitDefault()"))
+
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)

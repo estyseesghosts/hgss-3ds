@@ -541,6 +541,18 @@ int main(int argc, char **argv)
 
     (void)argc;
     (void)argv;
+
+    /* New 3DS: 804 MHz and the L2 cache, as Platinum's shell does. Without
+     * this the CPU stays at the Old-3DS clock with the L2 off, and the port's
+     * software 2D compositor -- memory-bound -- pays for it directly: the
+     * first hardware run measured 65-97 ms a frame (13 Hz) with this missing.
+     * Both calls are no-ops on an Old 3DS, which stays at 268 MHz. */
+    osSetSpeedupEnable(true);
+    if (R_SUCCEEDED(ptmSysmInit())) {
+        PTMSYSM_ConfigureNew3DSCPU(3);
+        ptmSysmExit();
+    }
+
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
@@ -553,6 +565,14 @@ int main(int argc, char **argv)
     sLog = fopen(LOG_PATH, "w");
 
     NitroPort_Log("pokeheartgold-3ds starting");
+    {
+        bool isNew3ds = false;
+
+        APT_CheckNew3DS(&isNew3ds);
+        NitroPort_Log("[perf] %s: %s", isNew3ds ? "New 3DS" : "Old 3DS",
+                      isNew3ds ? "804 MHz + L2 requested"
+                               : "268 MHz, the speedup is New-3DS only");
+    }
 
     /* NDSP only when the console has dspfirm.cdc; otherwise stay silent and
      * say so. Never let this stop the game. */
