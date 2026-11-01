@@ -558,6 +558,22 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("aptMainLoop", frame)
         self.assertIn("threadExit(0)", frame)
 
+    def test_shell_hooks_are_strong_references(self):
+        """Port hooks must not be weak.
+
+        A weak undefined reference does not make the linker extract the
+        definition from libnitro.a: it binds to NULL, the call is skipped, and
+        the 3DS shell drew nothing for 39,000 frames that way.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        for hook in ("NitroPort_RenderScreens", "NitroPort_CardFlush",
+                     "NitroPort_SetButtons", "NitroPort_SetTouch"):
+            declarations = [line for line in text.splitlines()
+                            if line.startswith(("void ", "int ")) and hook + "(" in line]
+            self.assertTrue(declarations, f"{hook} is not declared")
+            for line in declarations:
+                self.assertNotIn("weak", line, hook)
+
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)

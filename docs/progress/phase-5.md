@@ -181,6 +181,49 @@ The log had no lock either, while two threads wrote it; stdio is not
 reentrant, so line order could not be trusted. There is a `LightLock` around
 every line now.
 
+## Fourth hardware run: it runs, and draws nothing
+
+The cycle is now: the game starts, runs the script, and keeps going until
+HOME is pressed. From the console log: **frames 0 → 39,070**, overlays
+loading, the 3D pipeline building and rasterising scenes (up to ~300k
+vertices, ~128k triangles a frame during the intro), and the APT close
+handled cleanly at the end (`paused (APT hook 0)` → `the HOME menu asked to
+close (frame 39070)` → `stopping`).
+
+The diagnostic from the previous fix did its job:
+
+```text
+threadJoin says the game's thread ended, but it is still running
+```
+
+so libctru's join really does report an end while the thread is alive; the
+shell's own flag is what keeps the run alive.
+
+**But the screens were black, and `draw_us=1` says why.** `DrawFrame` began
+with a `NitroPort_RenderScreens == NULL` guard, and it was always taken:
+
+```text
+final-3ds5 elf:  w NitroPort_RenderScreens     <- weak undefined: NULL at run time
+libnitro.a:      T NitroPort_RenderScreens     <- defined, never extracted
+```
+
+The shell declared the hook `__attribute__((weak))` (it cannot include
+`nitro_port.h`, whose NitroSDK types clash with libctru's). A weak undefined
+reference does **not** make the linker pull the definition out of
+`libnitro.a`, so the call was skipped every frame. The PC shell declares it
+strongly through `nitro_port.h`, which is why screenshots always worked.
+
+Fixed: the hooks are strong declarations with `nitro_port.h`'s signatures, the
+NULL guard is gone, and a test fails if any hook is declared weak again.
+
+Two notes for the next run:
+
+- **Timing**, from this log (with the 2D pass doing nothing): ~0.4–0.7 ms in
+  menus, and **33–35 ms (~28 Hz)** in the 3D-heavy intro/title. Adding the 2D
+  pass will cost more, so this is a floor, not a verdict.
+- **Audio is still silent by design**: NDSP starts, `audio_us=0`, and the
+  port's mixer is not fed yet. That is a separate piece of work, not this bug.
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the

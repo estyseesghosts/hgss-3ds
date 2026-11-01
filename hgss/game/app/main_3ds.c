@@ -56,12 +56,17 @@
 
 /* The port's hooks (see nitro_port.h). Declared here rather than included:
  * nitro_port.h pulls in NitroSDK's types, which cannot live next to
- * libctru's. These are the plain-C prototypes heartgold.c and main_pc.c use. */
+ * libctru's.
+ *
+ * These must be STRONG references. A weak one does not make the linker
+ * extract the definition from libnitro.a, so it binds to NULL and the call is
+ * skipped -- that is how the first hardware build drew nothing (draw_us=1)
+ * while the game ran for 39,000 frames. */
 void NitroPort_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void NitroPort_SetButtons(uint16_t held, int lidClosed);
 void NitroPort_SetTouch(int down, uint16_t x, uint16_t y);
 void NitroPort_CardFlush(void);
-int NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom) __attribute__((weak));
+void NitroPort_RenderScreens(uint16_t *top, uint16_t *bottom);
 
 static FILE *sLog;
 static LightLock sLogLock;
@@ -176,9 +181,6 @@ static void DrawFrame(void)
     uint8_t *topFb;
     uint8_t *bottomFb;
 
-    if (NitroPort_RenderScreens == NULL) {
-        return;
-    }
     NitroPort_RenderScreens(top, bottom);
 
     topFb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
