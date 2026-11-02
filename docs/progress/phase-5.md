@@ -2,7 +2,7 @@
 
 Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap, audio
 level/staging fixes, the Settings-close fix, the raw-DS-address fix, the battle
-Poképics and the close-hang fix package, pending a console re-run.** The game boots, plays the intro, reaches Oak's
+Poképics, the close-hang fix and the SoulSilver program, pending a console re-run.** The game boots, plays the intro, reaches Oak's
 speech and the player's house, draws both screens and plays audio. The ninth
 run (log-9) showed the GPU pipeline working at 87 Hz; frame starts are now
 capped at 60 Hz, the NNS volume table, pre-saturation 6 dB headroom and NDSP
@@ -12,10 +12,11 @@ Settings returns to the field (patch 1904), the battle's raw DISPCNT read
 that crashed the tenth run is gone (patch 1905), the battle's Poképics render
 (0304/0605) and a HOME-menu close no longer hangs. Remaining Phase 5 exits: the
 owner's hardware re-run (3D rate and title, audio by ear, frame times,
-Settings open/close, a wild encounter), a full-speed run through Oak's speech,
-the save round-trip, the Old 3DS decision and the `.cia` decision.
+Settings open/close, a wild encounter), the SoulSilver program's hardware run,
+a full-speed run through Oak's speech, the save round-trip, the Old 3DS
+decision and the `.cia` decision.
 
-Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
+Last verified: **2026-11-02**, container `/workspaces/pokeheartgold-3ds`.
 
 ## What is in the tree
 
@@ -743,6 +744,16 @@ the shell joined the geometry thread before draining its last scene. The close
 now drains first, logs each `[quit]` step, and ends the process if a thread
 will not stop. Both are hardware checks: finish a battle and choose Close from
 the HOME menu.
+
+**The SoulSilver program, session 14.** The shell's paths, pack name, save
+name and cartridge game code were HeartGold-only. They now follow the decomp's
+own `SOULSILVER` define, and `tools/hgss_game.py --game soulsilver` compiles
+the matching program (`pokesoulsilver.3dsx`, `sdmc:/3ds/pokeheartgold-ss/`).
+The retail SS dump was verified and packed (`soulsilver3ds.pak`,
+`soulsilver-nitrofs-1`), and the PC build boots its intro, title and main menu
+with it. The 3DS build is 1092/1092, 0 unresolved, `3dsxdump` rc 0. The
+hardware run of the SS program is the owner's next check; the HeartGold
+artifact was rebuilt from the same tree and is otherwise unchanged.
 
 ## Pending user runs
 

@@ -12,17 +12,19 @@
 #                    decomp's generated .naix headers (run the decomp's make once), MWCC only with --update-mwcc
 #   make game-pc     compile the HGSS game + data + port libraries with gcc-10 -m32 and link
 #                    build/game-pc/pokeheartgold-pc (the Phase 2 harness; --keep-going reports every error)
+#   make game-pc-ss  the same for SoulSilver: build/game-pc-ss/pokesoulsilver-pc
 #   make game-3ds    the same with devkitARM and the libctru/citro3d shell; links
 #                    build/game-3ds/pokeheartgold-3ds.elf and packages
 #                    build/game-3ds/pokeheartgold.3dsx with 3dsxtool (no SMDH yet). Both
 #                    need `python3 tools/bootstrap.py` first.
+#   make game-3ds-ss the SoulSilver 3DS program: build/game-3ds-ss/pokesoulsilver.3dsx
 #   make clean
 # ---------------------------------------------------------------------------
 
 PORT := 3ds_port
 SDK_TESTS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard tests/sdk/*/run.sh)))))
 
-.PHONY: test tool-tests sdk-tests sdk-survey port-tests layout game-pc game-3ds content-check clean check-bootstrap
+.PHONY: test tool-tests sdk-tests sdk-survey port-tests layout game-pc game-pc-ss game-3ds game-3ds-ss content-check clean check-bootstrap
 
 check-bootstrap:
 	@test -f build/upstream/lib/NitroSDK/include/nitro.h || \
@@ -58,6 +60,14 @@ game-pc: check-bootstrap
 
 game-3ds: check-bootstrap
 	python3 tools/hgss_game.py --target 3ds --keep-going --out $(GAME_3DS_OUT)
+
+# SoulSilver uses its own object tree and program names; both games can be
+# built from one checkout.
+game-pc-ss: check-bootstrap
+	python3 tools/hgss_game.py --game soulsilver --target host32 --keep-going --out $(CURDIR)/build/game-pc-ss
+
+game-3ds-ss: check-bootstrap
+	python3 tools/hgss_game.py --game soulsilver --target 3ds --keep-going --out $(CURDIR)/build/game-3ds-ss
 
 clean:
 	rm -rf build

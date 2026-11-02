@@ -35,6 +35,7 @@ sequence.
 | A wild encounter (or any battle) crashes as the battle overlays finish loading | [A raw DS address is unmapped memory](#a-raw-ds-address-is-unmapped-memory) |
 | A battle's Pokémon are invisible except for a flicker during attacks | [The poképics never reach the port's 3D scene](#the-poképics-never-reach-the-ports-3d-scene) |
 | Closing from the HOME menu hangs and the console has to be power-cycled | [The geometry thread is stopped before its last scene is drained](#the-geometry-thread-is-stopped-before-its-last-scene-is-drained) |
+| A SoulSilver build loads HeartGold's folder or is rejected with the wrong build ID | [The shell is compiled for one game at a time](#the-shell-is-compiled-for-one-game-at-a-time) |
 
 ## A weak hook binds to NULL
 
@@ -644,6 +645,33 @@ no longer freeze silently.
 **Rule.** A producer-side flush that waits for a consumer must run while the
 consumer is alive; stop the consumer only after the drain. Log every shutdown
 step, so a hang points at one.
+
+## The shell is compiled for one game at a time
+
+**Symptom.** A SoulSilver pack is rejected with "the data pack has the wrong
+build ID; pack it again with --build-id heartgold-nitrofs-1", or the program
+starts with HeartGold's `sdmc:/3ds/pokeheartgold/` folder and save even though
+the pack is SoulSilver's.
+
+**Cause.** The 3DS shell started as a HeartGold-only program: `main_3ds.c`
+hardcoded `sdmc:/3ds/pokeheartgold/`, `heartgold3ds.pak` and `heartgold.sav`,
+and `heartgold.h` hardcoded the `IPKE` cartridge code and
+`heartgold-nitrofs-1`. Nothing selected the other game, so changing only the
+pack could never work.
+
+**Fix.** The program is built for one game at a time from the decomp's own
+define: `tools/hgss_game.py --game soulsilver` passes `-DSOULSILVER` (the
+default is `-DHEARTGOLD`), and `heartgold.h` selects the pack build ID, ROM
+code and title, save name, folder and program name. SoulSilver gets
+`pokesoulsilver.3dsx`, `sdmc:/3ds/pokeheartgold-ss/` and
+`soulsilver.sav`; HeartGold keeps the old names. The two games never share a
+pack, folder or save.
+
+**Rule.** A version-specific name belongs in `heartgold.h`'s two branches, not
+in the shell: add the HeartGold and SoulSilver values together and let the
+game define choose. The scripts pick the define from the pack's file name, and
+`tests/test_player_scripts.py` checks that both branches name the same pack,
+save and folder the SD layout documents.
 
 ## Reading a Luma crash dump
 

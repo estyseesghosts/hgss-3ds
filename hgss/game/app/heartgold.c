@@ -193,7 +193,8 @@ void Heartgold_Run(const HeartgoldSettings *settings)
     NitroPortFirmware firmware;
 
     memset(header, 0, sizeof(header));
-    memcpy(header + ROM_TITLE_OFFSET, "POKEMON HG", 10);
+    memcpy(header + ROM_TITLE_OFFSET, HEARTGOLD_ROM_TITLE,
+           sizeof HEARTGOLD_ROM_TITLE - 1);
     memcpy(header + ROM_GAME_CODE, HEARTGOLD_ROM_GAME_CODE,
            sizeof HEARTGOLD_ROM_GAME_CODE - 1);
     memcpy(header + ROM_MAKER_CODE, "01", 2);
@@ -218,12 +219,12 @@ void Heartgold_Run(const HeartgoldSettings *settings)
      * power management (sound, microphone and wireless aren't done yet). */
     NitroPort_SetSavePath(settings->savePath);
     NitroPort_InitArm7Services();
-    NitroPort_Log("[heartgold] save file: %s",
+    NitroPort_Log("[" HEARTGOLD_LOG_TAG "] save file: %s",
                   settings->savePath != NULL ? settings->savePath : "(none)");
 
-    NitroPort_Log("[heartgold] starting the game");
+    NitroPort_Log("[" HEARTGOLD_LOG_TAG "] starting the game");
     NitroMain();
-    NitroPort_Log("[heartgold] NitroMain returned");
+    NitroPort_Log("[" HEARTGOLD_LOG_TAG "] NitroMain returned");
     OS_Terminate();
     for (;;) {
     }

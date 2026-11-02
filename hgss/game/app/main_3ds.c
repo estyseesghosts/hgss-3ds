@@ -10,15 +10,16 @@
  * libctru's headers cannot be mixed with the NitroSDK headers that
  * heartgold.c uses. The port hooks are plain C.
  *
- * Needs the player's data pack on the SD card:
+ * Needs the player's data pack on the SD card. A HeartGold build reads
  *   sdmc:/3ds/pokeheartgold/heartgold3ds.pak
- *   sdmc:/3ds/pokeheartgold/manifest.json
- * keeps the save in sdmc:/3ds/pokeheartgold/heartgold.sav (a raw 512 KiB
- * save, as emulators keep them), and writes the log to
- * sdmc:/3ds/pokeheartgold/log.txt.
+ * and a SoulSilver build reads
+ *   sdmc:/3ds/pokeheartgold-ss/soulsilver3ds.pak
+ * each with manifest.json next to it, keeps the save in the same folder
+ * (heartgold.sav or soulsilver.sav, a raw 512 KiB save, as emulators keep
+ * them), and writes log.txt there.
  *
- * Scripted input: put a tests/inputs-style script at
- * sdmc:/3ds/pokeheartgold/script.txt, or name it in port.ini:
+ * Scripted input: put a tests/inputs-style script at script.txt in the
+ * game's folder, or name it in port.ini:
  *   script=script.txt
  * The replay is frame-for-frame the PC runner's, so a hardware run repeats
  * the PC run. Without a script the console's buttons and touch screen drive
@@ -45,10 +46,10 @@
  * header is standalone (stdint/stddef only), so it can sit next to libctru's. */
 #include <nitro_port_gx3d.h>
 
-#define DATA_DIR "sdmc:/3ds/pokeheartgold"
-#define PAK_PATH DATA_DIR "/heartgold3ds.pak"
+#define DATA_DIR HEARTGOLD_DATA_DIR
+#define PAK_PATH DATA_DIR "/" HEARTGOLD_PAK_NAME
 #define MANIFEST_PATH DATA_DIR "/manifest.json"
-#define SAVE_PATH DATA_DIR "/heartgold.sav"
+#define SAVE_PATH DATA_DIR "/" HEARTGOLD_SAVE_NAME
 #define LOG_PATH DATA_DIR "/log.txt"
 #define INI_PATH DATA_DIR "/port.ini"
 #define DEFAULT_SCRIPT DATA_DIR "/script.txt"
@@ -1019,8 +1020,8 @@ static void PakErrorScreen(const char *error)
     NitroPort_Log("Can't start: %s.", error);
     consoleInit(GFX_BOTTOM, NULL);
     consoleClear();
-    printf("\n pokeheartgold-3ds\n\n Can't start: %s.\n\n"
-           " Put heartgold3ds.pak and manifest.json\n"
+    printf("\n " HEARTGOLD_APP_NAME "\n\n Can't start: %s.\n\n"
+           " Put " HEARTGOLD_PAK_NAME " and manifest.json\n"
            " (made with the builder from your own\n"
            " cartridge) in:\n\n  " DATA_DIR "/\n\n"
            " See " DATA_DIR "/log.txt for the details.\n\n"
@@ -1072,7 +1073,7 @@ int main(int argc, char **argv)
     sLogLockReady = true;
     sLog = fopen(LOG_PATH, "w");
 
-    NitroPort_Log("pokeheartgold-3ds starting");
+    NitroPort_Log(HEARTGOLD_APP_NAME " starting");
     {
         bool isNew3ds = false;
 

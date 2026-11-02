@@ -10,10 +10,13 @@ looks like so the result can be recorded without guesswork.
 
    ```bash
    python3 tools/hgss_game.py --target 3ds --keep-going --out build/game-3ds
-   ls build/game-3ds/pokeheartgold.3dsx
+   python3 tools/hgss_game.py --game soulsilver --target 3ds --keep-going --out build/game-3ds-ss
+   ls build/game-3ds/pokeheartgold.3dsx build/game-3ds-ss/pokesoulsilver.3dsx
    ```
 
-2. Put the game's own files on the SD card (nothing below is committed):
+2. Put the game's own files on the SD card (nothing below is committed).
+   HeartGold reads `sdmc:/3ds/pokeheartgold/`; SoulSilver reads
+   `sdmc:/3ds/pokeheartgold-ss/` and has the same layout:
 
    ```text
    sdmc:/3ds/pokeheartgold/
@@ -23,6 +26,14 @@ looks like so the result can be recorded without guesswork.
      log.txt                 # created by the game (rewritten each start)
      port.ini                # optional, see below
      script.txt              # optional: a tests/inputs scene
+
+   sdmc:/3ds/pokeheartgold-ss/
+     soulsilver3ds.pak
+     manifest.json
+     soulsilver.sav
+     log.txt
+     port.ini                # optional
+     script.txt              # optional
    ```
 
    The DSP firmware is **not** in that folder — libctru looks for it at a
@@ -53,11 +64,12 @@ looks like so the result can be recorded without guesswork.
 ## Installing without 3dslink
 
 The `.3dsx` is the **program**, not a ROM — the ROM-derived data is
-`heartgold3ds.pak`. Copy it anywhere the Homebrew Launcher scans, normally
-the top of `/3ds`:
+`heartgold3ds.pak` (or `soulsilver3ds.pak`). Copy it anywhere the Homebrew
+Launcher scans, normally the top of `/3ds`:
 
 ```text
-sdmc:/3ds/pokeheartgold.3dsx   # the payload (about 8.9 MiB)
+sdmc:/3ds/pokeheartgold.3dsx   # HeartGold (about 8.9 MiB)
+sdmc:/3ds/pokesoulsilver.3dsx  # SoulSilver
 ```
 
 The Homebrew Launcher lists it by file name, so `pokeheartgold.3dsx` reads
@@ -254,6 +266,16 @@ N)`. Before the fix it stopped at `closing at frame N` and the console had to
 be power-cycled (the geometry thread was joined before its last scene was
 drained; log-12). If it hangs, the last `[quit]` line names the stuck step;
 send the log.
+
+## The SoulSilver program
+
+Build it with `make game-3ds-ss` (or `--game soulsilver`), copy
+`pokesoulsilver.3dsx` to `sdmc:/3ds/`, and the pack to
+`sdmc:/3ds/pokeheartgold-ss/`. Start **pokesoulsilver** from the Homebrew
+Launcher: it has its own intro/title and writes `soulsilver.sav` and
+`log.txt` in that folder. The two games can sit on the same card; neither
+reads the other's folder. Check that the title is the SoulSilver one and the
+save file appears under the SS folder (not next to HeartGold's).
 
 ## Frame-time budget
 

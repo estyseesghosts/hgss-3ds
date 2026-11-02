@@ -44,6 +44,19 @@ class GameNames(unittest.TestCase):
         self.assertEqual(game, "SoulSilver")
         self.assertEqual(info["pak"], "soulsilver3ds.pak")
 
+    def test_the_shell_has_both_variants(self):
+        header = HEARTGOLD_HEADER.read_text(encoding="utf-8")
+        shell = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text(encoding="utf-8")
+        for info in prepare_game.GAMES.values():
+            self.assertIn(info["build_id"], header)
+            self.assertIn(info["save"], header)
+            self.assertIn(info["pak"], header)
+            self.assertIn(info["app"] + "-3ds", header)
+        self.assertIn("#if defined(SOULSILVER)", header)
+        self.assertIn("HEARTGOLD_DATA_DIR", shell)
+        self.assertIn("HEARTGOLD_PAK_NAME", shell)
+        self.assertIn("HEARTGOLD_APP_NAME", shell)
+
 
 class Helpers(unittest.TestCase):
     def test_human_size(self):

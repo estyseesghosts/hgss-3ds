@@ -1,20 +1,21 @@
 # SD card layout
 
 The port reads **no cartridge**: HeartGold/SoulSilver's files come from a
-`heartgold3ds.pak` you build on your computer from your own verified `.nds`.
-The pack and its `manifest.json` live on the SD card next to the save and the
-log. Nothing the builder produces from a ROM is ever committed to this
-repository (see [Contributing](Contributing.md)).
+`.pak` you build on your computer from your own verified `.nds`
+(`heartgold3ds.pak` or `soulsilver3ds.pak`). The pack and its `manifest.json`
+live on the SD card next to the save and the log. Nothing the builder produces
+from a ROM is ever committed to this repository (see
+[Contributing](Contributing.md)).
 
 ## The folders
 
-HeartGold and SoulSilver use separate folders so a save can never be read by
-the other version.
+HeartGold and SoulSilver use separate folders **and separate apps**, so a save
+can never be read by the other version.
 
-| Game | Folder | Data pack | Save | Log |
-| --- | --- | --- | --- | --- |
-| HeartGold (USA) | `sdmc:/3ds/pokeheartgold/` | `heartgold3ds.pak` | `heartgold.sav` | `log.txt` |
-| SoulSilver (USA) | `sdmc:/3ds/pokeheartgold-ss/` | `soulsilver3ds.pak` | `soulsilver.sav` | `log.txt` |
+| Game | Program | Folder | Data pack | Save | Log |
+| --- | --- | --- | --- | --- | --- |
+| HeartGold (USA) | `sdmc:/3ds/pokeheartgold.3dsx` | `sdmc:/3ds/pokeheartgold/` | `heartgold3ds.pak` | `heartgold.sav` | `log.txt` |
+| SoulSilver (USA) | `sdmc:/3ds/pokesoulsilver.3dsx` | `sdmc:/3ds/pokeheartgold-ss/` | `soulsilver3ds.pak` | `soulsilver.sav` | `log.txt` |
 
 Both folders may also contain:
 
@@ -31,8 +32,9 @@ The DSP firmware is not in that folder: libctru loads a fixed path.
 | `sdmc:/3ds/dspfirm.cdc` | Your console's own DSP dump. Without it the game runs silent and `log.txt` says so; it is not an error. |
 
 The `.3dsx` itself is the program, not a ROM: it goes next to the folder, at
-`sdmc:/3ds/pokeheartgold.3dsx`, where the Homebrew Launcher lists it. Its SMDH
-metadata is embedded by `3dsxtool`, so no `.smdh` belongs on the card.
+`sdmc:/3ds/pokeheartgold.3dsx` or `sdmc:/3ds/pokesoulsilver.3dsx`, where the
+Homebrew Launcher lists it. Its SMDH metadata is embedded by `3dsxtool`, so
+no `.smdh` belongs on the card.
 
 The save is a raw **524,288-byte** file, exactly as an emulator keeps it, so
 a save can be moved between the port, an emulator and a flash card with no
@@ -42,13 +44,13 @@ The three files go together: a pack without its `manifest.json` opens as
 "can't read the data pack or its manifest.json", and a manifest from another
 build is rejected as "damaged, or they don't belong together".
 
-> **SoulSilver status.** `scripts/prepare_game.py` verifies the SoulSilver US
-> dump (`f8dc38ea…`), extracts it and packs it with the proposed name and
-> `soulsilver-nitrofs-1` build ID, but the current 3DS shell
-> (`hgss/game/app/main_3ds.c`) hardcodes the HeartGold folder and file names,
-> so there is no SoulSilver app to play it yet. The pack is ready for when
-> that shell exists; the extraction and packing are also tested with synthetic
-> NitroFS images only (no retail SS dump was available in this workspace).
+> **SoulSilver status.** SoulSilver is now built: the retail US dump
+> (`f8dc38ea…`) was verified, extracted and packed (`soulsilver3ds.pak`,
+> build ID `soulsilver-nitrofs-1`), and the 3DS program
+> (`pokesoulsilver.3dsx`, built with `--game soulsilver`) boots its own intro,
+> title and main menu on the PC reference. It reads
+> `sdmc:/3ds/pokeheartgold-ss/` and keeps its save there, so both games can
+> live on one card without touching each other.
 
 ## Building the pack
 
@@ -87,8 +89,10 @@ different file table):
 | Pokémon SoulSilver (USA) | `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` |
 
 Copy `heartgold3ds.pak` and `/work/hg-data/manifest.json` to
-`sdmc:/3ds/pokeheartgold/`. The extractor's `manifest.json` is written next
-to the extracted files, so it is already in `/work/hg-data/`.
+`sdmc:/3ds/pokeheartgold/` (or `soulsilver3ds.pak` and the SS manifest to
+`sdmc:/3ds/pokeheartgold-ss/`). The extractor's `manifest.json` is written
+next to the extracted files, so it is already in `/work/hg-data/` (or
+`/work/ss-data/`).
 
 ### The pak is ID-indexed
 
@@ -151,6 +155,9 @@ boot test `tests/sdk/pak_boot` covers the OK path and every other result.
 dist/sd-card/3ds/pokeheartgold.3dsx
 dist/sd-card/3ds/pokeheartgold/heartgold3ds.pak
 dist/sd-card/3ds/pokeheartgold/manifest.json
+dist/sd-card/3ds/pokesoulsilver.3dsx
+dist/sd-card/3ds/pokeheartgold-ss/soulsilver3ds.pak
+dist/sd-card/3ds/pokeheartgold-ss/manifest.json
 ```
 
 It prints the `.3dsx` size and SHA-256 and the exact destination paths. See

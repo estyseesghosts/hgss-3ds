@@ -133,22 +133,28 @@ card then has:
 E:\3ds\pokeheartgold.3dsx
 E:\3ds\pokeheartgold\heartgold3ds.pak
 E:\3ds\pokeheartgold\manifest.json
+E:\3ds\pokesoulsilver.3dsx
+E:\3ds\pokeheartgold-ss\soulsilver3ds.pak
+E:\3ds\pokeheartgold-ss\manifest.json
 ```
+
+Run the same command with `--pak build/soulsilver3ds.pak` to add SoulSilver.
 
 If you prefer Explorer, the staging folder is reachable from Windows at
 `\\wsl$\Ubuntu\home\<your-linux-name>\hgss-3ds\dist\sd-card\`; drag its `3ds`
 folder onto the card and choose **Merge**.
 
-Eject the card properly, put it in the 3DS, and start **pokeheartgold** from
-the Homebrew Launcher. The first start writes `heartgold.sav` and `log.txt`
-into `E:\3ds\pokeheartgold\`.
+Eject the card properly, put it in the 3DS, and start **pokeheartgold** or
+**pokesoulsilver** from the Homebrew Launcher. The first start writes
+`heartgold.sav` or `soulsilver.sav` into that game's folder.
 
 ## Sound, saves and updates
 
 - **Sound** needs your own console's DSP dump at `E:\3ds\dspfirm.cdc`. Without
   it the port runs silent and says so in `log.txt`; that is expected.
-- **Saves** are raw 512 KiB files in `E:\3ds\pokeheartgold\heartgold.sav`.
-  Back one up before replacing the pack or the app.
+- **Saves** are raw 512 KiB files in `E:\3ds\pokeheartgold\heartgold.sav` or
+  `E:\3ds\pokeheartgold-ss\soulsilver.sav`. Back one up before replacing the
+  pack or the app.
 - **Updating**: `git pull`, then run step 5 again. The save stays where it is.
   Copy the new `.3dsx` and (if the pack changed) the pack and manifest.
 

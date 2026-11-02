@@ -1,6 +1,6 @@
 # Current state
 
-Last verified: **2026-11-02 (session 13: the battle's Poképics and the close hang)**, inside the dev container
+Last verified: **2026-11-02 (session 14: the SoulSilver program)**, inside the dev container
 (`/workspaces/pokeheartgold-3ds`), with the tree at **82 patches** (`NitroSDK` 16, `NitroSystem` 4,
 `pokeheartgold` 62). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
@@ -8,7 +8,8 @@ this page; do not trust it blindly.
 
 **One line:** Phase 2's exit criterion is met — the PC program links with **0 unresolved**, the overlay
 self-check passes on the real binary (129/0), the symbol cross-check reports **0 missing**, and the 3DS
-program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
+program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx` (and, for
+SoulSilver, `pokesoulsilver.3dsx`). Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
 **Both halves of the Phase 1 DS gate pass at 78 patches**; both matching builds reproduce the retail
 ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 1904, 1905, 0304 and 0605 are
@@ -19,11 +20,11 @@ ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 82 patches apply from scratch (the DS gate last ran at 78; 1904/1905 are port-only); `make test` 354 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
-| 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
-| 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
+| 1 SDK patch stack | **Done** | 82 patches apply from scratch (the DS gate last ran at 78; 1904/1905 are port-only); `make test` 355 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS, for HeartGold and SoulSilver; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold` and `pokesoulsilver` programs exist. [phase-2.md](phase-2.md) |
+| 3 Data pipeline | **Done** | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; both retail dumps verified, extracted and packed; the HG pack opens in the PC program and the SS program boots to its main menu. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, pre-saturation 6 dB headroom, NDSP cache flush/native rate, the camera-plane drop, the battle Poképics (0304/0605) and the close-hang fix are in the latest artifact; hardware re-run pending. |
+| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, pre-saturation 6 dB headroom, NDSP cache flush/native rate, the camera-plane drop, the battle Poképics (0304/0605) and the close-hang fix are in the latest artifacts; both games have their own program and folder; hardware re-run pending. |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -34,20 +35,23 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (82 patches applied)` |
-| Host tests | `make test` | **exit 0**; **354 Python tests** + **20 SDK suites** |
+| Host tests | `make test` | **exit 0**; **355 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
+| Game compile (host32, SS) | `python3 tools/hgss_game.py --game soulsilver --target host32 --keep-going --out /work/ss-pc -j8` | **1092/1092 compiled, 0 failed**; **linked, 0 unresolved**; `pokesoulsilver-pc` boots the SS intro, title and main menu |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
 | Settings open/close (PC) | scripted new game → bedroom → mother → X → OPTIONS → QUIT | **returns to the field at frame 35032**; two further cycles pass. Before patch 1904 it aborted at 35028 in `LoadBgVramScr` (`src=0x02C002C0`) |
 | Raw DS addresses | `python3 -m unittest tests.test_hw_addresses` | **7 tests, OK**; 0 raw `0x02000000`-`0x07FFFFFF` pointer literals in `src/` (20 before patch 1905, including the battle read and the background copy) |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j8` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` **9,279,628 B** (`sha256 6bad8620…303f`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/hg-3ds2 -j8` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` **9,279,628 B** (`sha256 92381334…5285`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS, SS) | `python3 tools/hgss_game.py --game soulsilver --target 3ds --keep-going --out /work/ss-3ds -j8` | **1092/1092, 0 failed**; **linked, 0 unresolved**; `pokesoulsilver.3dsx` **9,279,668 B** (`sha256 c2e9a50e…e4cf`); `3dsxdump` rc 0 (same page counts) |
 | Battle Poképics (PC) | owner's `heartgold.sav` + the zig-zag input, `--frames 14000` | both Pokémon render; each battle scene is **720 tris (720 opaque), lost: 0 clipped**; before 0304/0605, `0 vtx` and then `360 clipped` |
 | Close from HOME (3DS) | HOME menu → Close | fixed in the shell (`[quit]` steps); the console run is the owner's check |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
+| Data pipeline (real SS dump) | `scripts/prepare_game.py /work/soulsilver.us.nds` | `f8dc38ea…` verified; 513 files / 125,549,877 B extracted; 125,556,128 B pack with build ID `soulsilver-nitrofs-1`; the SS program boots its intro/title/main menu with it |
 | Save layout | `make layout` | last full probe: 0 differences in 804 values; layout patches did not change |
 | DS-side gate (HG) | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` | **PASSED at 78**: `build/heartgold.us/pokeheartgold.us.nds` SHA1 `4fcded0e2713dc03929845de631d0932ea2b5a37` (retail), `sha1sum -c` OK, exit 0 |
 | DS-side gate (SS) | same, `SOULSILVER` | **PASSED at 78**: `build/soulsilver.us/pokesoulsilver.us.nds` SHA1 `f8dc38ea20c17541a43b58c5e6d18c1732c7e582` (retail), `sha1sum -c` OK, exit 0 |
@@ -64,10 +68,10 @@ lowermenu 246, options 49, xbrz 266, shadow 375, nitrosystem **17,122** — ever
 **Nothing in the Phase 1/2/3 acceptance set.** The remaining gaps are deliberate deferrals or later
 phases:
 
-- **SoulSilver has no retail ROM in the container.** `verify_rom.py` accepts its SHA-1,
-  extraction/packing are image-driven, and the synthetic tests cover the layout; the real SS run is
-  an open gap. The shell is a compile-time `HGSS_SS_VARIANT`, but there is no SS data pack/ROM to
-  exercise it here.
+- **SoulSilver is built, but its hardware run is pending.** The retail US dump was verified, extracted
+  and packed (`soulsilver3ds.pak`), and `pokesoulsilver.3dsx` boots the SS intro, title and main menu
+  on the PC. Its 3DS hardware run (and the battle/close checks on the SS build) is the next owner run.
+  Both games have separate apps, folders, packs and saves.
 - **3DS depth:** the `.3dsx` runs on a New 3DS and draws both screens, audio and 3D; the battle Poképics render on the PC (720 tris/scene, 0 clipped) and the close path drains before joining. The hardware run of the latest artifact (60 Hz/audio-level/camera-plane, the battle look and a HOME-menu close) is still the owner's.
 - **Web builder and CIA assets** are deferred (recorded in `docs/decisions.md` and the SD doc).
 
@@ -159,10 +163,10 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
   is kept and audited. Revisit with the cross-check's comparison model if the table becomes unwieldy.
 - **PC program boot depth:** the Phase 2 binary is a link/overlay-check target, not a playable build;
   Phase 4 owns the first frame. No decision needed now.
-- **SoulSilver folder and pak name** (`sdmc:/3ds/pokeheartgold-ss/`, `soulsilver3ds.pak`) are documented
-  in `docs/wiki/SD-Card-Layout.md` and implemented by `scripts/prepare_game.py` (build ID
-  `soulsilver-nitrofs-1`); the 3DS shell still hardcodes the HeartGold `DATA_DIR` and constants, so it
-  must gain the SS names when that build exists.
+- **SoulSilver folder, pak and program** (`sdmc:/3ds/pokeheartgold-ss/`, `soulsilver3ds.pak`,
+  `pokesoulsilver.3dsx`, `soulsilver-nitrofs-1`) are implemented: `heartgold.h` selects the names and
+  `tools/hgss_game.py --game soulsilver` compiles the matching program. The two games stay fully
+  separate so a save can never cross over.
 - Port-side fixes that are generic go to the Platinum maintainer as upstream PRs (assert/math
   force-includes, NNS table weak refs). HGSS-only shape changes stay in `hgss/`.
 - Commit trailer is `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
@@ -176,12 +180,14 @@ devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
 python3 tools/bootstrap.py            # "already at ... with 82 patches" if in sync
-make test                            # exit 0 (354 tests + 20 SDK suites)
+make test                            # exit 0 (355 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
 python3 tools/hgss_game.py --target 3ds --keep-going --out /work/3d -j5
                                      # 1092/1092, 0 unresolved, .3dsx packaged
+python3 tools/hgss_game.py --game soulsilver --target 3ds --keep-going --out /work/3d-ss -j5
+                                     # the SoulSilver program, pokesoulsilver.3dsx
 ```
 
 If `bootstrap.py` reports a patch-count mismatch, run `--clean`. If `build/` looks empty on the Mac,
@@ -250,6 +256,39 @@ Newest first. Each entry: what changed, what was run, what it proved.
   [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md)
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
+
+### 2026-11-02 (session 14) — the SoulSilver program
+
+- **The shell was HeartGold-only.** `main_3ds.c` hardcoded
+  `sdmc:/3ds/pokeheartgold/`, `heartgold3ds.pak` and `heartgold.sav`, and
+  `heartgold.h` hardcoded the `IPKE` game code and `heartgold-nitrofs-1`.
+  Both now select from the decomp's own game define: `SOULSILVER` gives
+  `IPGE`, `POKEMON SS`, `soulsilver-nitrofs-1`, `sdmc:/3ds/pokeheartgold-ss/`,
+  `soulsilver3ds.pak` and `soulsilver.sav`; the default `HEARTGOLD` is
+  unchanged.
+- **`tools/hgss_game.py --game {heartgold,soulsilver}`** adds the define to
+  the game and app compile and names the program (`pokeheartgold` or
+  `pokesoulsilver`; the `.3dsx` drops `-3ds`). The SMDH title changes too.
+  `make game-pc-ss` and `make game-3ds-ss` are the shortcuts.
+- **The real SS dump** (`/Users/terezi/hgss-private/soulsilver.us.nds`,
+  SHA-1 `f8dc38ea…e582`) was verified, extracted (513 files /
+  125,549,877 B) and packed (`soulsilver3ds.pak`, 125,556,128 B, build ID
+  `soulsilver-nitrofs-1`) with `scripts/prepare_game.py`.
+- **PC check.** `pokesoulsilver-pc` builds 1092/1092 with 0 unresolved and
+  boots the SS intro, title and main menu (the "CONTROL INFO / ADVENTURE
+  INFO / NO INFO NEEDED" screen) with the SS pack. The screenshot is the
+  end-to-end proof that the code variant and the pack agree.
+- **3DS builds.** Both variants compile 1092/1092 and link with 0
+  unresolved: HeartGold `pokeheartgold.3dsx` 9,279,628 B (`sha256
+  92381334…5285`) and SoulSilver `pokesoulsilver.3dsx` 9,279,668 B
+  (`sha256 c2e9a50e…e4cf`), both `3dsxdump` rc 0.
+- **Staged.** `dist/sd-card/3ds/` has both programs, both packs and both
+  manifests; the SS pair is `pokesoulsilver.3dsx` plus
+  `pokeheartgold-ss/{soulsilver3ds.pak,manifest.json}`. The scripts pick the
+  game from the pack's name and stage the right names automatically.
+- **Checks.** `make test` **355 tests** (a shell-variant test was added);
+  port tests unchanged at 17,122 nitrosystem checks. The SS hardware run is
+  the owner's next step.
 
 ### 2026-11-02 (session 13) — invisible battle Pokémon; the close hung
 

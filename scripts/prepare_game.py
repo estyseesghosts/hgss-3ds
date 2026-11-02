@@ -16,15 +16,15 @@ What it does, in order:
 3. Packs that folder into the .pak the port reads and records the ROM's SHA-1
    in the manifest.  The port reads the .pak, not the .nds.
 
-Both games are handled; the tool identifies which one it has.  The HeartGold
-pack is the one today's 3DS app loads.  SoulSilver is packed with its own name
-(`soulsilver3ds.pak`) and build ID for the SoulSilver app, which is not built
-yet; see docs/wiki/SD-Card-Layout.md.
+Both games are handled; the tool identifies which one it has and packs it
+with that game's own name and build ID (`heartgold3ds.pak` /
+`soulsilver3ds.pak`). HeartGold and SoulSilver have separate apps, folders
+and saves, so the two can sit on one SD card without touching each other.
 
 Everything this writes is private: do not commit or share the .pak.
 
-Next: `python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak`, or give
-build_3dsx.py the ROM and it runs this step itself.
+Next: `python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak` (or the
+SoulSilver pack), or give build_3dsx.py the ROM and it runs this step itself.
 """
 from __future__ import annotations
 
@@ -48,6 +48,7 @@ GAMES: dict[str, dict[str, str]] = {
         "build_id": "heartgold-nitrofs-1",
         "data": "game-data",
         "save": "heartgold.sav",
+        "app": "pokeheartgold",
     },
     "SoulSilver": {
         "folder": "pokeheartgold-ss",
@@ -55,12 +56,14 @@ GAMES: dict[str, dict[str, str]] = {
         "build_id": "soulsilver-nitrofs-1",
         "data": "game-data-ss",
         "save": "soulsilver.sav",
+        "app": "pokesoulsilver",
     },
 }
 SS_NOTE = (
-    "SoulSilver data is packed and ready, but the 3DS app in this repo still\n"
-    "loads HeartGold only (folder sdmc:/3ds/pokeheartgold/).  Keep the pack;\n"
-    "it is what the SoulSilver app will read when that build exists."
+    "SoulSilver has its own app and folder: start pokesoulsilver from the\n"
+    "Homebrew Launcher, with sdmc:/3ds/pokeheartgold-ss/soulsilver3ds.pak.\n"
+    "Its save (soulsilver.sav) is separate from HeartGold's and cannot be\n"
+    "mixed with it."
 )
 
 

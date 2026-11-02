@@ -21,22 +21,36 @@
 
 #include <stdint.h>
 
-/* The data pack's build ID: the builder must be given the same one
- * (python builder/pack.py data_pack/ -o heartgold3ds.pak --build-id ...).
- * It names how the pack's contents are laid out, so a program only opens
- * packs it can read. These packs hold the ROM's NitroFS files unchanged. */
-#define HEARTGOLD_PAK_BUILD_ID "heartgold-nitrofs-1"
-
-/* The cartridge game code at header +0x0C: IPKE is HeartGold (USA),
- * IPGE is SoulSilver (USA). The game reads this header at boot (the
+/* Everything version-specific is selected at compile time by the game
+ * define the decomp's own build uses (config.h): `HEARTGOLD` or
+ * `SOULSILVER`. tools/hgss_game.py --game adds it to every game and app
+ * object, so one tree builds either program. The two programs have separate
+ * folders, packs and saves, so a save can never be read by the other game. */
+#if defined(SOULSILVER)
+/* The data pack's build ID, checked by Heartgold_OpenPak at boot. The
+ * builder must be given the same one (scripts/prepare_game.py does). */
+#define HEARTGOLD_PAK_BUILD_ID "soulsilver-nitrofs-1"
+/* The cartridge game code at header +0x0C: IPKE is HeartGold (USA), IPGE
+ * is SoulSilver (USA). The game reads this header at boot (the
  * developer/debug checks and the save's game identity), and
- * builder/verify_rom.py names the same codes. A SoulSilver build
- * changes this, the build ID and the save name. */
+ * builder/verify_rom.py names the same codes. */
+#define HEARTGOLD_ROM_GAME_CODE "IPGE"
+#define HEARTGOLD_ROM_TITLE "POKEMON SS"
+#define HEARTGOLD_SAVE_NAME "soulsilver.sav"
+#define HEARTGOLD_DATA_DIR "sdmc:/3ds/pokeheartgold-ss"
+#define HEARTGOLD_PAK_NAME "soulsilver3ds.pak"
+#define HEARTGOLD_APP_NAME "pokesoulsilver-3ds"
+#define HEARTGOLD_LOG_TAG "soulsilver"
+#else
+#define HEARTGOLD_PAK_BUILD_ID "heartgold-nitrofs-1"
 #define HEARTGOLD_ROM_GAME_CODE "IPKE"
-
-/* The save's file name under the port's data directory. HeartGold and
- * SoulSilver use separate folders so their saves can never be mixed. */
+#define HEARTGOLD_ROM_TITLE "POKEMON HG"
 #define HEARTGOLD_SAVE_NAME "heartgold.sav"
+#define HEARTGOLD_DATA_DIR "sdmc:/3ds/pokeheartgold"
+#define HEARTGOLD_PAK_NAME "heartgold3ds.pak"
+#define HEARTGOLD_APP_NAME "pokeheartgold-3ds"
+#define HEARTGOLD_LOG_TAG "heartgold"
+#endif
 
 /* The user's settings, as a DS's firmware would hand them to the game.
  * Heartgold_DefaultSettings fills in neutral values; a program may replace

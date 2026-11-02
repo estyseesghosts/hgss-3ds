@@ -35,7 +35,7 @@ Verifies one of the two supported US dumps, extracts NitroFS and packs the
 game data the port reads.
 
 - **Usage:** `python3 scripts/prepare_game.py ROM.nds [-o PAK] [--data-dir DIR] [--force] [--clean]`
-- **Both games:** HeartGold packs to `build/heartgold3ds.pak` (build ID `heartgold-nitrofs-1`, data in `build/game-data`); SoulSilver packs to `build/soulsilver3ds.pak` (build ID `soulsilver-nitrofs-1`, data in `build/game-data-ss`). The names match [SD-Card-Layout](SD-Card-Layout.md). SoulSilver is prepared correctly but today's 3DS app loads HeartGold only; the script says so.
+- **Both games:** HeartGold packs to `build/heartgold3ds.pak` (build ID `heartgold-nitrofs-1`, data in `build/game-data`); SoulSilver packs to `build/soulsilver3ds.pak` (build ID `soulsilver-nitrofs-1`, data in `build/game-data-ss`). The names match [SD-Card-Layout](SD-Card-Layout.md), and each game has its own app and save folder.
 - **Reads:** the ROM (read-only). **Writes:** the extracted files, `manifest.json` and the `.pak`; all private and git-ignored.
 - **Re-runs:** it compares the existing manifest's ROM SHA-1 with the file and reuses the extraction when they match; `--force` extracts again. `--clean` removes the extracted files after packing, keeping the manifest.
 - **Calls:** `builder/verify_rom.py`, `builder/extract_rom.py`, `builder/pack.py`.
@@ -46,8 +46,8 @@ Builds the `.3dsx` and stages the SD-card folder.
 
 - **Usage:** `python3 scripts/build_3dsx.py (--rom ROM.nds | --pak PAK) [--manifest FILE] [--out DIR] [--build-dir DIR] [-j N] [--skip-bootstrap] [--skip-build]`
 - **What it calls, in order:** `prepare_game.prepare()` when `--rom` is given; `tools/bootstrap.py` (fetch the decomp and apply the patches; skipped with `--skip-bootstrap`); `tools/hgss_game.py --target 3ds` (compile and package; skipped with `--skip-build`); optional `3dsxdump` validation; then the copy.
-- **Output:** `<out>/3ds/pokeheartgold.3dsx` and `<out>/3ds/<game folder>/{pak,manifest.json}` (default `out` is `dist/sd-card`, which is git-ignored). It prints the size and SHA-256 of the `.3dsx` and the exact paths to copy. `--out /Volumes/3DS` stages directly onto a mounted card.
-- **Manifest lookup:** `--manifest` if given, else next to the pack, else `build/game-data/manifest.json` (then the SoulSilver data folder). A clear error lists those places when none exists.
+- **Output:** `<out>/3ds/pokeheartgold.3dsx` (or `pokesoulsilver.3dsx`) and `<out>/3ds/<game folder>/{pak,manifest.json}` (default `out` is `dist/sd-card`, which is git-ignored). The pack's name selects the game and the `--game` passed to `tools/hgss_game.py`. It prints the size and SHA-256 of the `.3dsx` and the exact paths to copy. `--out /Volumes/3DS` stages directly onto a mounted card.
+- **Manifest lookup:** `--manifest` if given, else next to the pack, else `build/game-data/manifest.json` (HeartGold) or `build/game-data-ss/manifest.json` (SoulSilver). A clear error lists those places when none exists.
 - **Needs:** the toolchain from `setup_toolchain.py`, `git`, network for the first bootstrap, and the pack. No container.
 
 ## Tools
@@ -123,10 +123,10 @@ Generates "not implemented" C for the network symbols game objects reference.
 
 Compiles the game and links a target. See [Build-Reference](Build-Reference.md#3-what-can-be-built-today) and [phase-2.md](../progress/phase-2.md).
 
-- **Usage:** `python3 tools/hgss_game.py --target {host32,3ds} [--keep-going] [--out DIR] [-- {make args}]`
-- **Does:** runs `prepare_game_headers.py`, compiles `src/**/*.c|*.cpp` plus the port-compiled `lib/` sources, assembles the `.s` files, builds `libnitro.a`/`libnitrosystem.a`, writes the overlay table and ID script, generates the Wi-Fi stubs, and links `build/pokeheartgold-pc` or a 3DS static link.
-- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1092/1092 compile, 150/150 `.s`, **linked with 0 unresolved** for both targets; the 3DS target also packages `pokeheartgold.3dsx` (with an SMDH) and then runs `validate_3dsx()`, which fails the build if a 3DS loader would reject the file (see [3DS-Pitfalls](3DS-Pitfalls.md)).
-- **Needs:** the container. The 3DS target needs devkitARM (present).
+- **Usage:** `python3 tools/hgss_game.py --target {host32,3ds} [--game {heartgold,soulsilver}] [--keep-going] --out DIR`
+- **Does:** runs `prepare_game_headers.py`, compiles `src/**/*.c|*.cpp` plus the port-compiled `lib/` sources with the chosen game's `-DHEARTGOLD`/`-DSOULSILVER`, assembles the `.s` files, builds `libnitro.a`/`libnitrosystem.a`, writes the overlay table and ID script, generates the Wi-Fi stubs, and links the program.
+- **Output:** object counts, per-file errors and the full unresolved-symbol list. Today: 1092/1092 compile, 150/150 `.s`, **linked with 0 unresolved** for both targets and both games. HeartGold writes `pokeheartgold-pc` / `pokeheartgold-3ds.elf` + `pokeheartgold.3dsx`; SoulSilver writes `pokesoulsilver-pc` / `pokesoulsilver-3ds.elf` + `pokesoulsilver.3dsx`. The 3DS target packages with `3dsxtool` (SMDH title "HeartGold on 3DS" or "SoulSilver on 3DS") and then runs `validate_3dsx()`, which fails the build if a 3DS loader would reject the file (see [3DS-Pitfalls](3DS-Pitfalls.md)).
+- **Needs:** the container. The 3DS target needs devkitARM (present). Each game needs its own `--out` directory; the game objects differ.
 - **Tested by:** `tests/test_hgss_game.py`.
 
 ### `tools/boot_smoke.py`

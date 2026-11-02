@@ -80,11 +80,12 @@ script works out which game it has. Three things happen:
 Expect it to take a minute or two. Running it again with the same ROM reuses
 the extracted files; add `--force` to extract again.
 
-> **SoulSilver today.** The script accepts a SoulSilver dump and packs it with
-> its own name (`soulsilver3ds.pak`) and build ID, but the 3DS app in this
-> repository currently loads HeartGold only (folder
-> `sdmc:/3ds/pokeheartgold/`). The SoulSilver app has not been built yet.
-> Keep the pack if you made one; it will be what that app reads.
+> **SoulSilver is supported.** The script accepts a SoulSilver dump and packs
+> it as `soulsilver3ds.pak` with build ID `soulsilver-nitrofs-1`. Its app is
+> `pokesoulsilver.3dsx`, and it reads `sdmc:/3ds/pokeheartgold-ss/`; that
+> folder and its save (`soulsilver.sav`) are separate from HeartGold's, so
+> both games can sit on one SD card. The build script picks the game from the
+> pack's name and compiles the matching program automatically.
 
 ## Step 3 — Build the app and the SD-card folder
 
@@ -99,7 +100,11 @@ If you already prepared the pack in step 2:
 
 ```sh
 python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak
+python3 scripts/build_3dsx.py --pak build/soulsilver3ds.pak
 ```
+
+The pack's name selects the game: the script builds `pokeheartgold.3dsx` or
+`pokesoulsilver.3dsx` with the matching folder and save names.
 
 The script:
 
@@ -124,19 +129,28 @@ It looks like this:
 dist/sd-card/
 └── 3ds/
     ├── pokeheartgold.3dsx
-    └── pokeheartgold/
-        ├── heartgold3ds.pak
+    ├── pokesoulsilver.3dsx
+    ├── pokeheartgold/
+    │   ├── heartgold3ds.pak
+    │   └── manifest.json
+    └── pokeheartgold-ss/
+        ├── soulsilver3ds.pak
         └── manifest.json
 ```
 
 Copy the **`3ds` folder inside it** onto the root of the SD card, merging it
-with whatever is already there. The card must end up with:
+with whatever is already there. If you built only one game, only its files
+are in the folder. The card must end up with the files for the game(s) you
+built:
 
 | Path | What it is |
 | --- | --- |
-| `/3ds/pokeheartgold.3dsx` | the app the Homebrew Launcher starts |
-| `/3ds/pokeheartgold/heartgold3ds.pak` | the game's files |
-| `/3ds/pokeheartgold/manifest.json` | the pack's index; copy it with the pack |
+| `/3ds/pokeheartgold.3dsx` | the HeartGold app the Homebrew Launcher starts |
+| `/3ds/pokeheartgold/heartgold3ds.pak` | HeartGold's files |
+| `/3ds/pokeheartgold/manifest.json` | its pack index; copy it with the pack |
+| `/3ds/pokesoulsilver.3dsx` | the SoulSilver app |
+| `/3ds/pokeheartgold-ss/soulsilver3ds.pak` | SoulSilver's files |
+| `/3ds/pokeheartgold-ss/manifest.json` | its pack index |
 
 If your card is mounted, you can skip the manual copy by pointing `--out` at
 it:
@@ -162,8 +176,8 @@ game runs silent and says so in `log.txt`. This is not an error.
 ## Troubleshooting
 
 - **The Homebrew Launcher does not list the app.** Check the card has
-  `/3ds/pokeheartgold.3dsx` exactly (lowercase), and that the launcher is
-  looking at the same SD card.
+  `/3ds/pokeheartgold.3dsx` (or `/3ds/pokesoulsilver.3dsx`) exactly
+  (lowercase), and that the launcher is looking at the same SD card.
 - **“Cannot read the data pack or its manifest.”** The pack and
   `manifest.json` must be copied together into
   `/3ds/pokeheartgold/`. Re-run step 3 and copy both files again; do not
@@ -171,10 +185,10 @@ game runs silent and says so in `log.txt`. This is not an error.
 - **“The save data could not be accessed.”** The save is read/write; check the
   SD card is not locked and has free space. Remove a damaged `heartgold.sav`
   only if you do not need it (the game makes a new one).
-- **I made a SoulSilver pack but the app cannot find it.** Expected: today's
-  app reads only `/3ds/pokeheartgold/` and HeartGold data. The SoulSilver
-  folder and pack are ready for the SoulSilver app, which is not built yet
-  (see step 2).
+- **I made a SoulSilver pack but cannot find it in the launcher.** Start
+  **pokesoulsilver**, not pokeheartgold; it reads
+  `/3ds/pokeheartgold-ss/`. Both apps can be on the card at once, and each
+  keeps its own save.
 - **The build fails with a “missing separator” or `$(file …)` error.** Your
   `make` is too old (macOS ships 3.81). Run
   `python3 scripts/setup_toolchain.py` again; it installs Homebrew's GNU Make
@@ -198,6 +212,7 @@ game runs silent and says so in `log.txt`. This is not an error.
 | `python3 scripts/prepare_game.py GAME.nds` | checks your HeartGold or SoulSilver dump, extracts it and builds the `.pak` |
 | `python3 scripts/build_3dsx.py --rom GAME.nds` | does everything: pack, build, and stage the SD-card folder |
 | `python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak` | builds and stages from an existing pack |
+| `python3 scripts/build_3dsx.py --pak build/soulsilver3ds.pak` | the same for SoulSilver (`pokesoulsilver.3dsx`) |
 | `python3 scripts/build_3dsx.py --pak … --out /Volumes/3DS` | writes the SD-card folder straight onto a mounted card |
 
 Every script has `--help` with the details.

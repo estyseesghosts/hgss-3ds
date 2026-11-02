@@ -15,11 +15,13 @@ It runs, in order:
 3. tools/hgss_game.py --target 3ds, which compiles the game and the port and
    packages the .3dsx.
 4. A staging folder (dist/sd-card by default) shaped exactly like the root of
-   your SD card:
+   your SD card. HeartGold writes pokeheartgold.3dsx with
+   pokeheartgold/heartgold3ds.pak; SoulSilver writes pokesoulsilver.3dsx
+   with pokeheartgold-ss/soulsilver3ds.pak:
 
-       <staging>/3ds/pokeheartgold.3dsx
-       <staging>/3ds/pokeheartgold/heartgold3ds.pak
-       <staging>/3ds/pokeheartgold/manifest.json
+       <staging>/3ds/<app>.3dsx
+       <staging>/3ds/<game folder>/<pak>
+       <staging>/3ds/<game folder>/manifest.json
 
    Copy the "3ds" folder inside it onto the card.  Point --out at a mounted
    card (for example /Volumes/3DS) and this script writes there directly.
@@ -77,13 +79,15 @@ def bootstrap() -> None:
     u.checked([u.python(), "tools/bootstrap.py"])
 
 
-def compile_3dsx(build_dir: Path, jobs: int) -> Path:
+def compile_3dsx(build_dir: Path, jobs: int, game: str, info: dict[str, str]) -> Path:
     u.say("")
-    u.say("Compiling the game and the port (this takes a few minutes) ...")
+    u.say(f"Compiling the game and the port for {game} (this takes a few minutes) ...")
     u.checked(
         [
             u.python(),
             "tools/hgss_game.py",
+            "--game",
+            game.lower(),
             "--target",
             "3ds",
             "--keep-going",
@@ -93,7 +97,7 @@ def compile_3dsx(build_dir: Path, jobs: int) -> Path:
             str(jobs),
         ]
     )
-    program = build_dir / "pokeheartgold.3dsx"
+    program = build_dir / (info["app"] + ".3dsx")
     if not program.is_file():
         u.fail(
             f"the build finished but left no .3dsx at {program}.\n"
@@ -122,7 +126,7 @@ def stage(program: Path, pak: Path, manifest: Path, info: dict[str, str], out: P
     app_dir = out / "3ds"
     data_dir = app_dir / info["folder"]
     data_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(program, app_dir / "pokeheartgold.3dsx")
+    shutil.copy2(program, app_dir / (info["app"] + ".3dsx"))
     shutil.copy2(pak, data_dir / info["pak"])
     shutil.copy2(manifest, data_dir / "manifest.json")
 
@@ -152,8 +156,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--build-dir",
         type=Path,
-        default=DEFAULT_BUILD,
-        help="where the compiler writes its output (default: build/game-3ds)",
+        default=None,
+        help="where the compiler writes its output (default: build/game-3ds, "
+        "or build/game-3ds-ss for SoulSilver)",
     )
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1, help="parallel compiler jobs")
     parser.add_argument("--skip-bootstrap", action="store_true", help="do not fetch/patch the decompilation")
@@ -161,7 +166,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     out = args.out.expanduser().resolve()
-    build_dir = args.build_dir.expanduser().resolve()
 
     if args.rom is not None:
         u.say("== 1. Preparing the game data from your ROM ==")
@@ -184,25 +188,32 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_bootstrap:
         bootstrap()
 
+    if args.build_dir is not None:
+        build_dir = args.build_dir.expanduser().resolve()
+    elif game == "SoulSilver":
+        build_dir = u.REPO / "build" / "game-3ds-ss"
+    else:
+        build_dir = DEFAULT_BUILD
+
     u.say("")
     u.say(f"Game data: {pak.name} ({game})")
     u.say(f"Manifest:  {manifest}")
     if args.skip_build:
-        program = build_dir / "pokeheartgold.3dsx"
+        program = build_dir / (info["app"] + ".3dsx")
         if not program.is_file():
             u.fail(f"--skip-build was given but there is no .3dsx at {program}")
         u.say(f"Reusing:   {program}")
     else:
         u.say("")
         u.say("== 2. Building the .3dsx ==")
-        program = compile_3dsx(build_dir, args.jobs)
+        program = compile_3dsx(build_dir, args.jobs, game, info)
         verify_program(program)
 
     u.say("")
     u.say("== 3. Preparing the SD-card folder ==")
     stage(program, pak, manifest, info, out)
 
-    staged_program = out / "3ds" / "pokeheartgold.3dsx"
+    staged_program = out / "3ds" / (info["app"] + ".3dsx")
     staged_pak = out / "3ds" / info["folder"] / info["pak"]
     staged_manifest = out / "3ds" / info["folder"] / "manifest.json"
 
@@ -220,15 +231,15 @@ def main(argv: list[str] | None = None) -> int:
     u.say("with what is already there (if --out was the mounted card, it is already")
     u.say("in place).  The card must end up with:")
     u.say("")
-    u.say("  /3ds/pokeheartgold.3dsx")
+    u.say(f"  /3ds/{info['app']}.3dsx")
     u.say(f"  /3ds/{info['folder']}/{info['pak']}")
     u.say(f"  /3ds/{info['folder']}/manifest.json")
     u.say("")
     if game == "SoulSilver":
         u.say(prepare_game.SS_NOTE)
     else:
-        u.say("Then start pokeheartgold from the Homebrew Launcher.  The first start")
-        u.say(f"creates {info['save']} next to the pack.  Keep any existing save.")
+        u.say(f"Then start {info['app']} from the Homebrew Launcher.  The first")
+        u.say(f"start creates {info['save']} next to the pack.  Keep any existing save.")
     return 0
 
 

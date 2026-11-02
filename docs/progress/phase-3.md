@@ -1,8 +1,10 @@
 # Phase 3 progress
 
 Status: **complete** (2026-10-31, session 6; checked off in session 7). SoulSilver's real-image
-end-to-end run is the one open gap: there is no SS ROM in the container, so SS is covered by the
-synthetic-image tests and the image-driven builder, exactly as the Phase 3 steps require.
+end-to-end run was the last open gap. Session 14 closed it: the SS US dump
+(`f8dc38ea…e582`) was verified, extracted (513 files / 125,549,877 B) and packed as
+`soulsilver3ds.pak` (125,556,128 B, build ID `soulsilver-nitrofs-1`), and the SS program boots its
+intro, title and main menu with that pack.
 
 ## Deliverables
 
@@ -48,5 +50,6 @@ loaded and `3ds_port/` stays untouched.
 
 ## Open gap
 
-SoulSilver's builder is tested against synthetic images only. When an SS dump is available, run the
-same three commands and record the pack size and boot result here.
+None for the data pipeline. The SS real-image run is recorded in
+[STATE.md](STATE.md) (session 14): 513 files / 125,549,877 B extracted,
+125,556,128 B pack, and the SS program boots to its main menu with it.

@@ -11,6 +11,11 @@ hardware re-run, and its visual/timing results are still pending. This is not
 a finished port: the save round-trip, Old 3DS and `.cia` decisions are open.
 The living status is [docs/progress/STATE.md](docs/progress/STATE.md).
 
+**Both games build.** HeartGold and SoulSilver each get their own `.3dsx`,
+data pack, folder and save (`pokesoulsilver.3dsx` reads
+`sdmc:/3ds/pokeheartgold-ss/soulsilver3ds.pak`), and the SoulSilver program
+boots its intro, title and main menu on the PC reference.
+
 **Just want to play?** You do not need the container, MWCC or the Nitro SDK:
 [the player's guide](docs/USER-GUIDE.md) builds the app and the SD-card folder
 with three Python scripts on Linux or macOS ([Windows plan](docs/WINDOWS.md)).
@@ -20,13 +25,13 @@ The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 ## Current status
 
 - **Phase 0 (baseline): complete, with open items.** Both US versions of the decomp build byte-identically inside the dev container, checked against their SHA1s and (for HeartGold) against a retail dump. In the container this needs `tools/matching-build.sh`, not plain `make`: the linker there strips five sections the original keeps, and the script restores them in the generated linker file. Still open: the golden reference captures (never run), the fixture saves, and the CI matching job, which is disabled. Details: [docs/progress/phase-0.md](docs/progress/phase-0.md).
-- **Phase 1 (SDK patch stack): done.** **82 patches** apply cleanly from scratch (NitroSDK 16, NitroSystem 4, pokeheartgold 62; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**354 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate last ran at 78, reproducing both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`; patches 1904, 1905, 0304 and 0605, added after that run, are `SDK_PORT_3DS`-only with their `#else` text unchanged). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
+- **Phase 1 (SDK patch stack): done.** **82 patches** apply cleanly from scratch (NitroSDK 16, NitroSystem 4, pokeheartgold 62; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**355 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate last ran at 78, reproducing both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`; patches 1904, 1905, 0304 and 0605, added after that run, are `SDK_PORT_3DS`-only with their `#else` text unchanged). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
 - **Phase 2 (game under GCC): done for the exit criterion.** 1092/1092 game files compile on host32 and 3DS, 150/150 ARM9 `.s` assemble, both port archives build, and both programs link with **0 unresolved**.
 - **Phase 3 (data pipeline): done.** `builder/{verify_rom,extract_rom,pack}.py` make the HG/SS pack from your own cartridge; the real HG pack opens in the PC program and the boot errors are mapped.
 - **Phase 4 (boot to Oak): in progress.** The PC build reaches the logo, movie, title, main menu, Oak's speech, naming and the first bedroom; boot smoke tests and scripted inputs exist. Golden captures and the save round-trip are open.
-- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The latest tree adds the **battle Poképics** (the G2D software-sprite and ortho paths reach the port's 3D scene: both Pokémon render, `720 tris/scene`, 0 clipped) and a **close that no longer hangs** (the geometry ring is drained before its worker is joined; every shutdown step is logged). Its artifact is staged; a hardware re-run is pending.
+- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The latest tree adds the **battle Poképics** (the G2D software-sprite and ortho paths reach the port's 3D scene: both Pokémon render, `720 tris/scene`, 0 clipped), a **close that no longer hangs** (the geometry ring is drained before its worker is joined; every shutdown step is logged), and the **SoulSilver program** (`pokesoulsilver.3dsx`, its own folder and pack). Its artifacts are staged; a hardware re-run is pending.
 
-What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain. Players use the three scripts in `scripts/` ([USER-GUIDE](docs/USER-GUIDE.md)).
+What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`/`game-pc-ss`, `make game-3ds`/`game-3ds-ss` (packages `pokeheartgold.3dsx` and `pokesoulsilver.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain. Players use the three scripts in `scripts/` ([USER-GUIDE](docs/USER-GUIDE.md)).
 
 ## Content rules
 
@@ -48,7 +53,7 @@ This repo never holds game content. It contains no ROMs, no extracted assets, no
 ```
 python3 scripts/setup_toolchain.py                      # devkitARM, libctru, 3dsxtool
 python3 scripts/prepare_game.py ~/Downloads/game.nds    # your own HG or SS dump
-python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak
+python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak   # or soulsilver3ds.pak
 # then copy dist/sd-card/3ds onto the SD card
 ```
 

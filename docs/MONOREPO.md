@@ -141,7 +141,7 @@ git status --short                    # no untracked game content that could be 
 git ls-files | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'   # must be empty
 git log --all --oneline --stat | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'  # history audit
 git count-objects -vH                 # about 2 MB, no LFS needed
-make test                             # 354 Python tests + 20 SDK suites
+make test                             # 355 Python tests + 20 SDK suites
 make content-check
 ```
 
@@ -169,5 +169,5 @@ public push. The current history has none; keep it that way.
   plus `docs/upstream/platinum-camera-point.patch`
 - Patches: **82** (NitroSDK 16, NitroSystem 4, pokeheartgold 62)
 - DS gate at 78: HG and SS retail SHA1s pass (1904, 1905, 0304 and 0605 are port-only)
-- Latest `.3dsx`: 9,279,628 bytes
-  (`sha256 6bad8620…303f`); not in git
+- Latest `.3dsx`: HeartGold 9,279,628 bytes (`sha256 92381334…5285`); SoulSilver
+  9,279,668 bytes (`sha256 c2e9a50e…e4cf`); not in git

@@ -5,12 +5,18 @@ Usage (inside the dev container, after tools/bootstrap.py):
 
     python3 tools/hgss_game.py --target host32 --keep-going --out /work/out/game1
     python3 tools/hgss_game.py --target 3ds    --keep-going --out /work/out/game1
+    python3 tools/hgss_game.py --game soulsilver --target 3ds --out /work/out/ss
+
+`--game` selects the decomp's HEARTGOLD (the default) or SOULSILVER define and
+names the program accordingly (pokeheartgold-3ds.elf vs pokesoulsilver-3ds.elf;
+the packaged .3dsx drops the -3ds). Each variant needs its own --out directory:
+the game objects differ, and both programs must not share an object tree.
 
 This is the Phase 2 harness: it compiles the game as the port compiles the
 SDK, builds the port's libnitro/libnitrosystem, generates the overlay table
-and the Wi-Fi stand-ins, and links pokeheartgold-pc (host32) or
-pokeheartgold-3ds.elf (3ds, through the libctru/citro3d shell in
-hgss/game/app/main_3ds.c).
+and the Wi-Fi stand-ins, and links pokeheartgold-pc/pokesoulsilver-pc
+(host32) or pokeheartgold-3ds.elf/pokesoulsilver-3ds.elf (3ds, through the
+libctru/citro3d shell in hgss/game/app/main_3ds.c).
 
 The source lists come from tools/game_sources.py (game src/ C/C++ and the
 ARM9 .s data), the overlay ids and table from tools/game_overlays.py, the
@@ -110,6 +116,30 @@ PORT_DEFINES = ["-DSDK_ARM9", "-DSDK_TS", "-DSDK_4M", "-DSDK_CODE_ARM",
                 # game links but silently skips work.
                 "-DPM_KEEP_ASSERTS"]
 
+#: The two games this tree builds. `define` is what the decomp's config.h
+#: reads (HEARTGOLD/SOULSILVER); `binary` names the linked program and the
+#: packaged .3dsx; `app` is the SMDH short name and the log banner.
+GAMES = {
+    "heartgold": {
+        "define": "HEARTGOLD",
+        "binary": "pokeheartgold",
+        "app": "pokeheartgold-3ds",
+        "title": "HeartGold on 3DS",
+    },
+    "soulsilver": {
+        "define": "SOULSILVER",
+        "binary": "pokesoulsilver",
+        "app": "pokesoulsilver-3ds",
+        "title": "SoulSilver on 3DS",
+    },
+}
+GAME = GAMES["heartgold"]
+
+
+def game_defines() -> list[str]:
+    """The -D that selects this build's game in the decomp's config.h."""
+    return ["-D" + GAME["define"]]
+
 WARNINGS = ["-Wall", "-Wuninitialized", "-Wmaybe-uninitialized"]
 SECTION_FLAGS = ["-ffunction-sections", "-fdata-sections"]
 
@@ -148,6 +178,13 @@ def target_tools(target: str) -> dict[str, str]:
     raise ValueError(f"unknown target {target!r}")
 
 
+def binary_name(out: Path, target: str) -> Path:
+    """The linked program's path for this game and target."""
+    if target == "host32":
+        return out / f"{GAME['binary']}-pc"
+    return out / f"{GAME['binary']}-3ds.elf"
+
+
 def port_cflags(target: str, cxx: bool = False) -> list[str]:
     """The port's compiler flags (3ds_port/common.mk) for one target.
 
@@ -164,6 +201,7 @@ def port_cflags(target: str, cxx: bool = False) -> list[str]:
              "-fno-aggressive-loop-optimizations",
              "-fno-delete-null-pointer-checks"]
     flags += PORT_DEFINES
+    flags += game_defines()
     flags += WARNINGS + SECTION_FLAGS
     if cxx:
         flags += ["-fno-exceptions", "-fno-rtti"]
@@ -443,7 +481,7 @@ def asm_flags(target: str, root: Path, out: Path) -> list[str]:
     but no C-only -std/-f flags (s_to_gas passes them to the preprocessor,
     which rejects some of them for assembler input)."""
     machine = list(HOST_FLAGS) if target == "host32" else list(ARM_FLAGS)
-    return machine + PORT_DEFINES + include_flags(root, out)
+    return machine + PORT_DEFINES + game_defines() + include_flags(root, out)
 
 
 def overlay_command(root: Path, out: Path, objcopy: str) -> list[str]:
@@ -754,8 +792,8 @@ def make_smdh(binary: Path) -> Path | None:
     smdh = binary.with_suffix(".smdh")
     if not tool.is_file() or not icon.is_file():
         return None
-    proc = subprocess.run([str(tool), "--create", "pokeheartgold-3ds",
-                           "HeartGold/SoulSilver on 3DS", "pokeheartgold-3ds",
+    proc = subprocess.run([str(tool), "--create", GAME["app"],
+                           GAME["title"], GAME["app"],
                            str(icon), str(smdh)],
                           capture_output=True, text=True)
     if proc.returncode != 0 or not smdh.is_file():
@@ -1163,6 +1201,9 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", choices=["host32", "3ds"], default="host32")
+    ap.add_argument("--game", choices=sorted(GAMES), default="heartgold",
+                    help="which version to build (default: heartgold); selects "
+                    "the decomp's HEARTGOLD/SOULSILVER define and the program name")
     ap.add_argument("--root", type=Path, default=DEFAULT_ROOT,
                     help="patched pokeheartgold checkout (default: build/upstream)")
     ap.add_argument("--out", type=Path, required=True,
@@ -1176,7 +1217,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="host32 only: build with -fsanitize=address,undefined")
     args = ap.parse_args(argv)
 
-    global SANITIZE
+    global SANITIZE, GAME
+    GAME = GAMES[args.game]
     if args.sanitize:
         if args.target != "host32":
             ap.error("--sanitize is host32 only")
@@ -1205,7 +1247,7 @@ def main(argv: list[str] | None = None) -> int:
 
     data = gs.all_data(root)
     sources = select_sources(data)
-    print(f"== {args.target}: {len(sources['c'])} C, {len(sources['cpp'])} C++, "
+    print(f"== {args.game} {args.target}: {len(sources['c'])} C, {len(sources['cpp'])} C++, "
           f"{len(sources['asm'])} .s")
 
     cflags = port_cflags(args.target)
@@ -1339,10 +1381,8 @@ def main(argv: list[str] | None = None) -> int:
     if not table_ok:
         print(f"     {table_errors:4d}  overlay_table.c  ({table_log})")
 
-    print(f"== link -> {out / 'pokeheartgold-pc' if args.target == 'host32' else out / 'pokeheartgold-3ds.elf'}",
-          flush=True)
-    binary = out / ("pokeheartgold-pc" if args.target == "host32"
-                    else "pokeheartgold-3ds.elf")
+    print(f"== link -> {binary_name(out, args.target)}", flush=True)
+    binary = binary_name(out, args.target)
     rsp = out / "link.rsp"
     link = link_command(tools["cc"], args.target, app_objects, game_objects,
                         [], table_obj, gen / "overlay_ids.ld",

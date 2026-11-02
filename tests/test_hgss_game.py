@@ -594,7 +594,7 @@ class OverlayCheckTests(unittest.TestCase):
     def test_3ds_shell_shows_the_pak_error_on_screen(self):
         text = (self.APP / "main_3ds.c").read_text()
         self.assertIn("consoleClear();", text)
-        self.assertIn('printf("\\n pokeheartgold-3ds', text)
+        self.assertIn('printf("\\n " HEARTGOLD_APP_NAME', text)
         self.assertIn("Press START to exit", text)
         # The error is logged when the open fails, and printed on the console
         # after consoleClear(); the screen text must be the latter.
@@ -1055,14 +1055,15 @@ class ThreeDsxValidationTests(unittest.TestCase):
 class RomHeaderTests(unittest.TestCase):
     """The cartridge header the shell hands the game."""
 
-    def test_game_code_is_heartgold(self):
+    def test_game_codes_cover_both_games(self):
         header = (REPO / "hgss" / "game" / "app" / "heartgold.h").read_text()
-        match = re.search(r'#define HEARTGOLD_ROM_GAME_CODE "([A-Z0-9]{4})"', header)
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1), "IPKE")   # HG US; SoulSilver is IPGE
+        codes = re.findall(r'#define HEARTGOLD_ROM_GAME_CODE "([A-Z0-9]{4})"', header)
+        self.assertEqual(sorted(codes), ["IPGE", "IPKE"])  # SoulSilver, HeartGold
+        self.assertIn("#if defined(SOULSILVER)", header)
         source = (REPO / "hgss" / "game" / "app" / "heartgold.c").read_text()
         self.assertIn("HEARTGOLD_ROM_GAME_CODE", source)
         self.assertNotIn('"IPGE"', source)
+        self.assertNotIn('"IPKE"', source)
 
     def test_game_code_agrees_with_the_builder(self):
         import importlib.util
