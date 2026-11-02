@@ -175,9 +175,9 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 
 This fetches the decomp at the commit in `upstream.lock` into `build/upstream/`, applies the **78** patch files from `patches/` as commits, and links `build/NitroSDK` and `build/NitroSystem` to the SDK sources. The fetch needs network access to GitHub.
 
-**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, seventy-eight `  applying ...` lines, and `Done: build/upstream (78 patches applied), build/NitroSDK, build/NitroSystem`.
+**You should see:** a `Fetching https://github.com/ctrl-cheeb-del/pokeheartgold.git @ 8cbb4a19ab78 ...` line, seventy-nine `  applying ...` lines, and `Done: build/upstream (79 patches applied), build/NitroSDK, build/NitroSystem`.
 
-Running it again prints `upstream: already at 8cbb4a19ab78 with 78 patches`.
+Running it again prints `upstream: already at 8cbb4a19ab78 with 79 patches`.
 
 ## 9. Run `make test`
 
@@ -205,7 +205,7 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/hgss_nitro.py make --target host32 --out /work/out/first lib -k -j8'
 ```
 
-**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` and `libnitrosystem.a` with no errors. `make port-tests` runs the vendored suites: **all of them pass** (at 78 patches; nitrosystem 17,122 checks, gx3d 327+229). The next step is the game build, `make game-pc` / `make game-3ds`, and the DS gate in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
+**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` and `libnitrosystem.a` with no errors. `make port-tests` runs the vendored suites: **all of them pass** (at 79 patches; nitrosystem 17,122 checks, gx3d 327+229). The next step is the game build, `make game-pc` / `make game-3ds`, and the DS gate in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 
 `hgss_nitro.py` explains the shim it builds in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired). The next work and the full error map are in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 

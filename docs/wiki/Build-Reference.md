@@ -70,7 +70,7 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 
 | Target | Command | Output | State |
 | --- | --- | --- | --- |
-| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **78 patches** |
+| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **79 patches** |
 | Host test gate | `make test` | test results only | **green** (338 Python tests + 20 SDK suites) |
 | SDK syntax survey | `make sdk-survey` or `python3 tools/sdk_compile_survey.py --m32 -j8` | counts | 270/284 (gcc 13), 269/284 (gcc 10) |
 | Port source survey | `python3 tools/port_compile_survey.py` | counts + first errors | **46/46, exit 0** |

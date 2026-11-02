@@ -30,7 +30,7 @@ Every game change is guarded by `SDK_PORT_3DS`, or it is a GCC-only fix that MWC
 
 Example: patch `1101` changes one header prototype, and its message says that `gcc -E -P` of the header is identical without the macro. Patch `0401` is the one patch that edits an existing DS line, from `#ifdef SDK_ARM9` to `#elif defined(SDK_ARM9)`. It keeps the same meaning without the macro, and its message says the preprocessed output is identical for both `SDK_ARM9` and `SDK_ARM7` ([patches/NitroSDK/0401](../../patches/NitroSDK/) message).
 
-The byte-identical gate is a full rebuild and a SHA1 check. The gate was re-run at **78 patches** and passed for both games (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). A patch that changes DS text needs that run before merge; patch `1407` is `SDK_PORT_3DS`-only, and the run is the evidence.
+The byte-identical gate is a full rebuild and a SHA1 check. The gate last ran at **78 patches** and passed for both games (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`); patches `1407` and `1904`, added since, are `SDK_PORT_3DS`-only. A patch that changes DS text needs that run before merge.
 
 ## The save format never changes
 
