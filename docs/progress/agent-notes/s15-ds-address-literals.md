@@ -1,9 +1,10 @@
 # S15: raw DS address literals (the wild-encounter crash)
 
 The owner's tenth hardware run (log-10) crashed on the first tall-grass wild
-encounter. This note records how the log was decoded, why the fault was not in
-the battle's 3D code, how the whole class of the same bug was found, and what
-is still unverified.
+encounter, and after the first fix the eleventh (log-11) crashed later in the
+same battle. This note records how the logs were decoded, why the faults were
+not in the battle's 3D code, how the whole class of the same bug was found
+(including what the first scan missed), and what is still unverified.
 
 ## Decoding log-10
 
@@ -45,7 +46,8 @@ A naïve grep finds noise (numeric tables, comments, DS-only `#else` copies).
 The reliable method is the preprocessor: compile each game source with the
 port's flags and `-E`, then look for a raw `0x02`-`0x07` address that is cast
 to a pointer. That found 17 sites in `src/`, and none elsewhere in compiled
-game code:
+game code. It missed three more because they are written with the leading zero
+dropped (`0x6010000`, `0x6400000`); see the log-11 section below.
 
 | area | sites |
 | --- | --- |
@@ -53,6 +55,7 @@ game code:
 | G3 swap-buffers (`0x04000540`) | `pokemon_summary_scene.c` |
 | DTCM IRQ-check (`0x027E0000`) | hall of fame, wireless trade, GTS, global terminal, battle factory, trade sequence, link battle, battle room results, plaza game |
 | LCDC VRAM (`0x06840000`) | `encounter_effect_particles.c` |
+| BG/OBJ VRAM (`0x6010000`, `0x6400000`) | `battle_system.c` (`BattleSystem_SetBackground`; found via log-11) |
 | shared main memory | `system_card.c` (`0x027FFC2C`), `wireless_manager.c` (`0x027FFC3C`) |
 
 The battle's own 3D code was clean: the fault was in the battle *setup* UI,
@@ -62,11 +65,41 @@ before any 3D scene. Trainer and link battles use the same
 `system_card.c`'s ROM-header mirrors were already `#ifdef SDK_PORT_3DS`; the
 reboot flag next to them was missed.
 
+## log-11: the battle background
+
+With the DISPCNT read fixed, the battle got as far as its background and
+faulted at `pc 0x008f0e24`, `r0 = 0x06010000`, `r1` a heap address,
+`r2 = 0x00010000`, `lr` in `BattleSystem_SetBackground`. That pc is inside
+`MIi_CpuCopy32` in the new build (`mi_memory.c`, the copy loop at line 70).
+
+`battle_system.c:854`:
+
+```c
+battleSystem->bgTiles = Heap_Alloc(HEAP_ID_BATTLE, 0x10000);
+MIi_CpuCopy32((void *)0x6010000, (u32 *)battleSystem->bgTiles, 0x10000);
+...
+vram = (u8 *)0x6400000;   // OBJ VRAM, for the terrain sprite
+```
+
+`0x06010000` is BG VRAM and `0x06400000` is OBJ VRAM on the DS. The port has
+`NitroPort_BgVram`/`NitroPort_ObjVram`, not those addresses, so the 64 KB copy
+reads unmapped memory. The opponent sprite had been drawn and the player's not
+because this runs during the battle background setup, before the rest of the
+intro.
+
+**Why the first scan missed it.** The scanner required an 8-digit spelling
+(`0x0[2-7]......`), but the decomp writes these three as
+`0x6010000`/`0x6400000`. The fix for the scanner: match a 7-or-8-digit token
+and range-check the *value* (`0x02000000`-`0x07FFFFFF`), not the text. A unit test now covers the
+7-digit form. A scan with the corrected matcher reports exactly these three
+sites and nothing else in `src/`.
+
 ## The fix
 
 Patch 1905 replaces each literal with the macro the rest of the engine uses:
 `reg_GX_DISPCNT` / `reg_GXS_DB_DISPCNT`, `reg_G3_SWAP_BUFFERS`, `HW_DTCM`,
-`HW_LCDC_VRAM + 0x40000`, `HW_MAIN_MEM + offset`. Every hunk is
+`HW_LCDC_VRAM + 0x40000`, `HW_BG_VRAM + 0x10000`/`HW_OBJ_VRAM`, and
+`HW_MAIN_MEM + offset`. Every hunk is
 `#ifdef SDK_PORT_3DS` with the original line in the `#else`, so the DS text is
 unchanged. The DTCM writes keep their arithmetic (`HW_INTR_CHECK_BUF -
 HW_DTCM`) and only swap the base, which is the same linker symbol on the DS.
@@ -93,12 +126,14 @@ compiled.
 
 ## Verification
 
-- Pre-1905 `wireless_status_icon.c` is reported by the scanner (two lines);
-  the fixed tree reports zero in `src/`.
-- The 3DS ELF's `WirelessStatusIcon_LoadChar` now loads `NitroPort_IoReg`
-  (`0x00d889e0`) from the literal pool instead of `mov r3, #0x04000000`.
-- The 3DS build is 1092/1092; `make test` is 344 tests; the artifact is
-  9,278,828 B, sha256 `44e13f9c…5f6b`.
+- The pre-1905 `wireless_status_icon.c` (two lines) and `battle_system.c`
+  (three lines) are reported by the corrected scanner; the fixed tree reports
+  zero in `src/`.
+- The 3DS ELF's `WirelessStatusIcon_LoadChar` loads `NitroPort_IoReg`
+  (`0x00d889e0`) from the literal pool instead of `mov r3, #0x04000000`, and
+  `BattleSystem_SetBackground` uses `NitroPort_BgVram`/`ObjVram`.
+- The 3DS build is 1092/1092; `make test` is 345 tests; the artifact is
+  9,278,840 B, sha256 `168bc1a2…5f6b`.
 - **Not yet: an end-to-end battle.** The scripted PC new game has no starter,
   and the west exit of New Bark Town is blocked until Elm gives one, so the
   runner cannot reach tall grass without a save. The owner's

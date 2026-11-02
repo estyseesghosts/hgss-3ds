@@ -226,10 +226,13 @@ transitions, the battle overlays load, the Pokémon and the opponent's
 silhouette appear, and the menu accepts input. Before patch **1905** the
 battle aborted on its first frame: `WirelessStatusIcon_LoadChar` read DISPCNT
 through `0x04000000`, which is unmapped on the port (log-10: exception,
-`r3 04000000`, pc in that function). Trainer and link battles take the same
-`Battle_CreateWirelessStatusIcon` path, so a trainer battle is a second check.
-If it still faults, send `log.txt` and the Luma dump; the pc maps with
-`arm-none-eabi-addr2line -e pokeheartgold-3ds.elf`.
+`r3 04000000`, pc in that function). With that fixed it aborted a little
+later, in `BattleSystem_SetBackground`'s 64 KB copy from BG VRAM
+`0x06010000` (log-11; the opponent sprite appeared, the player's did not).
+Both sites now use the port's arrays. Trainer and link battles take the same
+`Battle_CreateWirelessStatusIcon` and battle-background paths, so a trainer
+battle is a second check. If it still faults, send `log.txt` and the Luma
+dump; the pc maps with `arm-none-eabi-addr2line -e pokeheartgold-3ds.elf`.
 
 The same class of literal crashed later screens (the Pokémon summary, the
 encounter transition, the Hall of Fame, trades); patch 1905 converted all of

@@ -708,7 +708,7 @@ layer is not weakened to hide it. The tree is now at **79 patches**; the DS
 gate last ran at 78 and 1904's `#else` text is unchanged. The DS-side check is
 in [../wiki/Hardware-Testing.md](../wiki/Hardware-Testing.md); the trace is in
 [agent-notes/s14-options-vblank.md](agent-notes/s14-options-vblank.md). The
-artifact is **9,278,828 B** (`sha256 44e13f9c…5f6b`), 3DS build 1092/1092,
+artifact is **9,278,840 B** (`sha256 168bc1a2…5f6b`), 3DS build 1092/1092,
 `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages).
 
 **Wild encounters, session 12.** The tenth hardware log (log-10) faulted on
@@ -716,16 +716,19 @@ the first wild battle: `pc 008bcf0c`, `r3 04000000`, in
 `WirelessStatusIcon_LoadChar`, which read DISPCNT through a raw literal at
 battle setup. The port's DS memory is ordinary arrays, so that literal is
 unmapped; the DS build is fine because it is a register. The port's game
-sources had 17 such uses in compiled code (the battle's two, the summary's
-swap-buffers request, the encounter effect's LCDC clear, nine DTCM IRQ-check
-writes, and so on), all of which would fault when first reached. Patch **1905**
-converts every one to the port's `reg_*`/`HW_*` macros, and
-`tests/test_hw_addresses.py` scans the port-preprocessed sources so the class
-cannot come back. The 3DS ELF now loads `NitroPort_IoReg` in `LoadChar`. The
-end-to-end check is the hardware run: walk into tall grass and win/lose a
-battle. A PC replay needs a field save with a starter (the scripted new game
-has none), so the next session should keep the owner's `heartgold.sav` if it
-is available.
+sources had 20 such uses in compiled code (the battle's two, the background's
+two VRAM reads, the summary's swap-buffers request, the encounter effect's
+LCDC clear, nine DTCM IRQ-check writes, and so on). Patch **1905** converts
+every one to the port's `reg_*`/`HW_*` macros, and
+`tests/test_hw_addresses.py` scans the port-preprocessed sources (7- and
+8-digit forms) so the class cannot come back. The first sweep missed the
+battle background's `0x6010000`/`0x6400000` because they drop the leading
+zero; log-11 hit the copy, and the scanner now matches by value. The 3DS ELF
+loads `NitroPort_IoReg` in `LoadChar` and the port's VRAM arrays in
+`BattleSystem_SetBackground`. The end-to-end check is the hardware run: walk
+into tall grass and finish a battle. A PC replay needs a field save with a
+starter (the scripted new game has none), so the next session should keep the
+owner's `heartgold.sav` if it is available.
 
 ## Pending user runs
 

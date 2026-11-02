@@ -34,7 +34,10 @@ DEFINED = {
 }
 
 DIRECTIVE = re.compile(r"^\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)$")
-ADDRESS = re.compile(r"0x0[2-7][0-9A-Fa-f]{6}")
+# A hex token long enough to be a DS address; the value is range-checked below.
+# Some sources drop the leading zero (0x6010000, 0x6400000), so match 7 or 8
+# digits and then test the value, rather than the text.
+ADDRESS = re.compile(r"0x[0-9A-Fa-f]{7,8}\b")
 # The address immediately follows a pointer cast: (u32 *)0x..., (void *)0x...,
 # ((vu16 *)0x...  or  *(u32 *)0x...
 CAST = re.compile(
@@ -121,6 +124,9 @@ def raw_addresses(text, path="<text>"):
     for number, line in active_lines(text):
         code = line.split("//")[0]
         for match in ADDRESS.finditer(code):
+            value = int(match.group(0), 16)
+            if not (0x02000000 <= value <= 0x07FFFFFF):
+                continue
             if CAST.search(code[: match.start()]) or re.match(
                 r"^\s*\*\s*\(\s*(?:vu?32|vu?16|vu?8|u32|u16|u8)\s*\*\)\s*$",
                 code[: match.start()],
@@ -180,6 +186,11 @@ class PreprocessorModelTests(unittest.TestCase):
     def test_numeric_constants_are_not_addresses(self):
         text = "    a = value * 0x02E90EDD + 1;\n"
         self.assertEqual(raw_addresses(text), [])
+
+    def test_seven_digit_literals_are_addresses(self):
+        # battle_system.c writes 0x6010000 rather than 0x06010000.
+        text = "    MIi_CpuCopy32((void *)0x6010000, dst, 0x10000);\n"
+        self.assertEqual(len(raw_addresses(text)), 1)
 
     def test_multiline_parameter_lists_are_scanned(self):
         text = (

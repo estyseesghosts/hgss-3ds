@@ -1,18 +1,24 @@
-From b2fafa898e86b10d18575ef274909e9b55420617 Mon Sep 17 00:00:00 2001
+From b7f176b582e6b0dcf911c72125e1825ac479b057 Mon Sep 17 00:00:00 2001
 From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
 Date: Mon, 2 Nov 2026 04:14:14 +0000
 Subject: [PATCH] hardware addresses: use the port's memory and register macros
  (SDK_PORT_3DS)
 
-The game code still dereferenced DS addresses by literal in 17 places. The
-port's memory areas are ordinary arrays (patch 1301), so a literal such as
-0x04000000 or 0x027E0000 points at unmapped memory on the 3DS and on host32.
-The first one reached in normal play is the battle: on the frame an encounter
-starts, WirelessStatusIcon_Create -> WirelessStatusIcon_LoadChar reads DISPCNT
-through 0x04000000 to pick the OBJ character mapping. Log-10 faults there
-(exception, pc in LoadChar, r3 = 0x04000000) right after the battle overlays
-load, which is the tall-grass wild encounter crash. Trainer and link battles
-take the same Battle_CreateWirelessStatusIcon path.
+The game code still dereferenced DS addresses by literal in 20 places -- some
+written with the leading zero dropped (0x6010000, 0x6400000), which is how the
+first sweep missed three of them. The port's memory areas are ordinary arrays
+(patch 1301), so a literal such as 0x04000000 or 0x027E0000 points at unmapped
+memory on the 3DS and on host32.
+
+Two crashes in normal play, both from this class:
+
+- The tall-grass wild encounter aborted on its first battle frame (log-10):
+  WirelessStatusIcon_LoadChar reads DISPCNT through 0x04000000 to pick the OBJ
+  character mapping, right after the battle overlays load. Trainer and link
+  battles take the same Battle_CreateWirelessStatusIcon path.
+- With that fixed, the battle got as far as its background and aborted in
+  BattleSystem_SetBackground (log-11): MIi_CpuCopy32 copies 0x10000 bytes from
+  BG VRAM 0x06010000, and the terrain pass then reads OBJ VRAM 0x06400000.
 
 The same class, converted here:
 
@@ -20,6 +26,7 @@ The same class, converted here:
   trade app, and the G3 swap-buffers request in the Pokemon summary, now use
   reg_GX_DISPCNT, reg_GXS_DB_DISPCNT and reg_G3_SWAP_BUFFERS (all built on
   HW_REG_BASE, which 1301 points at NitroPort_IoReg).
+- The battle background uses HW_BG_VRAM + 0x10000 and HW_OBJ_VRAM.
 - Nine DTCM IRQ-check writes (eight V-blank handlers and the trade animation
   task) use HW_DTCM -- already the port's DTCM array, and on the DS the same
   linker symbol -- instead of 0x027E0000; the code after them is unchanged.
@@ -41,30 +48,30 @@ not converted, with reason: sub/lib/src/sound_driver.c's REG_POWCNT2
 power_manager_driver.c, is not built for the port; the wireless sub/ sources
 (wl_*, wmsp_*, wvr_*) are the ARM7 Wi-Fi stack, which the port stubs.
 
-Checked: tests/test_hw_addresses.py (new) models the port preprocessor and
-reports the pre-patch wireless_status_icon.c, and the fixed tree has no raw
-DS pointer literal in src/; the 3DS ELF's LoadChar now loads NitroPort_IoReg
-(0x00d889e0) from the literal pool instead of moving 0x04000000. The battle
-itself was not replayed on the PC: the scripted new game has no starter and
-New Bark Town's west exit is blocked, so the owner's hardware run is the
-end-to-end check.
+Checked: tests/test_hw_addresses.py (new) preprocesses the game sources for the
+port and reports every one of these, including the 7-digit forms, while
+ignoring the DS-only #else copies; the fixed tree reports none. The 3DS ELF's
+LoadChar now loads NitroPort_IoReg (0x00d889e0) from the literal pool instead
+of moving 0x04000000, and BattleSystem_SetBackground uses the port's VRAM
+arrays. The end-to-end battle is the owner's hardware run.
 ---
- src/application/battle_room_results.c             | 4 ++++
- src/application/plaza_game_mime_jr_top.c          | 4 ++++
- src/application/spin_trade/spin_trade_group_app.c | 5 +++++
- src/application/trade_sequence/trade_sequence.c   | 4 ++++
- src/battle/link_battle_screen.c                   | 4 ++++
- src/field/encounter_effect_particles.c            | 8 ++++++--
- src/frontier/battle_factory_app.c                 | 4 ++++
- src/global_terminal/global_terminal_connect.c     | 4 ++++
- src/gts/gts.c                                     | 4 ++++
- src/hall_of_fame_showcase.c                       | 4 ++++
- src/pokemon_summary_scene.c                       | 4 ++++
- src/system_card.c                                 | 4 ++++
- src/wireless_manager.c                            | 4 ++++
- src/wireless_status_icon.c                        | 8 ++++++++
- src/wireless_trade_select_mon.c                   | 4 ++++
- 15 files changed, 67 insertions(+), 2 deletions(-)
+ src/application/battle_room_results.c             |  4 ++++
+ src/application/plaza_game_mime_jr_top.c          |  4 ++++
+ src/application/spin_trade/spin_trade_group_app.c |  5 +++++
+ src/application/trade_sequence/trade_sequence.c   |  4 ++++
+ src/battle/battle_system.c                        | 12 ++++++++++++
+ src/battle/link_battle_screen.c                   |  4 ++++
+ src/field/encounter_effect_particles.c            |  8 ++++++--
+ src/frontier/battle_factory_app.c                 |  4 ++++
+ src/global_terminal/global_terminal_connect.c     |  4 ++++
+ src/gts/gts.c                                     |  4 ++++
+ src/hall_of_fame_showcase.c                       |  4 ++++
+ src/pokemon_summary_scene.c                       |  4 ++++
+ src/system_card.c                                 |  4 ++++
+ src/wireless_manager.c                            |  4 ++++
+ src/wireless_status_icon.c                        |  8 ++++++++
+ src/wireless_trade_select_mon.c                   |  4 ++++
+ 16 files changed, 79 insertions(+), 2 deletions(-)
 
 diff --git a/src/application/battle_room_results.c b/src/application/battle_room_results.c
 index 45ecb80..84a110a 100644
@@ -132,6 +139,43 @@ index 22eb840..3483061 100644
  
      SpriteList_RenderAndAnimateSprites(ts->spriteList);
      OamManager_ApplyAndResetBuffers();
+diff --git a/src/battle/battle_system.c b/src/battle/battle_system.c
+index 12013cd..93ac6a5 100644
+--- a/src/battle/battle_system.c
++++ b/src/battle/battle_system.c
+@@ -851,12 +851,20 @@ void BattleSystem_SetBackground(BattleSystem *battleSystem) {
+     battleSystem->bgTiles = Heap_Alloc(HEAP_ID_BATTLE, 0x10000);
+     battleSystem->bgPalette = Heap_Alloc(HEAP_ID_BATTLE, 0x200);
+ 
++#ifdef SDK_PORT_3DS
++    MIi_CpuCopy32((void *)(HW_BG_VRAM + 0x10000), (u32 *)battleSystem->bgTiles, 0x10000);
++#else
+     MIi_CpuCopy32((void *)0x6010000, (u32 *)battleSystem->bgTiles, 0x10000);
++#endif
+     dst = (u32 *)battleSystem->bgPalette;
+     src = (u32 *)PaletteData_GetUnfadedBuf(battleSystem->palette, PLTTBUF_MAIN_BG);
+     MIi_CpuCopy32(src, dst, 0x200);
+ 
++#ifdef SDK_PORT_3DS
++    vram = (u8 *)HW_OBJ_VRAM;
++#else
+     vram = (u8 *)0x6400000;
++#endif
+     image = Sprite_GetImageProxy(battleSystem->terrains[1].sprite->sprite);
+     vram += image->vramLocation.baseAddrOfVram[NNS_G2D_VRAM_TYPE_2DMAIN];
+ 
+@@ -883,7 +891,11 @@ void BattleSystem_SetBackground(BattleSystem *battleSystem) {
+         }
+     }
+ 
++#ifdef SDK_PORT_3DS
++    vram = (u8 *)HW_OBJ_VRAM;
++#else
+     vram = (u8 *)0x6400000;
++#endif
+     image = Sprite_GetImageProxy(battleSystem->terrains[0].sprite->sprite);
+     vram += image->vramLocation.baseAddrOfVram[NNS_G2D_VRAM_TYPE_2DMAIN];
+ 
 diff --git a/src/battle/link_battle_screen.c b/src/battle/link_battle_screen.c
 index 9e88a03..00dda9d 100644
 --- a/src/battle/link_battle_screen.c

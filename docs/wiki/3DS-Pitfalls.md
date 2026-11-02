@@ -554,12 +554,16 @@ are the real registers, which is why the matching decomp never showed it. The
 PC build has the same fault; it had simply never reached a battle.
 
 This was not the only one. A preprocessor-aware scan of the game sources found
-17 raw DS address uses in code the port compiles -- the two in this function
-(the DISPCNT and DB_DISPCNT branches) and 15 more: the same DISPCNT pair in
+20 raw DS address uses in code the port compiles -- the two in this function
+(the DISPCNT and DB_DISPCNT branches) and 18 more: the same DISPCNT pair in
 the spin trade app, the G3 swap-buffers request in the Pokémon summary
 (`0x04000540`), nine DTCM IRQ-check writes (`0x027E0000`), the encounter
-effect's clear of the display-capture VRAM (`0x06840000`), and two shared
-main-memory offsets (`0x027FFC2C`, `0x027FFC3C`).
+effect's clear of the display-capture VRAM (`0x06840000`), the battle
+background's copies from BG VRAM `0x06010000` and OBJ VRAM `0x06400000`, and
+two shared main-memory offsets (`0x027FFC2C`, `0x027FFC3C`). The first sweep
+missed the last three because `battle_system.c` writes them with the leading
+zero dropped (`0x6010000`, `0x6400000`); the scanner now matches the value,
+not the spelling.
 
 **Fix.** Patch **1905** replaces each with the macro the rest of the engine
 already uses: `reg_GX_DISPCNT` / `reg_GXS_DB_DISPCNT`,
@@ -572,9 +576,11 @@ DS address in the compiled sources (it catches the pre-1905
 
 **Checked.** The 3DS ELF's `LoadChar` now gets the register's address from the
 literal pool (`0x00d889e0` = `NitroPort_IoReg`) instead of
-`mov r3, #0x04000000`. The scanner reports 0 uses in `src/`. That raw literal
-is the one log-10 faulted on: v1.0 (`3f493661`) at pc `0x008bcf0c`, `r3 =
-0x04000000`.
+`mov r3, #0x04000000`, and `BattleSystem_SetBackground` uses the port's VRAM
+arrays instead of `0x6010000`/`0x6400000`. The scanner reports 0 uses in
+`src/`. The raw literals are the ones log-10 (`pc 0x008bcf0c`, `r3 =
+0x04000000`) and log-11 (`pc` in the `MIi_CpuCopy32` loop, `r0 = 0x06010000`,
+`lr` in `BattleSystem_SetBackground`) faulted on.
 
 Full trace and the class table: [agent-notes/s15-ds-address-literals.md](../progress/agent-notes/s15-ds-address-literals.md).
 
