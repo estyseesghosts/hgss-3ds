@@ -1,5 +1,11 @@
 # S12: frame cap, audio noise offset, camera-point 3D (session 9)
 
+> **Historical; the audio and 3D parts are superseded by S13.** Patch 1407
+> fixed a real noise-register bug but was not sufficient: NNS's `_0210D750`
+> table was linked to a pointer table, and the title mix was 6 dB hot. The
+> zero-area camera-plane triangles are dropped (not given a `w`). See
+> [s13-nns-volume-table.md](s13-nns-volume-table.md).
+
 This note is the audit trail for the three fixes after the ninth hardware run
 (log-9) and for the process problems hit while landing them. The living state
 is [STATE.md](../STATE.md); the user-facing rules are in

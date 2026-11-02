@@ -290,7 +290,7 @@ Run from the repo root. `make test` runs the first two groups and nothing else. 
 Notes:
 
 - The SDK runners take `[ROOT]`, which defaults to `build/upstream`, or a patched tree. `make test` passes `build/upstream`. Most runners compile with `-m32 -malign-double` and the flags of `tools/sdk_compile_survey.py`. `nns_clz` and `small` keep their own flag lists in the script. Each runner prints its own pass or fail lines and exits non-zero on failure.
-- `make test` runs `tool-tests` (the Python files under `tests/`, **334 tests in all**) and then each `tests/sdk/*/run.sh` (**20 suites**). Last run: exit 0.
+- `make test` runs `tool-tests` (the Python files under `tests/`, **338 tests in all**) and then each `tests/sdk/*/run.sh` (**20 suites**). Last run: exit 0.
 - `tests/sdk/port_memory.c` is a helper, not a suite: it defines the eleven port memory arrays for the suites whose SDK objects touch registers or main memory (patches 1301/1302). A test that needs them links it from its `run.sh`.
 - `tests/layout_probe/run.sh` reads `PY` (Python with pyelftools; default `python3`), `DECOMP` (default `/work/pokeheartgold`) and `FILES` (default `$DECOMP/files`). Extra arguments are passed to `run_probe.py`.
 - `tests/inputs/*.txt` are the frame-indexed input scripts (`boot-title`, `main-menu-nosave`, `newgame-buttons`, `newgame-touch`) for the PC runner and the 3DS `script.txt`. They are calibrated against the PC run; a melonDS capture is still open.
@@ -306,7 +306,7 @@ From the repo `Makefile`:
 | `make tool-tests` | `python3 -I -m unittest discover -s tests` | |
 | `make sdk-tests` | every `tests/sdk/*/run.sh build/upstream` | |
 | `make sdk-survey` | `tools/sdk_compile_survey.py -j $(nproc) --m32` | Exits 1 while files fail (14 at last run). |
-| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 78 patches** (nitrosystem 17,122 checks; gx3d 337+239). |
+| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 78 patches** (nitrosystem 17,122 checks; gx3d 327+229). |
 | `make content-check` | `python3 tools/check_repo_content.py` | Fails if a ROM/save/pak/build artifact is tracked; also part of `make test`. |
 | `make layout` | `bash tests/layout_probe/run.sh` | |
 | `make clean` | `rm -rf build` | Deletes everything under `build/`, including `build/upstream` and `build/reference`. |

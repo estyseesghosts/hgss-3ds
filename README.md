@@ -4,11 +4,11 @@ A native 3DS port of Pokémon HeartGold and SoulSilver, built from the [ctrl-che
 
 **It runs on a New 3DS.** The build boots HeartGold, plays the intro, reaches
 Oak's speech and the player's bedroom, draws both screens with the PICA 3D
-layer, and plays audio. The latest artifact (frame cap + audio + camera-point
-fixes) is staged for a hardware re-run; its visual/audio/timing results are
-still pending. This is not a finished port: the save round-trip, Old 3DS and
-`.cia` decisions are open. The living status is
-[docs/progress/STATE.md](docs/progress/STATE.md).
+layer, and plays audio. The latest artifact (60 Hz cap, NNS volume table, 6 dB
+output trim and camera-plane drop) is staged for a hardware re-run; its
+visual/audio/timing results are still pending. This is not a finished port:
+the save round-trip, Old 3DS and `.cia` decisions are open. The living status
+is [docs/progress/STATE.md](docs/progress/STATE.md).
 
 The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 
@@ -19,7 +19,7 @@ The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 - **Phase 2 (game under GCC): done for the exit criterion.** 1092/1092 game files compile on host32 and 3DS, 150/150 ARM9 `.s` assemble, both port archives build, and both programs link with **0 unresolved**.
 - **Phase 3 (data pipeline): done.** `builder/{verify_rom,extract_rom,pack}.py` make the HG/SS pack from your own cartridge; the real HG pack opens in the PC program and the boot errors are mapped.
 - **Phase 4 (boot to Oak): in progress.** The PC build reaches the logo, movie, title, main menu, Oak's speech, naming and the first bedroom; boot smoke tests and scripted inputs exist. Golden captures and the save round-trip are open.
-- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The ninth run showed the 3D at ~87 Hz; the latest tree adds a **60 Hz frame cap**, the **noise-channel register fix** and the **camera-point 3D fix**. Its artifact is staged; a hardware re-run is pending.
+- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The ninth run showed the 3D at ~87 Hz; the latest tree adds a **60 Hz frame cap**, the **NNS volume-table fix**, a **6 dB output trim** with **PSG duty-7 silence**, and the **camera-plane triangle drop** that keeps Ho-oh's wings intact. Its artifact is staged; a hardware re-run is pending.
 
 What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain.
 
@@ -62,14 +62,14 @@ pokeheartgold-3ds/
   Makefile            make test, sdk-survey, layout, port-tests, game-pc, game-3ds, clean
   3ds_port/           hardware layer from pokeplatinum-3ds: nitro, nitrosystem, pak, game
                       (HGSS's own shell is hgss/game/app; one deliberate upstream-style
-                      camera-point fix diverges from platinum.lock, see docs/decisions.md)
+                      camera-plane drop diverges from platinum.lock, see docs/decisions.md)
   patches/            numbered patches for the decomp, in three stacks: NitroSDK, NitroSystem, pokeheartgold
   builder/            verify/extract/pack the user's own ROM into the data pack
   tools/              bootstrap, toolchain install, matching build, surveys, savetool,
                       layout probe, golden capture scripts, content check
   tests/              Python tests, SDK host suites (tests/sdk/*), layout probe runner, input scripts
   docs/               progress records, decision log, pins, the wiki, and docs/upstream/ patches
-                      for third-party projects (the Platinum camera-point fix)
+                      for third-party projects (the Platinum camera-plane drop)
   .devcontainer/      dev container image and its setup scripts
   .github/workflows/  port.yml (public CI; green on the first push) and matching.yml (disabled)
   build/              git-ignored output; a Docker volume inside the container

@@ -30,7 +30,7 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 ## C
 
-**Camera point.** A vertex that transforms exactly to clip `(0,0,0,0)` (at the camera). The DS and the PC reference put it at screen `(0,0)` and draw the triangles touching it as a fan from that corner. HGSS's title quads/quad strips use one; the PICA cannot divide by `w = 0`, so the port gives it `clip[3] = 1` in `to_screen()` ([3DS-Pitfalls](3DS-Pitfalls.md#a-camera-plane-vertex-is-a-fan-from-the-top-left-corner)).
+**Camera-plane triangle.** A triangle with a vertex whose clip coordinates are exactly `(0,0,0,0)` (on the camera plane). Both edges from that vertex to a real vertex project to that vertex's screen point, so the triangle has **zero screen area** and the DS stores no polygon. HGSS's title quads/quad strips contain one on Ho-oh; the port drops it in `stage_triangle()` (`camera_plane()`), because drawing it as a fan from screen `(0,0)` deformed the wing ([3DS-Pitfalls](3DS-Pitfalls.md#a-camera-plane-triangle-has-no-screen-area)).
 
 **Capture (display capture).** A DS feature that copies the output of a 2D screen, or the 3D output, into VRAM. The plan names motion blur, encounter particles and a legendary cinematic as users. The port's version is planned in Phase 6 ([gameplan.md](../../gameplan.md), Phase 6b).
 
@@ -141,7 +141,6 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **Noise channel.** Sound channels 14 and 15, driven by `SND_SetupChannelNoise`. After patch 1405 the port array is indexed by the DS low 16-bit address, so the control is at `0x400 + 16c`, not `16c`; patch 1407 fixes the two writes ([3DS-Pitfalls](3DS-Pitfalls.md#a-noise-note-writes-an-unused-hole)).
 
 **NNS volume table (`_0210D750`).** NitroSystem's 128-entry linear 0..127 volume-to-decibel table, used by `snd_player.c` before it pushes a player volume to the ARM7. On the DS it aliases NitroSDK's `SNDi_DecibelTable`; the port supplies it in `hgss/compat/src/nns_volume_table.c` because the decomp's empty alias section lands elsewhere under the port link ([3DS-Pitfalls](3DS-Pitfalls.md#the-nns-volume-table-is-an-empty-alias)).
-
 **NARC.** The DS's archive format for game data files. Its generated index headers have the extension `.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4).
 
 **NAIX.** The extension of the generated NARC index headers, such as `msgdata/msg.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4; [tools/layout_probe/run_probe.py](../../tools/layout_probe/run_probe.py)).

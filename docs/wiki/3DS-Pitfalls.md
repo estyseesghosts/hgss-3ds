@@ -1,11 +1,11 @@
 # 3DS shell pitfalls
 
-Everything on this page was found on hardware, in one session, in this order.
-Each entry is a symptom, the cause, the fix, and the rule to keep. The shells
+Everything on this page is a hardware symptom or a defect found while
+bringing the hardware up. Each entry is a symptom, the cause, the fix, and
+the rule to keep. The shells
 are `hgss/game/app/main_3ds.c` (3DS) and `main_pc.c` (PC); the port layer
-(`3ds_port/`) is vendored from Platinum and carries one recorded 3D fix, so all
-of this is shell-side
-unless stated.
+(`3ds_port/`) is vendored from Platinum and carries one recorded 3D fix (the
+camera-plane triangle drop), so all of this is shell-side unless stated.
 
 Read this before changing the display, the audio output, or the startup
 sequence.
@@ -250,7 +250,9 @@ triangle from the corner. Both edges from a camera-plane vertex to a real
 vertex project to that vertex's screen point, so the triangle has **zero
 screen area**: the DS's clipper stores no polygon for it. The port was
 drawing a fan that the DS never draws. (A real DS title capture in melonDS
-shows Ho-oh intact.)
+shows Ho-oh intact.) Two `w` workarounds were tried first (`clip[3] = 1`, then
+a huge `w` to make its `1/w` negligible); both only changed the fan's shading,
+because the triangle has no area to draw.
 
 **Fix.** `3ds_port/nitro/src/port_gx3d.c` `stage_triangle()` detects the exact
 `(0, 0, 0, 0)` vertex (`camera_plane()`) and drops the polygon before it is
@@ -342,7 +344,9 @@ mixer reads channel 14 at `0x4E0`, never `0x0E0`.
 running looped PCM on 14/15, runs the noise setup, and checks the real
 registers (`0x4E0/0x4E8`, `0x4F0/0x4F8`) while `0x0E0/0x0E8` and channel 0 stay
 at their sentinels. Before the patch the suite reports 24 failures; after it,
-122 checks, 0 failures.
+122 checks, 0 failures. This fixed a real bug but was **not** the whole
+held-note cause: the NNS volume table below also held notes at full volume.
+See that entry.
 
 **Rule.** After the 1405 remap, every `NitroPort_SoundRegisters[...]` index is
 a DS low 16-bit address: channel *c* at `0x400 + 16c`, `SOUNDCNT` at `0x500`,
@@ -399,9 +403,9 @@ as 100% high instead of GBATEK's 0% (silence), adding a full-scale DC step
 whenever a sequence used it.
 
 **Fix.** `NitroPort_SoundRender` trims 6 dB (`>> 1`) at the shared output
-stage, matching the measured DS headroom; the mixer itself is unchanged, so
-its unit tests still check the register maths. `port_sound_chip.c` (and the
-test reference) return silence for PSG duty 7.
+stage, matching the measured DS headroom; the channel/volume maths stays in
+the mixer (whose tests still check it), except that PSG duty 7 is now silence
+in `port_sound_chip.c` and the test reference.
 
 **Rule.** "Sounds like the amp" is not proof it is the amp: lower the volume
 and listen. If the distortion remains, it is baked into the samples; compare

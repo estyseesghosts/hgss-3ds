@@ -162,7 +162,7 @@ a failure used to be ambiguous:
 | `[gx3d] PICA ready (classic path)` | The GPU worker initialised; the 3D path is live. |
 | `[gx3d] display on core 2` | The GPU/display worker has the New 3DS's free core, so its render overlaps the software 2D composite. |
 | `[gx3d] geometry on its own thread` | The geometry thread started; scenes are built off the game's thread. |
-| `3D images: N (scenes drawn: M)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate) now the worker has a core, not 10. If it stays low, the 3D is updating slowly whatever the screen shows. There is no `camera-plane drops` field any more: the camera-point fix keeps that geometry. |
+| `3D images: N (scenes drawn: M)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate) now the worker has a core, not 10. If it stays low, the 3D is updating slowly whatever the screen shows. There is no `camera-plane drops` field any more: the port drops the zero-area camera-plane triangles itself. |
 | `[gx3d] 3D setup failed …` / `couldn't start the 3D thread` / `no geometry thread` | The safe fallback: the game still runs 2D-only. Send the line; it names the failing step. |
 | `=== exception (type N) pc …` | A real fault in game code; map the pc with `addr2line`. |
 | `audio: N dropped frames of M` (at exit) | `N` large relative to `M` means the DSP was starved. |
@@ -170,12 +170,14 @@ a failure used to be ambiguous:
 
 Send `log.txt` whole; nothing on that page needs filtering.
 
-The noise-channel fix (patch 1407) and the NNS volume-table fix have no log
-line on the console: the build prints `[sound] _0210D750 -> ...` and the pass
-is by ear. Play a field and a battle and confirm a note fades out instead of
-sustaining a high-pitched crunch into the next note, and single sounds are not
-distorted. `audio: N dropped frames of M` near zero is the other half of the
-audio result.
+The noise-channel fix (patch 1407), the NNS volume-table fix and the 6 dB
+output trim have no log line on the console: the build prints `[sound]
+_0210D750 -> ...` and the pass is by ear. Play a field and a battle and confirm
+a note fades out instead of sustaining a high-pitched crunch into the next
+note, single sounds are not distorted, and the mix does not crunch even at low
+console volume (the 6 dB trim removed the sample-domain clipping, so lowering
+the volume is no longer the test). `audio: N dropped frames of M` near zero is
+the other half of the audio result.
 
 ## The scripted New 3DS run
 
@@ -188,15 +190,16 @@ audio result.
 3. **Passing:** the top screen shows the same sequence as the PC screenshots
    (logo, movie, title, menu, Oak, gender, naming, bedroom); the bedroom's room
    and player sprite are visible behind the dialogue box, the intro movie's 3D
-   renders, and nothing fans out black from a corner of the picture. `3D
+   renders, and nothing fans out from a corner of the picture. `3D
    images:` rises by roughly 300 every 600 frames while 3D is up, and walking
    animates smoothly rather than once a second. The title's Ho-oh has its
-   wings and body intact (the camera-point fan is textured, not black, and
-   there is no transparent gap). The app stays at full speed (no visible
+   wings and body intact: the camera-plane fan is gone, with no transparent
+   gap. The app stays at full speed (no visible
    stutter), and the game runs at its intended speed rather than fast:
    the log's mean `total_us` from `tools/frametime_report.py log.txt` is near
    **16,700** (60 Hz), not 11,500 (87 Hz). Audio is clean by ear — no note
-   hangs into the next one, which is what patch 1407 fixes — and `log.txt` ends
+   hangs into the next one (1407 plus the NNS volume table), no sample-domain
+   clipping even at low console volume (the 6 dB trim) — and `log.txt` ends
    with a frame count near the script's `end` without an exception block.
    `audio: N dropped frames of M` should be near zero relative to `M`.
 4. Save a copy of `log.txt` and note the frame count and any dropped frames.

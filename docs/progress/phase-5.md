@@ -1,14 +1,15 @@
 # Phase 5 progress
 
-Status: **runs on hardware; the 3D pipeline, camera-point fix, 60 Hz cap and
-audio fix package, pending a console re-run.** The game boots, plays the
-intro, reaches Oak's speech and the player's house, draws both screens and
+Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap and audio
+table/level fixes package, pending a console re-run.** The game boots, plays
+the intro, reaches Oak's speech and the player's house, draws both screens and
 plays audio. The ninth run (log-9) showed the GPU pipeline working at 87 Hz;
-frame starts are now capped at 60 Hz, the audio noise-channel offset is fixed,
-and the title camera-point fan is drawn with a positive `w` instead of being
-dropped. Remaining Phase 5 exits: the owner's hardware re-run (3D rate and
-title, audio by ear, frame times), a full-speed run through Oak's speech, the
-save round-trip, the Old 3DS decision and the `.cia` decision.
+frame starts are now capped at 60 Hz, the NNS volume table and a 6 dB output
+trim fix the audio, and the title's zero-area camera-plane triangles are
+dropped instead of being drawn as a fan. Remaining Phase 5 exits: the owner's
+hardware re-run (3D rate and title, audio by ear, frame times), a full-speed
+run through Oak's speech, the save round-trip, the Old 3DS decision and the
+`.cia` decision.
 
 Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
 
@@ -38,7 +39,7 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   thread. The exit log prints `audio: N dropped frames of M`. Without
   `dspfirm.cdc` the game runs silent, `log.txt` says so, and nothing else
   changes.
-- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,120 bytes** with the latest frame-cap/audio/camera-point fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-point sections below.
+- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,600 bytes** with the latest camera-plane-drop/audio-table/6 dB-trim fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-plane sections below.
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
   six-frame button holds and touch positions. Without a script the console's
@@ -522,16 +523,18 @@ the field at 19.8-20.9 ms (48-50 Hz) and the intro at 31-36 ms (28-32 Hz).
    `-O0`; the port archives were already `-O2`).
 3. `hgss/game/app/pica_scene.c` degenerates stored triangles with a `w <= 0`
    vertex before `NitroPort_PicaRender`; the count is in the log as
-   `camera-plane drops`. **(Superseded: the drop left a transparent gap in
-   Ho-oh. The final fix is the port camera-point change below; the file and
-   the log field are gone.)**
+   `camera-plane drops`. **(Superseded twice: the `w <= 0` drop left a
+   transparent gap in Ho-oh, and the `w = 1` / `w = 2^18` port workarounds
+   only changed the fan's shading. The final fix drops the exact zero-area
+   camera-plane triangles in `stage_triangle()`; the file and the log field
+   are gone. See below.)**
 4. The audio thread moves to priority `0x2e`, above the game (`0x30`) and the
    geometry thread (`0x2f`).
 
 The next log should show `[gx3d] display on core 2`, `3D images` near 300 per
-600 frames rather than 10, **no** `camera-plane drops` field (the drop is
-gone), and near-zero audio drops. The after frame times are still the owner's
-run.
+600 frames rather than 10, **no** `camera-plane drops` field (the workaround
+is gone; the port drops zero-area triangles itself), and near-zero audio
+drops. The after frame times are still the owner's run.
 
 **Local build for that run:** 1092/1092, 0 unresolved; `pokeheartgold.3dsx`
 9,277,656 B (`-O2` shrank it from 9,300,752); `3dsxdump` rc 0 (CODE 2126,
@@ -577,6 +580,8 @@ build compiles **1092/1092** with **0 unresolved** and packages
 RODATA 112, DATA 13, BSS 4446 pages) and the ELF carries
 `[perf] frame cap %d Hz`. Artifact
 `sha256 a25cbee94bbe59a3c496a6734cc5c7777d04f3e99b0cacf3f0f02f3a3cdaf910`.
+*(Historical session-8 artifact; see the final verification at the end of this
+page for the current one.)*
 None of the timing claims are verified: the container cannot run a console.
 
 ## The hung noise note: a missed 0x400 offset
@@ -629,50 +634,51 @@ s13-nns-volume-table.md) and
 [3DS-Pitfalls](../wiki/3DS-Pitfalls.md#the-nns-volume-table-is-an-empty-alias).
 
 
-**Local verification (container, 2026-11-01).** `python3 tools/bootstrap.py
---clean` applies **78 patches**; `make test` exits 0 with **329 Python tests**
-and the `tests/sdk/*` suites; the 3DS build compiles **1092/1092**, links with
-**0 unresolved** and packages `pokeheartgold.3dsx` (**9,278,592 bytes**,
-`sha256 d6c56cf59e3b1ab0b55827668a57927880e42119122caa4555044ffc223a5c4b`);
-`3dsxdump` exits **0** (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). **No
-hardware result:** the next run's log and ears should show no note hanging into
-the next one and `audio: N dropped frames of M` near zero.
+**Then the output level.** The notes were right, but the title was still about
+6 dB hotter than a calibrated melonDS capture (DS peak ≈0.42/RMS 0.071, port
+1.0/0.139), so percussion peaks hard-clipped in the samples — lowering the
+console volume did not remove it. `NitroPort_SoundRender` now trims 6 dB at the
+shared output stage; the title is 0.067-0.088 RMS, peak 0.5, 0% clipped. PSG
+duty 7 is also silence (GBATEK 0%) rather than a 100% DC level.
 
-## The camera-point vertex: the title fan, not a drop
+## The camera-plane triangle: zero area, not a wing
 
-The gap left after the S10 drop was the drop itself. The title's Ho-oh is
-built from **quads and quad strips** whose spine is a vertex transformed
-exactly to clip `(0, 0, 0, 0)`; the title's `BEGIN_VTXS` counts are quads
-17,016 and quad strips 22,688, with no triangle-list or triangle-strip zero
-vertex. The zero vertex is a real model point with valid fixed `s/t/colour`
-(`s=-16.4, t=15.6, colour=0x18c6` in the frame-4800 scene); it is the camera
-point, not a strip-restart sentinel.
+S10 and S11 read the title's fan as Ho-oh's left wing and tried to draw it
+faithfully: first give the exact `(0, 0, 0, 0)` vertex a positive `w`
+(`clip[3] = 1`), then make its `1/w` negligible. The hardware kept showing a
+deformed bird, and the user pointed out that the PC reference was deformed too.
+A real DS title capture (melonDS 1.1, retail ROM, the user's DS BIOS) settles
+it: Ho-oh is intact, with no fan and no gap. The fan is our software
+rasteriser's artifact, not the game.
 
-The PC reference and the DS draw that point at screen `(0,0)` and the fan from
-that corner. The PICA cannot divide by `w = 0`, which is why the triangles
-touching it were black. A viewport-centre mapping was tried and rejected: it
-moved the fan and cut Ho-oh's left wing off, and the software frame changed.
-The port now keeps the stored screen `(0,0)` and gives only the exact
-`(0,0,0,0)` vertex `clip[3] = 1` (20.12) in `to_screen()`, so the GPU divides
-it to the same corner with valid texture and colour; the PC software frame at
-title frame 4800 is byte-identical to the clean reference. The HGSS drop
-workaround, `pica_scene.c`, its app-source line, the `camera-plane drops`
-fields and `tests/game/pica_scene/` are removed.
+The vertex is on the **camera plane**, `(0, 0, 0, 0)`. Both edges from it to a
+real vertex project to that vertex's screen point, so a triangle with one of
+these has **zero screen area**; the DS's clipper stores no polygon for it. The
+software rasteriser stored its screen as `(0, 0)` and gave the triangle real
+area, which fanned the left wing out of the corner. `stage_triangle()` now
+drops exactly those triangles (`camera_plane()`), before either the software
+reference or the PICA scene sees them. Dropping every `w <= 0` triangle (the
+S10 workaround) also removed real near-plane-crossing wing geometry, which is
+why it left the transparent gap.
 
 `3ds_port/` is deliberately no longer byte-identical to `platinum.lock`; the
-upstream PR content is the one `to_screen()` hunk plus
-`test_camera_point_vertex` in `nitro/tests/test_gx3d.c`. The audit is
-[agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md).
+upstream PR content is the `camera_plane()`/`stage_triangle()` hunk plus
+`test_camera_plane_triangle` in `nitro/tests/test_gx3d.c`. The audit is
+[agent-notes/s13-nns-volume-table.md](agent-notes/s13-nns-volume-table.md);
+the earlier reasoning is kept in
+[agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md) for
+history.
 
-**Local verification (container, 2026-11-01).** `make test` **334 Python
-tests**, OK, plus 20 SDK suites; `make port-tests` gx3d **337 + 239** and
-nitrosystem **17,122 checks, 0 failed**; host32 1092/1092, 0 unresolved;
-3DS 1092/1092, 0 unresolved, `pokeheartgold.3dsx` **9,278,120 bytes**
-(`sha256 3f4936616ff68e32413b6b2c2e3a1630b8c27cc9a5e0a36b079e1f5aa9fb7f00`),
-`3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). The DS
-matching gate passed at **78 patches** for both games (HG
-`4fcded0e…b5a37`, SS `f8dc38ea…e582`). The PICA's textured fan and the gap
-are the owner's hardware check.
+**Local verification (session 10, container, 2026-11-01).** `make test` **338
+Python tests**, OK, plus 20 SDK suites; `make port-tests`: gx3d **327 + 229**,
+nitrosystem **17,122 checks, 0 failed**; host32 and 3DS 1092/1092, 0
+unresolved; 3DS `pokeheartgold.3dsx` **9,278,600 bytes**
+(`sha256 4cecadd071b4aa4557ad651c0982255132672ae90b86c0f74ce6679c25d508ab`),
+`3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). The PC title
+frame 4800 now shows the complete bird; the DS capture is the visual
+reference. The DS matching gate remains at **78 patches** for both games (HG
+`4fcded0e…b5a37`, SS `f8dc38ea…e582`). The PICA's title and the audio are the
+owner's hardware check.
 
 ## Pending user runs
 
@@ -691,9 +697,9 @@ SD card or run a cartridge.
 
 ## Open gaps
 
-- The classic PICA pipeline runs on hardware; the latest **60 Hz cap, audio
-  noise fix and camera-point 3D fix** are pending the owner's re-run (frame
-  times, no hung note, no title gap).
+- The classic PICA pipeline runs on hardware; the latest **60 Hz cap, NNS
+  volume-table/6 dB-trim audio fixes and camera-plane drop** are pending the
+  owner's re-run (frame times, no clipping, no title fan or gap).
 - Old 3DS 3D: the classic target and images need several MB of linear memory;
   `NitroPort_PicaInit` logs and falls back to 2D if it cannot get it, but the
   Old 3DS case is still unmeasured.
@@ -701,6 +707,7 @@ SD card or run a cartridge.
   the normal link stays libstdc++-free.
 - SMDH: `smdhtool` can package a generic, non-ROM icon; the cart-derived icon
   and banner are generated locally and never committed.
-- `3ds_port/` now carries one deliberate upstream-style fix (the camera-point
-  `to_screen()` hunk and its test); `platinum.lock` is unchanged and the PR
-  content is recorded in [decisions.md](../decisions.md).
+- `3ds_port/` now carries one deliberate upstream-style fix (the camera-plane
+  drop in `stage_triangle()` plus `test_camera_plane_triangle`); `platinum.lock`
+  is unchanged and the PR content is recorded in
+  [decisions.md](../decisions.md).

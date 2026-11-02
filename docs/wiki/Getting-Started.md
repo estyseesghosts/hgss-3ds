@@ -205,7 +205,7 @@ devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && python3 tools/hgss_nitro.py make --target host32 --out /work/out/first lib -k -j8'
 ```
 
-**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` and `libnitrosystem.a` with no errors. `make port-tests` runs the vendored suites: **all of them pass** (at 78 patches; nitrosystem 17,122 checks, gx3d 337+239). The next step is the game build, `make game-pc` / `make game-3ds`, and the DS gate in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
+**You should see:** `46/46 port source files compile against the HGSS headers`, exit 0. The `make` run then builds `libnitro.a` and `libnitrosystem.a` with no errors. `make port-tests` runs the vendored suites: **all of them pass** (at 78 patches; nitrosystem 17,122 checks, gx3d 327+229). The next step is the game build, `make game-pc` / `make game-3ds`, and the DS gate in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 
 `hgss_nitro.py` explains the shim it builds in [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired). The next work and the full error map are in [../progress/STATE.md](../progress/STATE.md) and [../port-wiring.md](../port-wiring.md).
 

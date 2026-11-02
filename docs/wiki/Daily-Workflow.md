@@ -82,7 +82,7 @@ bash tests/sdk/fx/run.sh build/upstream
 `make port-tests` runs the vendored `3ds_port` suites (`pak`, `nitro`, `nitrosystem`) against HGSS's
 SDK. It is its own target, not part of `make test`, because it needs a full `host32` build. Current
 state (78 patches): **exit 0**; every suite passes, including `test_arm7`, `test_sound_sequence`,
-`gx3d` (337+239) and `nitrosystem` (17,122 checks). See [../progress/STATE.md](../progress/STATE.md).
+`gx3d` (327+229) and `nitrosystem` (17,122 checks). See [../progress/STATE.md](../progress/STATE.md).
 
 ## The port layer
 
@@ -108,7 +108,7 @@ python3 tools/hgss_nitro.py make --target host32 --out /work/out/<name> test
 
 Current state (2026-11-01, 78 patches): `libnitro.a` and `libnitrosystem.a` build with 0 errors;
 `make port-tests` exits 0 — pak 120, the whole nitro sequence and nitrosystem 17,122; gx3d
-337+239. The failure history, including every segfault and root cause, is in
+327+229. The failure history, including every segfault and root cause, is in
 [../progress/agent-notes/p1-runtime-bringup.md](../progress/agent-notes/p1-runtime-bringup.md) and
 [../progress/agent-notes/p2-wave-a-session5.md](../progress/agent-notes/p2-wave-a-session5.md).
 

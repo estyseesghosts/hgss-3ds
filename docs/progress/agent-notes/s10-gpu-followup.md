@@ -1,5 +1,10 @@
 # S10: the 3D works; the worker was starved, and `w = 0` fans
 
+> **Historical; superseded by S13.** The `w <= 0` drop described here removed
+> real wing geometry. The final fix drops only the exact zero-area
+> camera-plane triangles in `stage_triangle()`; see
+> [s13-nns-volume-table.md](s13-nns-volume-table.md).
+
 Follow-up to the ninth hardware run (log-8, photo IMG20261101131707). The
 pipeline from S9 is correct in principle and does draw: the lower-screen title
 shows Ho-oh, the game reaches the field, and the player can walk through the

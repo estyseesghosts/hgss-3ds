@@ -130,10 +130,10 @@ vendored tree: `tools/hgss_game.py` generates a build-private copy of
 `3ds_port/pak/src/pak.c` with the two digests above (from
 `builder/verify_rom.py`) prepended, compiles it as a program object and links
 it before `libnitro.a`; the archive's own `pak_reader.o` member is then never
-loaded. The one deliberate `3ds_port/` divergence is the camera-point 3D
-hunk in `nitro/src/port_gx3d.c` (recorded in [decisions.md](../decisions.md));
-the pak reader itself is untouched. The host boot
-test `tests/sdk/pak_boot` covers the OK path and every other result.
+loaded. The one deliberate `3ds_port/` divergence is the camera-plane
+triangle drop in `nitro/src/port_gx3d.c` (recorded in
+[decisions.md](../decisions.md)); the pak reader itself is untouched. The host
+boot test `tests/sdk/pak_boot` covers the OK path and every other result.
 
 ## Read cache
 

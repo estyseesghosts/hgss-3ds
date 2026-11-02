@@ -1,6 +1,9 @@
-# S13: the NNS volume table, and the camera-point fan
+# S13: the NNS volume table, the output level, and the camera-plane triangle
 
 Follow-up to S9's noise-register fix and S11's camera-point `w = 1` change.
+Two user-visible defects remained: a note held at full volume, and a deformed
+Ho-oh. This note records the second root causes, the two failed fixes, and the
+measurements that replaced guesses.
 The reported symptom did not go away after 1407, and the hardware's 3D fan was
 grey instead of the reference's feathered wing.
 
@@ -56,6 +59,9 @@ link order, and the port's object step runs only in `hgss_game.py`.
 | natural mixer ends in 90 s | 4 | 192 |
 | start volumes (ctrl low byte/shift) | 127/0 (0 dB) | 41–103 with shifts |
 
+These are **before** the 6 dB output trim below; the trim halves them to
+0.067–0.088 RMS and a 0.5 peak, matching the DS.
+
 `tests/test_hgss_game.py::NnsVolumeTableTests` keeps the port table equal to
 the NitroSDK source (128 entries, monotonic, -32768..0) and asserts the port
 programs link it and drop the right empty section.
@@ -104,6 +110,41 @@ geometry and left the gap.
 `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). Staged as
 `sdmc:/3ds/pokeheartgold.3dsx`; the audio-only build (`63d880e7…`) and the
 previous `3f493661…` are kept beside it for rollback.
+
+## What went wrong, and the lesson
+
+- **I trusted our own PC reference as the truth.** The software rasteriser
+  draws the stored screen `(0,0)` for the camera-plane vertex, so its title
+  frame had the same fan as the port. Matching it byte-for-byte kept the bug.
+  The fix only became possible after capturing the **real DS** title in
+  melonDS (retail ROM + the user's DS BIOS) and looking at the bird. Lesson:
+  when a reference and the hardware disagree, get a third, independent
+  reference before changing either.
+- **Two plausible `w` fixes were wrong.** `clip[3] = 1` (S11) made the PICA
+  divide the vertex to the corner; `w = 2^18` made its `1/w` negligible. Both
+  kept the fan because the triangle should not be drawn at all. Lesson: a
+  vertex at the camera plane is degenerate; changing its homogeneous `w` does
+  not create valid area.
+- **The first drop was too broad.** S10 dropped every triangle with a
+  `w <= 0` vertex; that also removed real near-plane-crossing wing geometry,
+  leaving the transparent gap. The working condition is the exact
+  `(0,0,0,0)` clip, not the sign of `w`. Lesson: drop the degenerate case,
+  clip the rest.
+- **The NNS table fix made the notes right but exposed the level.** With the
+  fader at 0 dB, the title was ~6 dB hotter than the DS; the remaining
+  crunch was hard clipping in the samples, which is why lowering the console
+  volume did not help. Calibrating a melonDS capture with a full-scale tone
+  gave the number and the fix. Lesson: distinguish "the amplifier is too
+  loud" from "the samples are clipped" before adding gain.
+- **A stale unit test failed after the change.** The test
+  `test_3d_camera_point_gets_a_positive_w_in_the_port` still asserted the
+  removed `out.clip[3]=1`; it was updated to assert the camera-plane drop.
+  Lesson: change the test with the design, not after the gate complains.
+- **The audio capture needed calibration and cleanup.** BlackHole captured at
+  the system volume (38%) and input volume (27%), so absolute numbers were
+  meaningless until a full-scale tone went through the same path; the output
+  device and mute state were restored afterwards. Lesson: calibrate the
+  measurement chain, and put the user's audio routing back.
 
 ## Files
 

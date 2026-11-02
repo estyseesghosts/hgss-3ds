@@ -36,7 +36,7 @@ Reproduce the file inventory: `python3 tools/sdk_inventory.py <pokeheartgold> <n
   lists Platinum-layout sources. HGSS resolves this with the shim and
   command-line overrides in `tools/hgss_nitro.py`; the vendored Makefiles stay
   unchanged. `3ds_port/` has one deliberate upstream-style 3D fix (the
-  camera-point hunk), recorded in `docs/decisions.md`.
+  camera-plane triangle drop), recorded in `docs/decisions.md`.
 - `bootstrap.py` links `build/NitroSDK` → `build/upstream/lib/NitroSDK` so the
   vendored paths resolve; the include-path part is not solved yet.
 - **Resolution (no `3ds_port/` edits).** `tools/hgss_nitro.py` builds an

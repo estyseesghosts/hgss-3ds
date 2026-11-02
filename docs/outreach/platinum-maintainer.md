@@ -23,10 +23,11 @@ fork the behavior: mosaic and display capture in the software 2D renderer
 Pokéwalker. I'll keep the Platinum tests green and won't touch game-specific
 code.
 
-One concrete PR is ready to shape: `port_gx3d.c` `to_screen()` keeps a vertex
-at clip `(0,0,0,0)` at screen `(0,0)` but stores `clip[3] = 1`, because the
-PICA cannot divide by `w = 0`; HGSS's title quads/quad strips hit that case
-and drew black fans. The test is `test_camera_point_vertex` in
+One concrete PR is ready to shape: a triangle with a vertex at clip
+`(0,0,0,0)` has zero screen area (both edges to a rim vertex project to that
+rim point), so `stage_triangle()` should drop it. HGSS's title quads/quad
+strips hit that case, and drawing the stored screen `(0,0)` as a fan deformed
+Ho-oh's wing. The test is `test_camera_plane_triangle` in
 `nitro/tests/test_gx3d.c`. It is the one place our vendored copy currently
 differs, and I would rather it live upstream.
 

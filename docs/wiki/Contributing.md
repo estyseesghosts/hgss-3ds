@@ -44,7 +44,7 @@ A second example is the decision that `savetool` discovers slot sizes from the f
 
 `3ds_port/` is copied from Platinum at the commit in `platinum.lock`, and it stays identical to that commit. HGSS-only code goes in new files, or in patches meant for upstream ([CONTRIBUTING.md](../../CONTRIBUTING.md); [NOTICE.md](../../NOTICE.md)).
 
-**Exception (2026-11-01):** the camera-point 3D fix is a deliberate upstream-style change in `3ds_port/nitro/src/port_gx3d.c` `to_screen()`, plus `test_camera_point_vertex` in its vendored `test_gx3d.c`. It gives the exact clip vertex `(0,0,0,0)` a positive `w` without moving its `(0,0)` screen position, which stops the PICA's divide-by-zero black fan; a viewport-centre mapping was tried and rejected. `platinum.lock` is unchanged; the divergence and the upstream PR content are recorded in [docs/decisions.md](../decisions.md) and [agent-notes/s11-3d-camera-point.md](../progress/agent-notes/s11-3d-camera-point.md).
+**Exception (2026-11-01):** the camera-plane fix is a deliberate upstream-style change in `3ds_port/nitro/src/port_gx3d.c` `stage_triangle()`, plus `test_camera_plane_triangle` in its vendored `test_gx3d.c`. An exact `(0,0,0,0)` vertex is on the camera plane; both edges to a rim vertex project to that rim point, so the triangle has zero screen area and the DS stores no polygon. Dropping exactly those triangles keeps Ho-oh intact (the earlier `w`/broad-drop attempts deformed the bird). `platinum.lock` is unchanged; the divergence and the upstream PR content are recorded in [docs/decisions.md](../decisions.md) and [agent-notes/s13-nns-volume-table.md](../progress/agent-notes/s13-nns-volume-table.md).
 
 Example: the wiring between the vendored port and HGSS's SDK is not done by editing the vendored Makefiles. `tools/hgss_nitro.py` builds a shim under `build/` and passes command-line overrides, which keeps the vendored Makefiles unchanged ([docs/port-wiring.md](../port-wiring.md), [Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
 
@@ -131,7 +131,7 @@ Use this for any patch in `patches/`. Apply the port and tool parts to changes o
 
 - [ ] `tools/bootstrap.py --clean` applies the patch cleanly, with its number in its stack.
 - [ ] `upstream.lock` and `platinum.lock` are unchanged, unless the change is a pin bump, which is its own task.
-- [ ] `3ds_port/` is unchanged, or the change is a recorded upstream-style exception with its PR content and tests (the camera-point hunk is the current one).
+- [ ] `3ds_port/` is unchanged, or the change is a recorded upstream-style exception with its PR content and tests (the camera-plane drop is the current one).
 - [ ] After adding/editing a patch, `bootstrap.py --clean` is re-run and the applied count matches `patches/` before any build is trusted.
 - [ ] After a decomp/SDK patch, the DS gate at the new patch count passes for **both** HG and SS.
 

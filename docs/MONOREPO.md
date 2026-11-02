@@ -31,7 +31,8 @@ pokeheartgold-3ds/
 
 The only third-party source tree copied into the repo is `3ds_port/`
 (Platinum, GPL-3.0). Its license headers and READMEs are kept; the one local
-change is visible in `3ds_port/LOCAL-CHANGES.md` and
+change (the camera-plane triangle drop) is visible in
+`3ds_port/LOCAL-CHANGES.md` and
 `docs/upstream/platinum-camera-point.patch`.
 
 ## What is deliberately outside it
@@ -99,8 +100,9 @@ in the monorepo was the deliberate choice:
 
 - A submodule would make the GitHub clone incomplete without a second repo,
   which defeats "one monorepo".
-- The local change is one hunk in `nitro/src/port_gx3d.c` plus its test. It is
-  copied from `platinum.lock` and carries `3ds_port/LOCAL-CHANGES.md`.
+- The local change is one hunk in `nitro/src/port_gx3d.c` (`stage_triangle()`
+  drops zero-area camera-plane triangles) plus its test. It is copied from
+  `platinum.lock` and carries `3ds_port/LOCAL-CHANGES.md`.
 - The same patch is in `docs/upstream/platinum-camera-point.patch`, ready to
   apply from Platinum's root. If the upstream PR lands, drop the local hunk
   and the patch, then re-vendor at the new pin.
@@ -110,7 +112,7 @@ To update Platinum later:
 1. Change `platinum.lock`, re-vendor `3ds_port/`, and apply
    `docs/upstream/platinum-camera-point.patch` if it is still needed.
 2. Update `3ds_port/LOCAL-CHANGES.md` and `docs/decisions.md`.
-3. Run `make port-tests` and `make test`; the camera-point test must pass.
+3. Run `make port-tests` and `make test`; the camera-plane test must pass.
 
 To update the decomp later:
 
@@ -165,4 +167,5 @@ public push. The current history has none; keep it that way.
   plus `docs/upstream/platinum-camera-point.patch`
 - Patches: **78** (NitroSDK 15, NitroSystem 3, pokeheartgold 60)
 - DS gate at 78: HG and SS retail SHA1s pass
-- Latest `.3dsx`: 9,278,120 bytes; not in git
+- Latest `.3dsx`: 9,278,600 bytes
+  (`sha256 4cecadd0…508ab`); not in git

@@ -1,6 +1,6 @@
 # Current state
 
-Last verified: **2026-11-01 (session 10: NNS volume table, camera-point w)**, inside the dev container
+Last verified: **2026-11-01 (session 10: NNS volume table, camera-plane drop, 6 dB output trim)**, inside the dev container
 (`/workspaces/pokeheartgold-3ds`), with the tree at **78 patches** (`NitroSDK` 15, `NitroSystem` 3,
 `pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
@@ -23,7 +23,7 @@ the gate is the evidence.
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table and the camera-point GPU w are in the latest artifact; hardware re-run pending. |
+| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, the 6 dB output trim and the camera-plane drop are in the latest artifact; hardware re-run pending. |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -36,11 +36,11 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
 | Host tests | `make test` | **exit 0**; **338 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
-| Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-point hunk compiles in the port build and `make port-tests` |
+| Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/slice-3d -j4` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,120 B (`sha256 3f493661…b7f00`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,600 B (`sha256 4cecadd0…508ab`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
@@ -65,7 +65,7 @@ phases:
   an open gap. The shell is a compile-time `HGSS_SS_VARIANT`, but there is no SS data pack/ROM to
   exercise it here.
 - **3DS depth:** the `.3dsx` runs on a New 3DS and draws both screens, audio and 3D; the latest
-  artifact's 60 Hz/audio/camera-point results are still the owner's hardware run.
+  artifact's 60 Hz/audio-level/camera-plane results are still the owner's hardware run.
 - **Web builder and CIA assets** are deferred (recorded in `docs/decisions.md` and the SD doc).
 
 The old failure classes are documented with root causes in
@@ -91,8 +91,9 @@ and (since the ninth run) shows the 3D: the title's Ho-oh, the room and the
 player. The ninth run also exposed two defects, now fixed in the tree but not
 yet re-run: the GPU worker was on the game's core and rendered about **1 image
 a second** (105 images in 4,680 frames), and a `w = 0` vertex produced the
-black fan over Ho-oh. The worker moved to core 2, the camera-plane triangles
-are dropped, and the audio thread moved above the game. The run after those
+black fan over Ho-oh. The worker moved to core 2, the zero-area camera-plane
+triangles are dropped by the port's clipper, and the audio thread moved above
+the game. The run after those
 fixes (log-9) then measured **87.0 Hz**: once the composite fit under one
 refresh, `gfxSwapBuffers` stopped pacing the loop. The tree now caps frame
 starts at 60 Hz (`[perf] frame cap 60 Hz`), so the next log's mean `total_us`
@@ -106,11 +107,11 @@ and the rule that prevents it — is in [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pi
 [phase-5.md](phase-5.md) has the per-run numbers.
 
 Still open on hardware: the re-run after these fixes (3D rate and no
-title gap/fan, no hung audio note, 60 Hz frame times), a full run through
-Oak's speech at full speed, the save round-trip, the Old 3DS measurement,
-and the `.cia` decision. The next log should show `[gx3d] display on core 2`,
-a rising `3D images:` near 300 per 600 frames, no `camera-plane drops`, and
-`audio: N dropped frames of M` near zero.
+title fan or gap, no hung or clipped audio, 60 Hz frame times), a full run
+through Oak's speech at full speed, the save round-trip, the Old 3DS
+measurement, and the `.cia` decision. The next log should show `[gx3d]
+display on core 2`, a rising `3D images:` near 300 per 600 frames, no
+`camera-plane drops`, and `audio: N dropped frames of M` near zero.
 
 The first run's failure, for the record: the `.3dsx` never started. Luma wrote
 a dump whose registers put the fault at a `udf #0` inside the console's
@@ -138,10 +139,10 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
 1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
    replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
    itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
-2. **Phase 5:** confirm the GPU pipeline, the camera-point 3D fix, the 60 Hz frame cap and the audio
-   fix on hardware (room, player sprite and intro 3D with no gap/fan; rising `3D images:`; mean
-   `total_us` near 16,700; no hung note; `audio: N dropped frames` near zero), then the remaining
-   shell items (input, SMDH and a hardware run).
+2. **Phase 5:** confirm the GPU pipeline, the camera-plane 3D fix, the 60 Hz frame cap and the
+   NNS-table/6 dB-trim audio fixes on hardware (room, player sprite and intro 3D with no gap/fan;
+   rising `3D images:`; mean `total_us` near 16,700; no clipped/hung notes; `audio: N dropped
+   frames` near zero), then the remaining shell items (input, SMDH and a hardware run).
 3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 at 78 patches.
 4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
    available for an end-to-end pack/open; record it when a dump is available.
@@ -205,6 +206,12 @@ Newest first. Each entry: what changed, what was run, what it proved.
 
 ### 2026-11-01 (session 9, 3D) — the camera-point vertex and the title gap
 
+> **Superseded in session 10.** The `(0,0,0,0)` vertex is a zero-area
+> camera-plane triangle, not a wing. The final fix drops exactly those
+> triangles in `stage_triangle()`; the `clip[3] = 1` / large-`w` workarounds
+> are reverted. A real DS capture shows Ho-oh intact. See the session 10 note
+> and [agent-notes/s13-nns-volume-table.md](agent-notes/s13-nns-volume-table.md).
+
 - **The title gap was our drop, not a missing near plane.** The dropped
   triangles are real quad/quad-strip geometry with one vertex at clip
   `(0,0,0,0)`; the G3 primitive counts in the title were quads 17,016 and
@@ -238,7 +245,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
 
-### 2026-11-01 (session 10, audio + 3D) — the NNS volume table and the grey fan
+### 2026-11-01 (session 10, audio + 3D) — the output level and the camera-plane drop
 
 - **Audio.** After 1407 the note still held until the next one and the mix
   clipped. The cause was not the ARM7 or the mixer: NitroSystem's
@@ -281,6 +288,12 @@ Newest first. Each entry: what changed, what was run, what it proved.
   [3DS-Pitfalls](../wiki/3DS-Pitfalls.md)
 
 ### 2026-11-01 (session 9, audio) — the hung noise note
+
+> **Follow-up in session 10.** Patch 1407 fixed a real noise-register bug but
+> was not the held-note cause: NitroSystem's `_0210D750` volume table was
+> linked to a pointer table, adding +25.6 dB and making the release stop
+> unreachable. See the session 10 note and
+> [agent-notes/s13-nns-volume-table.md](agent-notes/s13-nns-volume-table.md).
 
 - **Symptom:** a note sustained until the next note, and individual sounds and
   slower songs/percussion distorted. The cause was in the ARM7 driver, not the
@@ -347,8 +360,9 @@ Newest first. Each entry: what changed, what was run, what it proved.
   the PICA's divide by `w` then puts it at the screen centre. HGSS drops the
   affected stored triangles in `hgss/game/app/pica_scene.c` (`camera-plane
   drops` in the log) until the port's clipper gets a `w > 0` near plane.
-  **(Superseded in session 9: the drop left a transparent gap; the port now
-  gives the camera point a positive `w` and the workaround is removed.)**
+  **(Superseded twice: the drop left a transparent gap; the `w = 1` fix only
+  changed the fan's shading; the final fix drops the zero-area camera-plane
+  triangles in the port's clipper, session 10.)**
 - **Audio.** `82 dropped frames of 23821` (0.34%) and a slow intro; the audio
   thread was below the game and shared core 0 with the starved GPU worker. It
   is now priority `0x2e`, above the game and geometry.

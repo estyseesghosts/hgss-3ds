@@ -1,5 +1,11 @@
 # S11: the camera-point vertex gets a positive `w`
 
+> **Historical; superseded by S13.** A real DS title capture shows Ho-oh
+> intact: the `(0,0,0,0)` vertex is a zero-area camera-plane triangle, not a
+> wing. The final fix drops exactly those triangles in `stage_triangle()`;
+> the `clip[3] = 1` and large-`w` workarounds are reverted. See
+> [s13-nns-volume-table.md](s13-nns-volume-table.md).
+
 Follow-up to S10's `w = 0` workaround. The title screen's black shards were
 not a missing-near-plane problem in the clipper and not a strip restart: the
 game sends real vertices that transform exactly to clip `(0, 0, 0, 0)`, and
