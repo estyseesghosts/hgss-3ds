@@ -278,9 +278,10 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **Trace.** [agent-notes/s16-pokepics-and-quit.md](agent-notes/s16-pokepics-and-quit.md)
   has the two causes, the PC reproduction (the owner's save plus the zig-zag
   input) and the log lines.
-- **Checks.** `make test` 354 tests; `bootstrap` 82 patches; the PC battle and
-  the 3DS build below. The close and the battle's look on hardware are the
-  owner's run.
+- **Checks.** `make test` 354 tests; `make port-tests` **exit 0** (the pak,
+  nitro and nitrosystem suites; nitrosystem **17,122 checks, 0 failed**);
+  `bootstrap` 82 patches; the PC battle and the 3DS build below. The close and
+  the battle's look on hardware are the owner's run.
 - **Artifact.** `.3dsx` **9,279,628 B**, `sha256
   6bad8620e3fcb01b482ad0087b820f19e13ea7b8e1e05746ad6a4224ef70303f`; 3DS
   build **1092/1092**, 150/150 `.s`, **0 unresolved**; `3dsxdump` rc 0
