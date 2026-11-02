@@ -32,6 +32,7 @@ sequence.
 | A noise note writes an unused hole (1407; related) | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 | Closing the in-game Settings (OPTIONS → QUIT) crashes instead of returning to the field | [The V-blank survives the app that owned its buffers](#the-v-blank-survives-the-app-that-owned-its-buffers) |
+| A wild encounter (or any battle) crashes as the battle overlays finish loading | [A raw DS address is unmapped memory](#a-raw-ds-address-is-unmapped-memory) |
 
 ## A weak hook binds to NULL
 
@@ -536,6 +537,51 @@ code, so the patch is the fix; do not weaken `Transfer()` to hide it.
 **Rule.** An overlay app's V-blank callback must stop in the same frame its BG
 config is freed. If its teardown takes more than one frame, clear the callback
 in the first one.
+
+## A raw DS address is unmapped memory
+
+**Symptom.** Walking into tall grass crashed as the battle overlays loaded.
+log-10 ends with `=== exception (type 1) pc 008bcf0c ... r3 04000000 ===`
+right after OVY_6 and OVY_7, i.e. at the start of the wild battle (trainer and
+link battles take the same path).
+
+**Cause.** `Battle_CreateWirelessStatusIcon` runs at battle setup and
+`WirelessStatusIcon_LoadChar` read DISPCNT through the literal
+`*(u32 *)0x04000000` to choose the OBJ character mapping (and the sub engine's
+through `0x04001000`). The port's DS memory is ordinary arrays (patch 1301), so
+those literals are unmapped on the 3DS: the `ldr` data-aborts. On the DS they
+are the real registers, which is why the matching decomp never showed it. The
+PC build has the same fault; it had simply never reached a battle.
+
+This was not the only one. A preprocessor-aware scan of the game sources found
+17 raw DS address uses in code the port compiles -- the two in this function
+(the DISPCNT and DB_DISPCNT branches) and 15 more: the same DISPCNT pair in
+the spin trade app, the G3 swap-buffers request in the Pokémon summary
+(`0x04000540`), nine DTCM IRQ-check writes (`0x027E0000`), the encounter
+effect's clear of the display-capture VRAM (`0x06840000`), and two shared
+main-memory offsets (`0x027FFC2C`, `0x027FFC3C`).
+
+**Fix.** Patch **1905** replaces each with the macro the rest of the engine
+already uses: `reg_GX_DISPCNT` / `reg_GXS_DB_DISPCNT`,
+`reg_G3_SWAP_BUFFERS`, `HW_DTCM` (the same linker symbol on the DS), and
+`HW_MAIN_MEM` + the offset. Every change is `#ifdef SDK_PORT_3DS` with the
+original line in the `#else`, so the DS text is unchanged. New test
+`tests/test_hw_addresses.py` models the port's preprocessor and fails on a raw
+DS address in the compiled sources (it catches the pre-1905
+`WirelessStatusIcon_LoadChar` and ignores the DS-only `#else` copies).
+
+**Checked.** The 3DS ELF's `LoadChar` now gets the register's address from the
+literal pool (`0x00d889e0` = `NitroPort_IoReg`) instead of
+`mov r3, #0x04000000`. The scanner reports 0 uses in `src/`. That raw literal
+is the one log-10 faulted on: v1.0 (`3f493661`) at pc `0x008bcf0c`, `r3 =
+0x04000000`.
+
+Full trace and the class table: [agent-notes/s15-ds-address-literals.md](../progress/agent-notes/s15-ds-address-literals.md).
+
+**Rule.** Game code may only touch DS memory through the SDK's `HW_*`/`reg_*`
+macros. A literal DS address works on the DS and is unmapped on the port.
+`tests/test_hw_addresses.py` is the gate; run it (or `make test`) after adding
+code that pokes hardware.
 
 ## Reading a Luma crash dump
 

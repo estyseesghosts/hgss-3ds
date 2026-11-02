@@ -1,17 +1,18 @@
 # Phase 5 progress
 
 Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap, audio
-level/staging fixes and the Settings-close crash fix package, pending a console
-re-run.** The game boots, plays the intro, reaches Oak's speech and the
-player's house, draws both screens and plays audio. The ninth run (log-9)
-showed the GPU pipeline working at 87 Hz; frame starts are now capped at
-60 Hz, the NNS volume table, pre-saturation 6 dB headroom and NDSP cache/rate
-fixes address the audio, the title's zero-area camera-plane triangles are
-dropped instead of being drawn as a fan, and closing the in-game Settings
-returns to the field (patch 1904). Remaining Phase 5 exits: the owner's
-hardware re-run (3D rate and title, audio by ear, frame times, Settings
-open/close), a full-speed run through Oak's speech, the save round-trip, the
-Old 3DS decision and the `.cia` decision.
+level/staging fixes, the Settings-close fix and the raw-DS-address fix package,
+pending a console re-run.** The game boots, plays the intro, reaches Oak's
+speech and the player's house, draws both screens and plays audio. The ninth
+run (log-9) showed the GPU pipeline working at 87 Hz; frame starts are now
+capped at 60 Hz, the NNS volume table, pre-saturation 6 dB headroom and NDSP
+cache/rate fixes address the audio, the title's zero-area camera-plane
+triangles are dropped instead of being drawn as a fan, closing the in-game
+Settings returns to the field (patch 1904), and the battle's raw DISPCNT read
+that crashed the tenth run is gone (patch 1905). Remaining Phase 5 exits: the
+owner's hardware re-run (3D rate and title, audio by ear, frame times,
+Settings open/close, a wild encounter), a full-speed run through Oak's speech,
+the save round-trip, the Old 3DS decision and the `.cia` decision.
 
 Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
 
@@ -707,8 +708,24 @@ layer is not weakened to hide it. The tree is now at **79 patches**; the DS
 gate last ran at 78 and 1904's `#else` text is unchanged. The DS-side check is
 in [../wiki/Hardware-Testing.md](../wiki/Hardware-Testing.md); the trace is in
 [agent-notes/s14-options-vblank.md](agent-notes/s14-options-vblank.md). The
-artifact is **9,278,712 B** (`sha256 18833d57…9ebb`), 3DS build 1092/1092,
+artifact is **9,278,828 B** (`sha256 44e13f9c…5f6b`), 3DS build 1092/1092,
 `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages).
+
+**Wild encounters, session 12.** The tenth hardware log (log-10) faulted on
+the first wild battle: `pc 008bcf0c`, `r3 04000000`, in
+`WirelessStatusIcon_LoadChar`, which read DISPCNT through a raw literal at
+battle setup. The port's DS memory is ordinary arrays, so that literal is
+unmapped; the DS build is fine because it is a register. The port's game
+sources had 17 such uses in compiled code (the battle's two, the summary's
+swap-buffers request, the encounter effect's LCDC clear, nine DTCM IRQ-check
+writes, and so on), all of which would fault when first reached. Patch **1905**
+converts every one to the port's `reg_*`/`HW_*` macros, and
+`tests/test_hw_addresses.py` scans the port-preprocessed sources so the class
+cannot come back. The 3DS ELF now loads `NitroPort_IoReg` in `LoadChar`. The
+end-to-end check is the hardware run: walk into tall grass and win/lose a
+battle. A PC replay needs a field save with a starter (the scripted new game
+has none), so the next session should keep the owner's `heartgold.sav` if it
+is available.
 
 ## Pending user runs
 
@@ -719,6 +736,8 @@ definition of a pass:
 - New 3DS frame-time log and budget table.
 - In-game Settings open → QUIT → field, twice in a row (patch 1904; the
   session-11 crash).
+- Walk into tall grass on Route 29 to the first wild battle, and a trainer
+  battle (patch 1905; the session-12 crash).
 - Old 3DS measurement (the support decision is recorded only after it).
 - Save round-trip both ways: port save → melonDS Continue; cartridge save →
   port Continue.
@@ -731,9 +750,10 @@ SD card or run a cartridge.
 
 - The classic PICA pipeline runs on hardware; the latest **60 Hz cap, NNS
   volume-table/pre-saturation-headroom/NDSP-cache audio fixes, camera-plane
-  drop and the Options close fix (1904)** are pending the owner's re-run
-  (frame times, no clipping or rough timbre, no title fan or gap, and the
-  in-game Settings close back to the field).
+  drop, the Options close fix (1904) and the raw-DS-address fix (1905)** are
+  pending the owner's re-run (frame times, no clipping or rough timbre, no
+  title fan or gap, the in-game Settings close back to the field, and a wild
+  and a trainer battle).
 - Old 3DS 3D: the classic target and images need several MB of linear memory;
   `NitroPort_PicaInit` logs and falls back to 2D if it cannot get it, but the
   Old 3DS case is still unmeasured.

@@ -1,8 +1,8 @@
 # Current state
 
-Last verified: **2026-11-01 (session 11: the Options close crash)**, inside the dev container
-(`/workspaces/pokeheartgold-3ds`), with the tree at **79 patches** (`NitroSDK` 15, `NitroSystem` 3,
-`pokeheartgold` 61). Everything below that says "verified" was run on that tree on that date, and the
+Last verified: **2026-11-01 (session 12: the wild-encounter crash)**, inside the dev container
+(`/workspaces/pokeheartgold-3ds`), with the tree at **80 patches** (`NitroSDK` 15, `NitroSystem` 3,
+`pokeheartgold` 62). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
 this page; do not trust it blindly.
 
@@ -11,7 +11,7 @@ self-check passes on the real binary (129/0), the symbol cross-check reports **0
 program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
 **Both halves of the Phase 1 DS gate pass at 78 patches**; both matching builds reproduce the retail
-ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407 and 1904 are
+ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 1904 and 1905 are
 `SDK_PORT_3DS`-only (`#else` text unchanged), and the gate is the evidence.
 
 ## Phases
@@ -19,7 +19,7 @@ ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407 a
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 79 patches apply from scratch (the DS gate last ran at 78; 1904 is port-only); `make test` 338 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 80 patches apply from scratch (the DS gate last ran at 78; 1904/1905 are port-only); `make test` 344 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
@@ -33,15 +33,16 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (79 patches applied)` |
-| Host tests | `make test` | **exit 0**; **338 Python tests** + **20 SDK suites** |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (80 patches applied)` |
+| Host tests | `make test` | **exit 0**; **344 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
 | Settings open/close (PC) | scripted new game → bedroom → mother → X → OPTIONS → QUIT | **returns to the field at frame 35032**; two further cycles pass. Before patch 1904 it aborted at 35028 in `LoadBgVramScr` (`src=0x02C002C0`) |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,712 B (`sha256 18833d57…9ebb`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Raw DS addresses | `python3 -m unittest tests.test_hw_addresses` | **6 tests, OK**; 0 raw `0x02`-`0x07` pointer literals in `src/` (17 before patch 1905, including the battle read) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,828 B (`sha256 44e13f9c…5f6b`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
@@ -108,9 +109,10 @@ and the rule that prevents it — is in [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pi
 [phase-5.md](phase-5.md) has the per-run numbers.
 
 Still open on hardware: the re-run after these fixes (3D rate and no
-title fan or gap, no hung/clipped/rough audio, 60 Hz frame times), a full run
-through Oak's speech at full speed, the save round-trip, the Old 3DS
-measurement, and the `.cia` decision. The next log should show `[gx3d]
+title fan or gap, no hung/clipped/rough audio, 60 Hz frame times, Settings
+open/close, and a wild and a trainer battle), a full run through Oak's speech
+at full speed, the save round-trip, the Old 3DS measurement, and the `.cia`
+decision. The next log should show `[gx3d]
 display on core 2`, a rising `3D images:` near 300 per 600 frames, no
 `camera-plane drops`, and `audio: N dropped frames of M` near zero.
 
@@ -170,8 +172,8 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
-python3 tools/bootstrap.py            # "already at ... with 79 patches" if in sync
-make test                            # exit 0 (338 tests + 20 SDK suites)
+python3 tools/bootstrap.py            # "already at ... with 80 patches" if in sync
+make test                            # exit 0 (344 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
@@ -245,6 +247,42 @@ Newest first. Each entry: what changed, what was run, what it proved.
   [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md)
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
+
+### 2026-11-01 (session 12) — the tall-grass wild encounter crashed
+
+- **Log-10.** `=== exception (type 1) pc 008bcf0c ... r3 04000000 ===` right
+  after OVY_6/OVY_7 (the battle overlays). `pc` maps to
+  `WirelessStatusIcon_LoadChar`; the faulting instruction is
+  `ldr r3, [r3]` with `r3 = 0x04000000` (DISPCNT), and `lr` is the return
+  into `WirelessStatusIcon_New`. `Battle_CreateWirelessStatusIcon` runs at
+  every battle setup, so wild, trainer and link battles all hit it.
+- **Cause.** The game read DISPCNT through a literal. The port's DS memory is
+  ordinary arrays (patch 1301), so the literal is unmapped on the 3DS and the
+  PC; the DS build works because it is a real register. The decomp is matching:
+  this is game code, not a port defect, that only the port can trip.
+- **The class.** A preprocessor-aware scan of the game sources (evaluating
+  `SDK_PORT_3DS`, so DS-only `#else` copies are ignored) found 17 literals in
+  code the port compiles: the DISPCNT/DB_DISPCNT pair in the wireless icon and
+  the spin trade app, the G3 swap-buffers request in the Pokémon summary,
+  nine DTCM IRQ-check writes, the encounter effect's LCDC VRAM clear, and two
+  shared-main-memory offsets. Patch **1905** converts all of them to the
+  macros the engine already uses; each hunk is `SDK_PORT_3DS`-only.
+- **Guard.** `tests/test_hw_addresses.py` models the port's preprocessor and
+  fails on a raw DS address in the compiled sources (it reports the pre-1905
+  `WirelessStatusIcon_LoadChar` and does not report the `#else` copies). It is
+  part of `make test`: **344 tests** now.
+- **Checked.** The 3DS ELF's `LoadChar` loads `NitroPort_IoReg` (0x00d889e0)
+  from the literal pool instead of moving 0x04000000; the scanner reports 0.
+  The battle itself could not be replayed on the PC yet: the scripted new game
+  has no starter (the west exit of New Bark Town is blocked), so reaching tall
+  grass needs a field save. The fault site and the replacement are verified;
+  the hardware run is the end-to-end check.
+- **Trace.** [agent-notes/s15-ds-address-literals.md](agent-notes/s15-ds-address-literals.md)
+  has the log decode, the site table, the preprocessor method and what is unverified.
+- **Counts.** **80 patches**; the DS gate last ran at 78 and 1905's `#else`
+  text is unchanged. Artifact **9,278,828 B**
+  (`sha256 44e13f9ca8ee89030446ba576af783055d5a188d694a585d0c8b707066995f6b`),
+  1092/1092, `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages).
 
 ### 2026-11-01 (session 11) — closing the in-game Settings crashed
 

@@ -19,7 +19,7 @@ pokeheartgold-3ds/
   3ds_port/            Platinum's hardware layer (GPL-3.0) + one local fix
                       see 3ds_port/LOCAL-CHANGES.md
   hgss/                HGSS shell, game-facing glue, compat headers/runtime
-  patches/             79 patches against the pinned decomp (three stacks)
+  patches/             80 patches against the pinned decomp (three stacks)
   builder/             ROM verify/extract/pack (the user's own cartridge)
   tools/               harness, bootstrap, surveys, matching build, reports
   tests/               Python, SDK host suites, layout probe, input scripts
@@ -139,7 +139,7 @@ git status --short                    # no untracked game content that could be 
 git ls-files | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'   # must be empty
 git log --all --oneline --stat | grep -Ei '\.(nds|sav|pak|3dsx|cia|smdh)$'  # history audit
 git count-objects -vH                 # about 2 MB, no LFS needed
-make test                             # 338 Python tests + 20 SDK suites
+make test                             # 344 Python tests + 20 SDK suites
 make content-check
 ```
 
@@ -165,7 +165,7 @@ public push. The current history has none; keep it that way.
 - `upstream.lock`: `8cbb4a19ab781611ff1767035dcaea6b47baeded`
 - `platinum.lock`: `359fbec80a5c0664d4fa72caaae87465b640f9d6`
   plus `docs/upstream/platinum-camera-point.patch`
-- Patches: **79** (NitroSDK 15, NitroSystem 3, pokeheartgold 61)
+- Patches: **80** (NitroSDK 15, NitroSystem 3, pokeheartgold 62)
 - DS gate at 78: HG and SS retail SHA1s pass (1904 is port-only)
-- Latest `.3dsx`: 9,278,712 bytes
-  (`sha256 18833d57…9ebb`); not in git
+- Latest `.3dsx`: 9,278,828 bytes
+  (`sha256 44e13f9c…5f6b`); not in git

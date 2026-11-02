@@ -70,8 +70,8 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 
 | Target | Command | Output | State |
 | --- | --- | --- | --- |
-| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **79 patches** |
-| Host test gate | `make test` | test results only | **green** (338 Python tests + 20 SDK suites) |
+| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **80 patches** |
+| Host test gate | `make test` | test results only | **green** (344 Python tests + 20 SDK suites) |
 | SDK syntax survey | `make sdk-survey` or `python3 tools/sdk_compile_survey.py --m32 -j8` | counts | 270/284 (gcc 13), 269/284 (gcc 10) |
 | Port source survey | `python3 tools/port_compile_survey.py` | counts + first errors | **46/46, exit 0** |
 | Port layer host32 libraries | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | `libnitro.a`, `libnitrosystem.a` under `/work/out/x` | **both build, 0 errors** |
@@ -80,7 +80,7 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 | DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` / `SOULSILVER` | ROM in `/work` | works; needs MWCC; **PASSED at 78** for both (retail SHA1s) |
 | Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
 | Game for PC | `make game-pc` | `build/pokeheartgold-pc` | **1092/1092 compile, 0 unresolved** |
-| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; the program also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob; `3dsxtool` packages the `.3dsx` (9,278,712 B with the latest fixes) |
+| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; the program also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob; `3dsxtool` packages the `.3dsx` (9,278,828 B with the latest fixes) |
 
 There is no `make game` or `make matching`; the DS gate is `tools/matching-build.sh`. See
 [Tools-Reference](Tools-Reference.md#named-in-the-docs-but-not-in-the-repo).
@@ -98,7 +98,7 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && python3 tools/bootstrap.py'
 
-# 2. host tests (338 Python tests + 20 SDK suites)
+# 2. host tests (344 Python tests + 20 SDK suites)
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && make test'
 

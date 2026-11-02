@@ -218,6 +218,23 @@ it). A crash here is a data abort in `LoadBgVramScr`; send `log.txt` or the
 Luma dump. Open and close it twice in a row; both returns must reach the
 field.
 
+## Wild encounters and battles
+
+With a field save (or after getting the starter), walk into tall grass on
+Route 29 until a wild Pokémon appears. The battle must load: the screen
+transitions, the battle overlays load, the Pokémon and the opponent's
+silhouette appear, and the menu accepts input. Before patch **1905** the
+battle aborted on its first frame: `WirelessStatusIcon_LoadChar` read DISPCNT
+through `0x04000000`, which is unmapped on the port (log-10: exception,
+`r3 04000000`, pc in that function). Trainer and link battles take the same
+`Battle_CreateWirelessStatusIcon` path, so a trainer battle is a second check.
+If it still faults, send `log.txt` and the Luma dump; the pc maps with
+`arm-none-eabi-addr2line -e pokeheartgold-3ds.elf`.
+
+The same class of literal crashed later screens (the Pokémon summary, the
+encounter transition, the Hall of Fame, trades); patch 1905 converted all of
+them. Reaching any of those screens is a bonus check.
+
 ## Frame-time budget
 
 The shell logs a `frame N` line every 600 frames. Once the instrumentation

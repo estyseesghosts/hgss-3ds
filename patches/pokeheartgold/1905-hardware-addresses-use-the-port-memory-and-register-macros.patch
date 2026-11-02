@@ -1,0 +1,323 @@
+From b2fafa898e86b10d18575ef274909e9b55420617 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 04:14:14 +0000
+Subject: [PATCH] hardware addresses: use the port's memory and register macros
+ (SDK_PORT_3DS)
+
+The game code still dereferenced DS addresses by literal in 17 places. The
+port's memory areas are ordinary arrays (patch 1301), so a literal such as
+0x04000000 or 0x027E0000 points at unmapped memory on the 3DS and on host32.
+The first one reached in normal play is the battle: on the frame an encounter
+starts, WirelessStatusIcon_Create -> WirelessStatusIcon_LoadChar reads DISPCNT
+through 0x04000000 to pick the OBJ character mapping. Log-10 faults there
+(exception, pc in LoadChar, r3 = 0x04000000) right after the battle overlays
+load, which is the tall-grass wild encounter crash. Trainer and link battles
+take the same Battle_CreateWirelessStatusIcon path.
+
+The same class, converted here:
+
+- I/O registers: DISPCNT / DB_DISPCNT in the wireless status icon and the spin
+  trade app, and the G3 swap-buffers request in the Pokemon summary, now use
+  reg_GX_DISPCNT, reg_GXS_DB_DISPCNT and reg_G3_SWAP_BUFFERS (all built on
+  HW_REG_BASE, which 1301 points at NitroPort_IoReg).
+- Nine DTCM IRQ-check writes (eight V-blank handlers and the trade animation
+  task) use HW_DTCM -- already the port's DTCM array, and on the DS the same
+  linker symbol -- instead of 0x027E0000; the code after them is unchanged.
+- The encounter effect's clear of the display-capture VRAM uses
+  HW_LCDC_VRAM + 0x40000. The comment said bank D; 0x06840000 is bank C in the
+  LCDC view (A at 0x06800000, then one 128 KB bank every 0x20000), and the
+  reg_GX_DISPCAPCNT = 0xC0320C04 destination is bank C too. Display capture is
+  not implemented in the port yet, so the effect still will not show the
+  captured field, but it no longer faults.
+- The wireless seed (0x027FFC3C) and the reboot-into-file flag (0x027FFC2C)
+  use HW_MAIN_MEM + the same offset.
+
+Every change is inside #ifdef SDK_PORT_3DS with the original lines kept in the
+#else, so the DS text preprocesses unchanged. system_card.c's ROM-header
+mirrors were already handled this way; the reboot flag was missed.
+
+not converted, with reason: sub/lib/src/sound_driver.c's REG_POWCNT2
+(0x04000304) is only used by SND_BeginSleep/EndSleep, whose caller,
+power_manager_driver.c, is not built for the port; the wireless sub/ sources
+(wl_*, wmsp_*, wvr_*) are the ARM7 Wi-Fi stack, which the port stubs.
+
+Checked: tests/test_hw_addresses.py (new) models the port preprocessor and
+reports the pre-patch wireless_status_icon.c, and the fixed tree has no raw
+DS pointer literal in src/; the 3DS ELF's LoadChar now loads NitroPort_IoReg
+(0x00d889e0) from the literal pool instead of moving 0x04000000. The battle
+itself was not replayed on the PC: the scripted new game has no starter and
+New Bark Town's west exit is blocked, so the owner's hardware run is the
+end-to-end check.
+---
+ src/application/battle_room_results.c             | 4 ++++
+ src/application/plaza_game_mime_jr_top.c          | 4 ++++
+ src/application/spin_trade/spin_trade_group_app.c | 5 +++++
+ src/application/trade_sequence/trade_sequence.c   | 4 ++++
+ src/battle/link_battle_screen.c                   | 4 ++++
+ src/field/encounter_effect_particles.c            | 8 ++++++--
+ src/frontier/battle_factory_app.c                 | 4 ++++
+ src/global_terminal/global_terminal_connect.c     | 4 ++++
+ src/gts/gts.c                                     | 4 ++++
+ src/hall_of_fame_showcase.c                       | 4 ++++
+ src/pokemon_summary_scene.c                       | 4 ++++
+ src/system_card.c                                 | 4 ++++
+ src/wireless_manager.c                            | 4 ++++
+ src/wireless_status_icon.c                        | 8 ++++++++
+ src/wireless_trade_select_mon.c                   | 4 ++++
+ 15 files changed, 67 insertions(+), 2 deletions(-)
+
+diff --git a/src/application/battle_room_results.c b/src/application/battle_room_results.c
+index 45ecb80..84a110a 100644
+--- a/src/application/battle_room_results.c
++++ b/src/application/battle_room_results.c
+@@ -535,7 +535,11 @@ static void BattleRoomResults_SetGfxBanks(void) {
+ static void BattleRoomResults_VBlankCB(BattleRoomResults *results) {
+     BattleRoomResults_TransferOam();
+     DoScheduledBgGpuUpdates(results->bgConfig);
++#ifdef SDK_PORT_3DS
++    ((u32 *)HW_DTCM)[(HW_INTR_CHECK_BUF - HW_DTCM) / 4] |= OS_IE_V_BLANK; // OS_SetIrqCheckFlag
++#else
+     ((u32 *)0x027E0000)[(HW_INTR_CHECK_BUF - HW_DTCM) / 4] |= OS_IE_V_BLANK; // OS_SetIrqCheckFlag
++#endif
+ }
+ 
+ static int BattleRoomResults_HandleResultsInput(BattleRoomResults *results) {
+diff --git a/src/application/plaza_game_mime_jr_top.c b/src/application/plaza_game_mime_jr_top.c
+index 97874d0..795b8cd 100644
+--- a/src/application/plaza_game_mime_jr_top.c
++++ b/src/application/plaza_game_mime_jr_top.c
+@@ -1047,7 +1047,11 @@ static void MimeJrTop_SetStateIf(MimeJrTopApp *app, BOOL condition, u32 next, in
+ 
+ static void MimeJrTop_VBlank(void *data) {
+     MimeJrTopApp *app = data;
++#ifdef SDK_PORT_3DS
++    volatile u32 *irqCheck = (u32 *)HW_DTCM; // DTCM
++#else
+     volatile u32 *irqCheck = (u32 *)0x027E0000; // DTCM
++#endif
+     GF_RunVramTransferTasks();
+     SpriteSystem_TransferOam();
+     PaletteData_PushTransparentBuffers(app->resources.palette);
+diff --git a/src/application/spin_trade/spin_trade_group_app.c b/src/application/spin_trade/spin_trade_group_app.c
+index 6a9913c..2cbfac5 100644
+--- a/src/application/spin_trade/spin_trade_group_app.c
++++ b/src/application/spin_trade/spin_trade_group_app.c
+@@ -437,8 +437,13 @@ BOOL SpinTradeGroupApp_Init(OverlayManager *manager, int *state) {
+         HBlankInterruptDisable();
+         GfGfx_DisableEngineAPlanes();
+         GfGfx_DisableEngineBPlanes();
++#ifdef SDK_PORT_3DS
++        reg_GX_DISPCNT &= 0xffffe0ff;
++        reg_GXS_DB_DISPCNT &= 0xffffe0ff;
++#else
+         *(vu32 *)0x04000000 &= 0xffffe0ff;
+         *(vu32 *)0x04001000 &= 0xffffe0ff;
++#endif
+         Heap_Create(HEAP_ID_3, HEAP_ID_102, 0x80000);
+         narc = NARC_New(NARC_a_2_1_5, HEAP_ID_102);
+         GF_ASSERT(narc != NULL);
+diff --git a/src/application/trade_sequence/trade_sequence.c b/src/application/trade_sequence/trade_sequence.c
+index 22eb840..3483061 100644
+--- a/src/application/trade_sequence/trade_sequence.c
++++ b/src/application/trade_sequence/trade_sequence.c
+@@ -255,7 +255,11 @@ BOOL TradeSequence_Main(OverlayManager *man, int *state) {
+ 
+ static void TradeSequence_DrawSpritesTask(SysTask *task, void *data) {
+     TradeSequence *ts = data;
++#ifdef SDK_PORT_3DS
++    vu32 *dtcm = (vu32 *)HW_DTCM;
++#else
+     vu32 *dtcm = (vu32 *)0x027E0000; // OS_SetIrqCheckFlag(OS_IE_V_BLANK)
++#endif
+ 
+     SpriteList_RenderAndAnimateSprites(ts->spriteList);
+     OamManager_ApplyAndResetBuffers();
+diff --git a/src/battle/link_battle_screen.c b/src/battle/link_battle_screen.c
+index 9e88a03..00dda9d 100644
+--- a/src/battle/link_battle_screen.c
++++ b/src/battle/link_battle_screen.c
+@@ -1337,7 +1337,11 @@ static void LinkBattleScreen_VBlankCallback(void *data) {
+     GF_RunVramTransferTasks();
+     SpriteSystem_TransferOam();
+     // OS_SetIrqCheckFlag(OS_IE_V_BLANK)
++#ifdef SDK_PORT_3DS
++    dtcm = (vu32 *)HW_DTCM;
++#else
+     dtcm = (vu32 *)0x027E0000;
++#endif
+     dtcm[0x3FF8 / sizeof(u32)] |= OS_IE_V_BLANK;
+ }
+ 
+diff --git a/src/field/encounter_effect_particles.c b/src/field/encounter_effect_particles.c
+index 615900e..c3d2292 100644
+--- a/src/field/encounter_effect_particles.c
++++ b/src/field/encounter_effect_particles.c
+@@ -58,8 +58,12 @@ void EncounterEffect_StartParticleMode(FieldSystem *fieldSystem) {
+     GfGfx_EngineATogglePlanes(GX_PLANEMASK_BG2, GF_PLANE_TOGGLE_OFF);
+     GfGfx_EngineATogglePlanes(GX_PLANEMASK_BG3, GF_PLANE_TOGGLE_OFF);
+     GX_ResetBankForBG();
+-    MI_CpuClearFast((void *)0x06840000, 0x20000); // VRAM bank D (LCDC)
+-    // capture the main screen into VRAM bank D
++#ifdef SDK_PORT_3DS
++    MI_CpuClearFast((void *)(HW_LCDC_VRAM + 0x40000), 0x20000); // VRAM bank C (LCDC)
++#else
++    MI_CpuClearFast((void *)0x06840000, 0x20000); // VRAM bank C (LCDC)
++#endif
++    // capture the main screen into VRAM bank C
+     reg_GX_DISPCAPCNT = 0xC0320C04;
+     SysTask_CreateOnVWaitQueue(Task_ParticleSetup_VWait, gEncounterEffectState.particles, 1024);
+     SysTask_CreateOnMainQueue(Task_ParticleSetup_Main, gEncounterEffectState.particles, 1024);
+diff --git a/src/frontier/battle_factory_app.c b/src/frontier/battle_factory_app.c
+index 2599399..e9923a2 100644
+--- a/src/frontier/battle_factory_app.c
++++ b/src/frontier/battle_factory_app.c
+@@ -1865,7 +1865,11 @@ static void BattleFactoryApp_VBlankCallback(BattleFactoryApp *app) {
+         OamManager_ApplyAndResetBuffers();
+         {
+             // OS_SetIrqCheckFlag(OS_IE_V_BLANK)
++#ifdef SDK_PORT_3DS
++            vu32 *dtcm = (vu32 *)HW_DTCM;
++#else
+             vu32 *dtcm = (vu32 *)0x027E0000;
++#endif
+             dtcm[0x3FF8 / 4] |= OS_IE_V_BLANK;
+         }
+     }
+diff --git a/src/global_terminal/global_terminal_connect.c b/src/global_terminal/global_terminal_connect.c
+index e182c97..aa36746 100644
+--- a/src/global_terminal/global_terminal_connect.c
++++ b/src/global_terminal/global_terminal_connect.c
+@@ -388,7 +388,11 @@ BOOL GlobalTerminalConnect_Exit(OverlayManager *manager, int *state) {
+ }
+ 
+ static void GlobalTerminalConnect_VBlankCB(GlobalTerminalConnectWork *work) {
++#ifdef SDK_PORT_3DS
++    vu32 *dtcm = (vu32 *)HW_DTCM;
++#else
+     vu32 *dtcm = (vu32 *)0x027E0000; // OS_SetIrqCheckFlag, with the DTCM address as a constant
++#endif
+ 
+     GF_RunVramTransferTasks();
+     OamManager_ApplyAndResetBuffers();
+diff --git a/src/gts/gts.c b/src/gts/gts.c
+index f244e0d..a8ec22c 100644
+--- a/src/gts/gts.c
++++ b/src/gts/gts.c
+@@ -255,7 +255,11 @@ BOOL Gts_Exit(OverlayManager *man, int *state) {
+ static void Gts_VBlankCB(void *arg) {
+     GtsApp *app = arg;
+     // OS_SetIrqCheckFlag(OS_IE_V_BLANK), with the DTCM base as a constant
++#ifdef SDK_PORT_3DS
++    vu32 *dtcm = (vu32 *)HW_DTCM;
++#else
+     vu32 *dtcm = (vu32 *)0x027E0000;
++#endif
+ 
+     if (app->vblankTask != NULL) {
+         app->vblankTask(app);
+diff --git a/src/hall_of_fame_showcase.c b/src/hall_of_fame_showcase.c
+index 2a3fad2..217d758 100644
+--- a/src/hall_of_fame_showcase.c
++++ b/src/hall_of_fame_showcase.c
+@@ -203,7 +203,11 @@ BOOL HallOfFameShowcase_Main(OverlayManager *man, int *state) {
+ 
+ static void HallOfFameShowcase_VBlankCB(void *data) {
+     HallOfFameShowcase *showcase = data;
++#ifdef SDK_PORT_3DS
++    vu32 *dtcm = (vu32 *)HW_DTCM;
++#else
+     vu32 *dtcm = (vu32 *)0x027E0000;
++#endif
+ 
+     DoScheduledBgGpuUpdates(showcase->bgConfig);
+     SpriteSystem_TransferOam();
+diff --git a/src/pokemon_summary_scene.c b/src/pokemon_summary_scene.c
+index 086d71f..f80a495 100644
+--- a/src/pokemon_summary_scene.c
++++ b/src/pokemon_summary_scene.c
+@@ -45,7 +45,11 @@ void PokemonSummary_Init3D(PokemonSummary *summary) {
+ void PokemonSummary_DrawPokepic(PokemonSummary *summary) {
+     NNS_G2dSetupSoftwareSpriteCamera();
+     PokepicManager_DrawAll(summary->pokepicManager);
++#ifdef SDK_PORT_3DS
++    reg_G3_SWAP_BUFFERS = 1;
++#else
+     *(vu32 *)0x04000540 = 1;
++#endif
+ }
+ 
+ void PokemonSummary_FreePokepicAndCamera(PokemonSummary *summary) {
+diff --git a/src/system_card.c b/src/system_card.c
+index 787c8cf..aae9a1c 100644
+--- a/src/system_card.c
++++ b/src/system_card.c
+@@ -68,7 +68,11 @@ void SystemCard_RebootIntoFile(const char *path) {
+ 
+     FS_InitFile(&file);
+     if (FS_OpenFile(&file, path)) {
++#ifdef SDK_PORT_3DS
++        *(u32 *)(HW_MAIN_MEM + 0x007FFC2C) = file.prop.file.top;
++#else
+         *(u32 *)0x027FFC2C = file.prop.file.top;
++#endif
+         OS_ResetSystem(0);
+     }
+ }
+diff --git a/src/wireless_manager.c b/src/wireless_manager.c
+index a81d15f..b668bd6 100644
+--- a/src/wireless_manager.c
++++ b/src/wireless_manager.c
+@@ -807,7 +807,11 @@ BOOL Wireless_StartMeasureChannels(void) {
+     u16 ret;
+ 
+     OS_GetMacAddress(macAddress);
++#ifdef SDK_PORT_3DS
++    seed = *(u32 *)(HW_MAIN_MEM + 0x007FFC3C);
++#else
+     seed = *(u32 *)0x027FFC3C;
++#endif
+     seed = ((u16 *)macAddress)[2] + (((u16 *)macAddress)[1] + (((u16 *)macAddress)[0] + seed));
+     sWirelessManager.work->random = seed;
+     sWirelessManager.work->random = sWirelessManager.work->random * 0x10DCD + 0x3039;
+diff --git a/src/wireless_status_icon.c b/src/wireless_status_icon.c
+index 154811d..660c83a 100644
+--- a/src/wireless_status_icon.c
++++ b/src/wireless_status_icon.c
+@@ -194,10 +194,18 @@ static void WirelessStatusIcon_LoadChar(int engine, int isWifi, enum HeapID heap
+     void *buf;
+ 
+     if (engine == 1) {
++#ifdef SDK_PORT_3DS
++        mapping = reg_GX_DISPCNT & 0x00300010;
++#else
+         mapping = *(u32 *)0x04000000 & 0x00300010;
++#endif
+         offs = GX_GetBankForOBJ();
+     } else {
++#ifdef SDK_PORT_3DS
++        mapping = reg_GXS_DB_DISPCNT & 0x00300010;
++#else
+         mapping = *(u32 *)0x04001000 & 0x00300010;
++#endif
+         offs = GX_GetBankForSubOBJ();
+     }
+     if (mapping == 0x00300010) {
+diff --git a/src/wireless_trade_select_mon.c b/src/wireless_trade_select_mon.c
+index 9158ade..2fe3fc6 100644
+--- a/src/wireless_trade_select_mon.c
++++ b/src/wireless_trade_select_mon.c
+@@ -836,7 +836,11 @@ BOOL WirelessTradeSelectMon_Exit(OverlayManager *man, int *state) {
+ }
+ 
+ static void WirelessTradeSelectMon_VBlankCB(WirelessTradeSelectMon *work) {
++#ifdef SDK_PORT_3DS
++    vu32 *dtcm = (vu32 *)HW_DTCM;
++#else
+     vu32 *dtcm = (vu32 *)0x027E0000;
++#endif
+ 
+     DoScheduledBgGpuUpdates(work->bgConfig);
+     if (work->pendingMonPic) {
+-- 
+2.43.0
+
