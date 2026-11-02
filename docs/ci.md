@@ -30,3 +30,8 @@ then runs `python3 tools/bootstrap.py && make test` (tool tests + the `tests/sdk
 `main` passed all of it (run 41353964864, 3m3s). The layout probe needs MWCC
 and is not part of it. The DS gate (`matching.yml`) was run locally at **78 patches** and passed for both
 games (patch `1904`, added later, is `SDK_PORT_3DS`-only and its `#else` text is unchanged); the workflow remains disabled until the private runner and variable exist.
+
+The image step fetches the devkitPro pacman databases from `pkg.devkitpro.org`.
+A transient `403` there fails the run before checkout's tests start (seen on
+run 41385467795, 2026-11-01: `dkp-linux.db`/`dkp-libs.db` refused); rerun the
+workflow when the repository is reachable. It is not a failure in the tree.
