@@ -1,15 +1,15 @@
 # Phase 5 progress
 
 Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap and audio
-table/level fixes package, pending a console re-run.** The game boots, plays
+level/staging fixes package, pending a console re-run.** The game boots, plays
 the intro, reaches Oak's speech and the player's house, draws both screens and
 plays audio. The ninth run (log-9) showed the GPU pipeline working at 87 Hz;
-frame starts are now capped at 60 Hz, the NNS volume table and a 6 dB output
-trim fix the audio, and the title's zero-area camera-plane triangles are
-dropped instead of being drawn as a fan. Remaining Phase 5 exits: the owner's
-hardware re-run (3D rate and title, audio by ear, frame times), a full-speed
-run through Oak's speech, the save round-trip, the Old 3DS decision and the
-`.cia` decision.
+frame starts are now capped at 60 Hz, the NNS volume table, pre-saturation
+6 dB headroom and NDSP cache/rate fixes address the audio, and the title's
+zero-area camera-plane triangles are dropped instead of being drawn as a fan.
+Remaining Phase 5 exits: the owner's hardware re-run (3D rate and title, audio
+by ear, frame times), a full-speed run through Oak's speech, the save
+round-trip, the Old 3DS decision and the `.cia` decision.
 
 Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
 
@@ -641,6 +641,18 @@ s13-nns-volume-table.md) and
 after saturation and left flat-topped peaks at ±16384, so the crunch survived.
 PSG duty 7 is also silence (GBATEK 0%) rather than a 100% DC level.
 
+**Then the NDSP staging.** The mix was level-right but still rough on hardware.
+`trim.wav` was clean except the flat tops, so the remaining roughness was
+after it: HGSS's shell never flushed a rendered block before
+`ndspChnWaveBufAdd`, and the DSP's DMA cannot see the ARM11 write-back L1 (it
+read stale FCRAM fragments: recognizable music, scratchy). It also announced
+32768 Hz to a 32728.5 Hz DSP, asking libctru for a 1.0012 two-tap resample; its
+fractional gain swept at 39.5 Hz over the top octave. `main_3ds.c` now flushes
+each 2048-byte block and announces `NDSP_SAMPLE_RATE` (0.12% / two cents flat,
+inaudible). The independent ADPCM/interpolation audit found no decoder defect;
+the sound-chip suite is now 81 checks (exact ADPCM samples and a smooth-loop
+test included).
+
 ## The camera-plane triangle: zero area, not a wing
 
 S10 and S11 read the title's fan as Ho-oh's left wing and tried to draw it
@@ -670,15 +682,16 @@ the earlier reasoning is kept in
 history.
 
 **Local verification (session 10, container, 2026-11-01).** `make test` **338
-Python tests**, OK, plus 20 SDK suites; `make port-tests`: gx3d **327 + 229**,
-nitrosystem **17,122 checks, 0 failed**; host32 and 3DS 1092/1092, 0
-unresolved; 3DS `pokeheartgold.3dsx` **9,278,696 bytes**
+Python tests**, OK, plus 20 SDK suites; `make port-tests`: sound chip **81**,
+gx3d **327 + 229**, nitrosystem **17,122 checks, 0 failed**; host32 and 3DS
+1092/1092, 0 unresolved; 3DS `pokeheartgold.3dsx` **9,278,696 bytes**
 (`sha256 fc4472b59eada839e31e5d46f2c7e58dd285989c924e561a6420d0f2a0eb68a7`),
-`3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). The PC title
-frame 4800 now shows the complete bird; the DS capture is the visual
-reference. The DS matching gate remains at **78 patches** for both games (HG
-`4fcded0e…b5a37`, SS `f8dc38ea…e582`). The PICA's title and the audio are the
-owner's hardware check.
+`3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). The PC audio
+render is 0.0708 RMS, 0.586 peak, with no flat tops; the PC title frame 4800
+shows the complete bird; the DS capture is the visual reference. The DS
+matching gate remains at **78 patches** for both games (HG `4fcded0e…b5a37`,
+SS `f8dc38ea…e582`). The PICA's title and the audio are the owner's hardware
+check.
 
 ## Pending user runs
 
@@ -698,8 +711,9 @@ SD card or run a cartridge.
 ## Open gaps
 
 - The classic PICA pipeline runs on hardware; the latest **60 Hz cap, NNS
-  volume-table/6 dB-trim audio fixes and camera-plane drop** are pending the
-  owner's re-run (frame times, no clipping, no title fan or gap).
+  volume-table/pre-saturation-headroom/NDSP-cache audio fixes and camera-plane
+  drop** are pending the owner's re-run (frame times, no clipping or rough
+  timbre, no title fan or gap).
 - Old 3DS 3D: the classic target and images need several MB of linear memory;
   `NitroPort_PicaInit` logs and falls back to 2D if it cannot get it, but the
   Old 3DS case is still unmeasured.

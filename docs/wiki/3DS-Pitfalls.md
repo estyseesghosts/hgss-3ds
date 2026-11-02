@@ -28,6 +28,7 @@ sequence.
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
 | A note hangs until the next note starts; sounds distort | [The NNS volume table is an empty alias](#the-nns-volume-table-is-an-empty-alias) |
 | Notes sound right but the mix clips, even at low console volume | [The 16-bit mix has 6 dB more level than the DS](#the-16-bit-mix-has-6-db-more-level-than-the-ds) |
+| Notes sound right, level is fine, but the timbre is rough/crunchy | [The mix is level-right but still sounds rough](#the-mix-is-level-right-but-still-sounds-rough) |
 | A noise note writes an unused hole (1407; related) | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 

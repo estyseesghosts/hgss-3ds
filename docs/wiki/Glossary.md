@@ -147,6 +147,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **NDSP.** The 3DS audio API. The port sends its mixed PCM to NDSP on the device ([gameplan.md](../../gameplan.md), Phase 7).
 
+**NDSP staging.** The shell renders the DS mix into four 512-frame blocks and queues them to NDSP. Each block must be `DSP_FlushDataCache`d first (the DSP's DMA does not see the ARM11 write-back L1), and the channel should announce the DSP's native rate (~32728.5 Hz) so it copies samples instead of running libctru's 2-tap resample ([3DS-Pitfalls](3DS-Pitfalls.md#the-mix-is-level-right-but-still-sounds-rough)).
+
 **NitroFS.** The file system on the cartridge. It has a header, a file name table (FNT) and a file allocation table (FAT) ([gameplan.md](../../gameplan.md), Phase 3, step 2).
 
 **NitroSDK.** Nintendo's system library between the game and the DS hardware. It covers the OS, threads, interrupts, DMA, card access, math and the PXI channel ([3ds_port/nitro/README.md](../../3ds_port/nitro/README.md)).
@@ -180,6 +182,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **PORT_FIX.** The planned name for a patch that fixes a bug found in game code while porting. The plan uses it for sanitizer findings, and for mis-typed fields found in the risk register. No such patch exists yet ([gameplan.md](../../gameplan.md), Phase 4, step 6; risk 3).
 
 **PSG.** The programmable sound generator channels of the DS: square waves on channels 8 to 13, with duty cycles, and noise on channels 14 and 15 ([gameplan.md](../../gameplan.md), Phase 7, step 3).
+
+**Pre-saturation headroom.** The 6 dB right shift (`NitroSoundChip.outputShift`) applied inside `NitroSound_Mix` **before** the 16-bit `saturate()`. Applying it after saturation only halves an already flat-topped peak and leaves the clipping distortion ([3DS-Pitfalls](3DS-Pitfalls.md#the-16-bit-mix-has-6-db-more-level-than-the-ds)).
 
 **PXI.** The message channel between ARM9 and ARM7. Messages carry a tag, and the port answers each tag with a handler ([3ds_port/nitro/src/pxi.c](../../3ds_port/nitro/src/pxi.c) header).
 

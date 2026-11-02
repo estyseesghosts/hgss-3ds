@@ -170,14 +170,14 @@ a failure used to be ambiguous:
 
 Send `log.txt` whole; nothing on that page needs filtering.
 
-The noise-channel fix (patch 1407), the NNS volume-table fix and the 6 dB
-output trim have no log line on the console: the build prints `[sound]
-_0210D750 -> ...` and the pass is by ear. Play a field and a battle and confirm
-a note fades out instead of sustaining a high-pitched crunch into the next
-note, single sounds are not distorted, and the mix does not crunch even at low
-console volume (the 6 dB trim removed the sample-domain clipping, so lowering
-the volume is no longer the test). `audio: N dropped frames of M` near zero is
-the other half of the audio result.
+The noise-channel fix (patch 1407), the NNS volume-table fix, the
+pre-saturation 6 dB headroom and the NDSP staging have no log line on the
+console beyond `audio: mixer 32768 Hz, DSP 32728 Hz (no resampling)`; the build
+prints `[sound] _0210D750 -> ...` and the pass is by ear. Play a field and a
+battle and confirm a note fades out instead of sustaining a high-pitched
+crunch into the next note, single sounds are not distorted, and the mix does
+not sound rough or crunchy at normal or low console volume. `audio: N dropped
+frames of M` near zero is the other half of the audio result.
 
 ## The scripted New 3DS run
 
@@ -199,8 +199,10 @@ the other half of the audio result.
    the log's mean `total_us` from `tools/frametime_report.py log.txt` is near
    **16,700** (60 Hz), not 11,500 (87 Hz). Audio is clean by ear — no note
    hangs into the next one (1407 plus the NNS volume table), no sample-domain
-   clipping even at low console volume (the 6 dB trim) — and `log.txt` ends
-   with a frame count near the script's `end` without an exception block.
+   clipping even at low console volume (the 6 dB pre-saturation headroom), and
+   no rough/crunchy timbre (the NDSP cache flush and native rate) — and
+   `log.txt` ends with a frame count near the script's `end` without an
+   exception block.
    `audio: N dropped frames of M` should be near zero relative to `M`.
 4. Save a copy of `log.txt` and note the frame count and any dropped frames.
 

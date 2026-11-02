@@ -1,4 +1,4 @@
-# S13: the NNS volume table, the output level, and the camera-plane triangle
+# S13: the NNS volume table, the output path, and the camera-plane triangle
 
 Follow-up to S9's noise-register fix and S11's camera-point `w = 1` change.
 Two user-visible defects remained: a note held at full volume, and a deformed

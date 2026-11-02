@@ -1,6 +1,6 @@
 # Current state
 
-Last verified: **2026-11-01 (session 10: NNS volume table, camera-plane drop, 6 dB output trim)**, inside the dev container
+Last verified: **2026-11-01 (session 10: NNS volume table, pre-saturation headroom, NDSP cache/rate, camera-plane drop)**, inside the dev container
 (`/workspaces/pokeheartgold-3ds`), with the tree at **78 patches** (`NitroSDK` 15, `NitroSystem` 3,
 `pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
@@ -23,7 +23,7 @@ the gate is the evidence.
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, the 6 dB output trim and the camera-plane drop are in the latest artifact; hardware re-run pending. |
+| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, pre-saturation 6 dB headroom, NDSP cache flush/native rate and the camera-plane drop are in the latest artifact; hardware re-run pending. |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -35,7 +35,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
 | Host tests | `make test` | **exit 0**; **338 Python tests** + **20 SDK suites** |
-| Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
+| Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
@@ -107,7 +107,7 @@ and the rule that prevents it — is in [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pi
 [phase-5.md](phase-5.md) has the per-run numbers.
 
 Still open on hardware: the re-run after these fixes (3D rate and no
-title fan or gap, no hung or clipped audio, 60 Hz frame times), a full run
+title fan or gap, no hung/clipped/rough audio, 60 Hz frame times), a full run
 through Oak's speech at full speed, the save round-trip, the Old 3DS
 measurement, and the `.cia` decision. The next log should show `[gx3d]
 display on core 2`, a rising `3D images:` near 300 per 600 frames, no
@@ -245,7 +245,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
 
-### 2026-11-01 (session 10, audio + 3D) — the output level and the camera-plane drop
+### 2026-11-01 (session 10, audio + 3D) — the output level, NDSP staging and the camera-plane drop
 
 - **Audio.** After 1407 the note still held until the next one and the mix
   clipped. The cause was not the ARM7 or the mixer: NitroSystem's
@@ -270,6 +270,15 @@ Newest first. Each entry: what changed, what was run, what it proved.
   saturation** (`outputShift`); the earlier `NitroPort_SoundRender` trim ran
   after saturation and left 18-44 flat-top runs at ±16384 in the render.
   PSG duty 7 is also silence now (GBATEK's 0%), not a 100% DC level.
+- **Still rough after the level fix.** The corrected mix was still "rough,
+  crunchy" on hardware. `trim.wav` (the same mixer bytes) measured clean
+  except those flat tops, so the roughness was in the NDSP staging: HGSS's
+  shell never flushed a rendered block before `ndspChnWaveBufAdd` (the DSP's
+  DMA read stale FCRAM), and it asked the 32728.5 Hz DSP to resample the
+  32768 Hz stream (libctru's 2-tap interpolator AMs the top octave at
+  39.5 Hz). `main_3ds.c` flushes each 2048-byte block and announces
+  `NDSP_SAMPLE_RATE`; the price is 0.12% / two cents flat. An independent
+  ADPCM/interpolation audit found no mixer defect and added exact tests.
 - **3D.** A real DS title capture (melonDS, retail ROM) showed Ho-oh intact;
   the PC reference itself was deformed. The `(0,0,0,0)` vertex is on the
   camera plane: both edges to a rim vertex project to that rim point, so the
@@ -280,8 +289,8 @@ Newest first. Each entry: what changed, what was run, what it proved.
   The `w = 1` / `w = 2^18` vertex workarounds are reverted; the new test
   `test_camera_plane_triangle` asserts no polygon is stored.
 - **Hardware is still the owner's run:** the bird must be intact (no fan, no
-  gap) and notes must fade without clipping. Local artifact: `.3dsx`
-  **9,278,696 B** (`sha256 fc4472b5…68a7`), 3DS build **1092/1092**, 0
+  gap) and notes must fade without clipping or roughness. Local artifact:
+  `.3dsx` **9,278,696 B** (`sha256 fc4472b5…68a7`), 3DS build **1092/1092**, 0
   unresolved, `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446
   pages); staged as `sdmc:/3ds/pokeheartgold.3dsx` (the previous `4cecadd0…`,
   the audio-only `63d880e7…` and the original `3f493661…` are beside it for
