@@ -35,7 +35,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
 | Host tests | `make test` | **exit 0**; **338 Python tests** + **20 SDK suites** |
-| Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **337 + 239** |
+| Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence, nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-point hunk compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
@@ -255,19 +255,28 @@ Newest first. Each entry: what changed, what was run, what it proved.
   checks the linked symbol (`[sound] _0210D750 -> nns_volume_table.c
   (256 bytes)`). `tests/test_hgss_game.py` keeps it equal to `SNDi_DecibelTable`
   and the build. The DS gate is untouched.
-- **3D.** The camera point's stored `clip[3] = 1` gave the PICA `w = 1/4096`,
-  so its `1/w` dominated the fan's perspective interpolation and the grey
-  texel covered the wing (the software's `inv_w = 0` does the opposite). The
-  vertex is flagged and `put_vertex()` gives the GPU `w = 2^18`, with z scaled
-  in Z-buffer scenes so `z/w` (the stored depth) is unchanged. The PC frame
-  4800 PNG is byte-identical (`sha256 7d7ea8f5…97ad8`); gx3d **340 + 242**
-  checks pass.
-- **Hardware is still the owner's run:** the fan must be the feathered wing,
-  not grey, and notes must fade. Local artifact: `.3dsx` **9,278,472 B**
-  (`sha256 63d880e7…c03`), 3DS build **1092/1092**, 0 unresolved,
-  `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages); staged as
-  `sdmc:/3ds/pokeheartgold.3dsx` (the previous `3f493661…b7f00` is kept beside
-  it as `pokeheartgold-3f493661.3dsx`).
+- **Still clipped at low volume.** The notes were right, but the user heard
+  clipping that survived turning the console down, so it was in the samples.
+  A retail title captured from melonDS and calibrated with a full-scale tone
+  peaks at ≈0.42 (RMS 0.071); the port's title peaked at 1.0 (RMS 0.139), about
+  6 dB hot. `NitroPort_SoundRender` now trims 6 dB at the shared output stage;
+  the title is 0.067-0.088 RMS, peak 0.5, **0% clipped**, matching the DS.
+  PSG duty 7 is also silence now (GBATEK's 0%), not a 100% DC level.
+- **3D.** A real DS title capture (melonDS, retail ROM) showed Ho-oh intact;
+  the PC reference itself was deformed. The `(0,0,0,0)` vertex is on the
+  camera plane: both edges to a rim vertex project to that rim point, so the
+  triangle has **zero screen area** and the DS stores no polygon. The software
+  rasteriser took its screen `(0,0)` literally and fanned the wing. Dropping
+  only those triangles in `stage_triangle()` renders a complete bird (both
+  wings, body, tail); the earlier `w <= 0` drop also removed real geometry.
+  The `w = 1` / `w = 2^18` vertex workarounds are reverted; the new test
+  `test_camera_plane_triangle` asserts no polygon is stored.
+- **Hardware is still the owner's run:** the bird must be intact (no fan, no
+  gap) and notes must fade without clipping. Local artifact: `.3dsx`
+  **9,278,600 B** (`sha256 4cecadd0…508ab`), 3DS build **1092/1092**, 0
+  unresolved, `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446
+  pages); staged as `sdmc:/3ds/pokeheartgold.3dsx` (the audio-only
+  `63d880e7…` and the original `3f493661…` are beside it for rollback).
   [agent-notes/s13-nns-volume-table.md](agent-notes/s13-nns-volume-table.md) ·
   [3DS-Pitfalls](../wiki/3DS-Pitfalls.md)
 

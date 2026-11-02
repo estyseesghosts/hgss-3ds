@@ -200,6 +200,8 @@ static int32_t wave_sample(const Channel *c)
     default:
         if (c->channel >= 14) return (v->noise & 1u) ? -32767 : 32767;
         if (c->channel < 8) return 0;
+        /* Duty 7 is 0% high (GBATEK): silence, not a full-scale DC level. */
+        if (((c->ctrl >> 24) & 7u) == 7u) return 0;
         return (v->sampleIndex & 7u) <= ((c->ctrl >> 24) & 7u) ? 32767 : -32767;
     }
 }

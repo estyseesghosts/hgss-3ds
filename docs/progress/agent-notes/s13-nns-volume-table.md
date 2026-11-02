@@ -60,39 +60,50 @@ link order, and the port's object step runs only in `hgss_game.py`.
 the NitroSDK source (128 entries, monotonic, -32768..0) and asserts the port
 programs link it and drop the right empty section.
 
-## The 3D: why `w = 1` made a grey fan
+**Follow-up: the mix was still 6 dB hot.** The user reported that the notes
+were right but the mix still sounded clipped, and that turning the console's
+volume down did not remove it — so the damage was in the samples. A retail
+title captured from melonDS, calibrated with a full-scale tone through the
+same macOS output path, peaks at ≈0.42 of full scale (RMS 0.071); the port's
+title peaks at 1.0 (RMS 0.139). `NitroPort_SoundRender` now trims 6 dB
+(`>> 1`) at the shared output stage: the title is **0.067-0.088 RMS, peak
+0.5, 0% of samples clipped**, matching the DS headroom. PSG duty 7 is also
+fixed to GBATEK's 0% (silence) instead of the 100% DC level the mixer used to
+emit; the sound-chip suite now checks it (52 checks).
 
-S11 gave the camera-point vertex `clip[3] = 1` so the PICA would not divide by
-zero. The stored vertex keeps screen `(0,0)` and the software rasteriser's
-`inv_w = 0`; the GPU vertex becomes NDC `(-1, +1)` with `w = 1/4096`. The
-software rasteriser interpolates a varying with weight `inv_w`, so that vertex
-contributes **nothing**: the fan takes the rim vertices' texels (the red
-feathers). The PICA's perspective-correct interpolation uses `1/w`; at
-`1/(1/4096) = 4096` versus the rim's `1/1 ≈ 1`, the camera point dominates and
-the whole fan takes its grey texel. That is the hardware's grey/black fan.
+## The 3D: the fan is a zero-area triangle
 
-**Fix.** Mark the vertex (`NITRO_GX3D_VERTEX_CAMERA_POINT`) in
-`to_screen()`, and in `put_vertex()` give the GPU a huge `w` (2^18) instead of
-`1/4096`: its `1/w` is then negligible, matching the software's zero weight.
-The position is unchanged in NDC (x and y scale with w), and in a Z-buffer
-scene z scales with w so `z/w` (the stored depth) stays the same; a W-buffer
-scene stores the DS W itself and needs no z change. The same path is in
-`NitroPort_Gx3dBuildOpaqueVertices` for the classic renderer.
+S11 gave the camera-plane vertex `clip[3] = 1` so the PICA would not divide by
+zero, and S13 first tried a negligible `1/w`. Both still showed the fan on
+hardware, and the user pointed out that the PC reference itself was deformed.
+That was the key: the software renderer was drawing a fan the DS never draws.
 
-**Tests.** `test_gx3d.c::test_camera_point_vertex` now checks the flag, that
-the camera vertex's GPU w is more than 1000× the rim's, and that `z/w` is
-still -0.5. `make port-tests` (nitro): gx3d **340 + 242** checks, 0 failures.
-The PC reference at title frame 4800 is byte-identical to the clean reference
-(`sha256 7d7ea8f5…97ad8`), so only the GPU path changed.
+A real DS title capture (melonDS 1.1, retail ROM, DS BIOS from the user's
+Delta) shows Ho-oh intact with both wings. Reconstructing the transform shows
+why: the zero vertex is on the **camera plane**, `(0,0,0,0)`. Both edges from
+it to a rim vertex project to that rim vertex's screen point, so the triangle
+has **zero screen area**; the DS's clipper stores no polygon for it. The
+software rasteriser stored its screen `(0,0)` literally and gave the triangle
+area, fanning the left wing out of the corner. Dropping exactly the
+`(0,0,0,0)` triangles in `stage_triangle()` renders a complete Ho-oh in the PC
+renderer (both wings, body, tail, no fan). The S10 workaround had dropped
+every `w <= 0` triangle, which also removed real near-plane-crossing wing
+geometry and left the gap.
+
+**Fix.** `3ds_port/nitro/src/port_gx3d.c`: `camera_plane()` detects exact
+`(0,0,0,0)`; `stage_triangle()` drops the polygon before staging. The
+`w`-hack vertex changes in `port_gx3d_vertex.c` / the header are reverted, and
+`to_screen()` is Platinum's again. The synthetic test
+`test_camera_plane_triangle` checks `scene->count == 0`.
 
 **Not yet run on hardware:** the PICA must be checked on the title, with the
-3D slider both at 2D and 3D. The fan should be the feathered wing, not grey.
+3D slider both at 2D and 3D. The bird should be intact, no fan and no gap.
 
-**Local artifact.** 3DS build 1092/1092, 0 unresolved; `.3dsx` **9,278,472 B**
-(`sha256 63d880e7a19d3a61218b471fca8b94a06b8866430025e1aed8b2b2508c729c03`),
+**Local artifact.** 3DS build 1092/1092, 0 unresolved; `.3dsx` **9,278,600 B**
+(`sha256 4cecadd071b4aa4557ad651c0982255132672ae90b86c0f74ce6679c25d508ab`),
 `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). Staged as
-`sdmc:/3ds/pokeheartgold.3dsx`; the previous artifact
-(`3f493661…b7f00`) is kept beside it as `pokeheartgold-3f493661.3dsx`.
+`sdmc:/3ds/pokeheartgold.3dsx`; the audio-only build (`63d880e7…`) and the
+previous `3f493661…` are kept beside it for rollback.
 
 ## Files
 
@@ -100,7 +111,6 @@ The PC reference at title frame 4800 is byte-identical to the clean reference
 - `tools/hgss_game.py` — removes the empty alias section, links the table,
   checks the linked size.
 - `tests/test_hgss_game.py` — table/build tests.
-- `3ds_port/nitro/include/nitro_port_gx3d.h`, `src/port_gx3d.c`,
-  `src/port_gx3d_vertex.c`, `tests/test_gx3d.c` — the camera-point flag and
-  GPU w.
+- `3ds_port/nitro/src/port_gx3d.c`, `tests/test_gx3d.c` — the camera-plane
+  drop.
 - `docs/wiki/3DS-Pitfalls.md` — the symptom/cause/rule for both.

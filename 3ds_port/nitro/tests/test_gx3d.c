@@ -372,19 +372,15 @@ static void test_triangle_strip(void)
     }
 }
 
-static void test_camera_point_vertex(void)
+/* A vertex on the camera plane: clip (0,0,0,0). Both edges to the rim
+ * vertices project to the same points, so the triangle has no screen area and
+ * the DS stores no polygon. Leaving it to the software rasteriser (which took
+ * screen (0,0) literally) fanned the title's left wing out of the corner. */
+static void test_camera_plane_triangle(void)
 {
-    /* A vertex exactly at the camera: clip (0,0,0,0). It is on all six clip
-     * planes, so the clipper keeps it, and the scene stores screen (0,0) as
-     * the PC reference and the DS title do. The PICA cannot divide by w = 0,
-     * so the port must give it a positive w (20.12) without moving it. The
-     * title's fans are quad strips whose spine is this vertex. */
     static const uint32_t proj[16]={10713,0,0,0, 0,14283,0,0,
                                     0,0,-4096,-4096, 0,0,0,0};
-    NitroGx3dGpuVertex gpu[3];
-    NitroGx3dBatch batches[2];
     const NitroGx3dScene *scene;
-    size_t count,batch_count;
     unsigned k;
 
     reset_geometry();
@@ -399,34 +395,7 @@ static void test_camera_point_vertex(void)
     NitroPort_GxDirectWrite(0x41,0);
     swap();
     scene=NitroPort_Gx3dScene();
-    CHECK(scene->count==1);
-    if(scene->count==1){
-        const NitroGx3dTriangle *tri=&scene->triangles[0];
-        /* v[0] is the camera point: still screen (0,0), but w is 1 now. */
-        CHECK(tri->v[0].clip[0]==0 && tri->v[0].clip[1]==0 &&
-              tri->v[0].clip[2]==0);
-        CHECK(tri->v[0].clip[3]==1);
-        CHECK((tri->v[0].flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0);
-        CHECK(tri->v[0].x==0 && tri->v[0].y==0);
-        /* The rim vertices keep the real w the projection gave them. */
-        CHECK(tri->v[1].clip[3]>0);
-        CHECK(tri->v[2].clip[3]>0);
-    }
-    count=NitroPort_Gx3dBuildBatches(scene,gpu,3,batches,2,&batch_count,NULL);
-    CHECK(count==3);
-    CHECK(batch_count==1);
-    if(count==3){
-        /* The camera vertex's GPU w is huge, so its 1/w (the perspective
-         * weight) is negligible like the software rasteriser's inv_w = 0:
-         * the fan takes the rim texels, not its own grey one. Its NDC is
-         * still the top-left corner. In a Z-buffer scene z scales with w,
-         * so z/w (the stored depth) is the camera point's 0.5. */
-        CHECK(gpu[0].position[3]>1000.0f*gpu[1].position[3]);
-        CHECK(gpu[0].position[3]>1000.0f);
-        CHECK(gpu[0].position[0]<0.0f);
-        CHECK(gpu[0].position[1]>0.0f);
-        CHECK(fabs((double)(gpu[0].position[2]/gpu[0].position[3])+0.5)<1e-3);
-    }
+    CHECK(scene->count==0);
 }
 
 static void test_box_test(void)
@@ -1859,7 +1828,7 @@ static void run_all(void)
     test_interpolation_tile_a_scene();
     test_interpolation_swaying();
     test_triangle_strip();
-    test_camera_point_vertex();
+    test_camera_plane_triangle();
     test_hidden_vertices();
     test_textures();
     test_box_test();

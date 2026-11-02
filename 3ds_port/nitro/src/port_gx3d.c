@@ -414,6 +414,15 @@ static int64_t plane_distance(const GeoVertex *v,int plane)
 {
     return (int64_t)v->clip[3]+(plane&1?-(int64_t)v->clip[plane>>1]:v->clip[plane>>1]);
 }
+/* A vertex on the camera plane: clip (0,0,0,0). Both edges to a real vertex
+ * project to that vertex's screen point, so a triangle with one of these has
+ * zero screen area. The DS's clipper stores nothing for it. The software
+ * rasteriser used to take its screen (0,0) literally, which fanned a whole
+ * title wing out of the corner; drop the polygon before it is staged. */
+static int camera_plane(const GeoVertex *v)
+{
+    return v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && v->clip[3]==0;
+}
 /* Which clip planes a vertex is outside of, one bit per plane. */
 static inline unsigned outcode(const int32_t clip[4])
 {
@@ -557,18 +566,6 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
     int i;
     memset(&out,0,sizeof(out));
     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
-    /* A vertex exactly at the camera: clip (0,0,0,0). It survives the six
-     * clip planes (w + v < 0 is false at 0), and the viewport transform
-     * below leaves it at screen (0,0), as the PC reference and the DS's
-     * own title do. Keep clip[3] = 1 here so the software rasteriser and
-     * the W-buffer depth keep their values; the GPU vertex gets a large w
-     * in put_vertex(), which makes its 1/w negligible like the software
-     * rasteriser's inv_w = 0 (otherwise the PICA's perspective-correct
-     * interpolation lets this vertex's texel dominate a whole fan). */
-    if(v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && v->clip[3]==0) {
-        out.clip[3]=1;
-        out.flags|=NITRO_GX3D_VERTEX_CAMERA_POINT;
-    }
     /* The DS's viewport transform: x = (X + W) * width / 2W + x0, and
      * y = (W - Y) * height / 2W + top, top = 191 - the viewport's top line
      * (y counts down; viewport edges are inclusive). Kept to 1/256 pixel
@@ -746,6 +743,11 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
 {
     GeoVertex v[12],tmp[12];
     unsigned i,p,n=3,clipped=0;
+    /* See camera_plane(): the polygon has no screen area. */
+    if(camera_plane(a) || camera_plane(b) || camera_plane(c)){
+        sDiag.clipped++;
+        return;
+    }
     /* All three outside one plane: nothing is left (but for the shadows,
      * if it's only the view's sides). None outside any: no clipping
      * needed. Most of a map is one or the other. */

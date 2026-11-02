@@ -705,8 +705,8 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("NitroPort_Gx3dFlush()", text)
         self.assertIn("NitroPort_Gx3dThreadMain(&sGeoRunning)", text)
         self.assertIn("NitroPort_Gx3dConvertPending()", text)
-        # The camera-plane workaround is gone: the port gives the exact
-        # (0,0,0,0) vertex a positive w itself, so the scene is passed on
+        # The camera-plane workaround is gone: the port drops the exact
+        # (0,0,0,0) zero-area triangles itself, so the scene is passed on
         # untouched.
         self.assertNotIn("Hgss_PicaDropBehindCamera", text)
         self.assertIn("NitroPort_PicaRender(scene, &dropped)", text)
@@ -722,19 +722,22 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertLess(frame.index("NitroPort_Gx3dFlush()"),
                         frame.index("DrawFrame()"))
 
-    def test_3d_camera_point_gets_a_positive_w_in_the_port(self):
-        """The exact (0,0,0,0) vertex must reach the GPU with w > 0.
+    def test_3d_camera_plane_triangle_is_dropped(self):
+        """The exact (0,0,0,0) vertex is a zero-area camera-plane triangle.
 
-        The clipper keeps a vertex at the camera (w + v < 0 is false at 0),
-        and the PC reference and the DS title put it at screen (0,0). The
-        PICA cannot divide by w = 0, so the scene keeps that screen position
-        but stores the smallest positive w (20.12). The scene is passed to
-        the GPU untouched: the old HGSS-side drop workaround is gone.
+        Both edges from it to a rim vertex project to that vertex, so the DS
+        stores no polygon. The port drops it before staging; giving it a
+        positive w or its screen (0,0) fanned Ho-oh's wing out of the corner.
+        The old HGSS-side drop workaround (every w <= 0 triangle) also removed
+        real wing geometry and stays gone.
         """
         source = (REPO / "3ds_port" / "nitro" / "src" / "port_gx3d.c").read_text()
+        self.assertIn("static int camera_plane(", source)
         self.assertIn("v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && "
                       "v->clip[3]==0", source)
-        self.assertIn("out.clip[3]=1;", source)
+        self.assertIn("if(camera_plane(a) || camera_plane(b) || camera_plane(c))",
+                      source)
+        self.assertNotIn("out.clip[3]=1;", source)
         # The workaround's file and call are gone from the program.
         self.assertFalse((self.APP / "pica_scene.c").exists())
         self.assertNotIn("Hgss_PicaDropBehindCamera",

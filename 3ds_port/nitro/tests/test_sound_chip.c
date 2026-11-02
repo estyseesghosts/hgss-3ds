@@ -157,6 +157,18 @@ static void test_psg(void)
     CHECK(positive > 10);
     CHECK(negative > 10);
     CHECK(frame(out, 0, 1) == 0);
+    /* Duty 7 is 0% high (GBATEK): silence. It used to be emitted as 100%
+     * high, a full-scale DC step that clipped the mix. */
+    memset(out, 0, sizeof(out));
+    reg32(0x480, 0x80000000u | (3u << 29) | (7u << 24) |
+          (0u << 16) | 127u);
+    NitroSound_Mix(&chip, out, 100);
+    {
+        int silent = 1;
+        for (i = 0; i < 100; ++i)
+            if (frame(out, i, 0) != 0) silent = 0;
+        CHECK(silent);
+    }
 }
 
 static void test_noise(void)

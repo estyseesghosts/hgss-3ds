@@ -1,122 +1,52 @@
-diff --git a/nitro/include/nitro_port_gx3d.h b/nitro/include/nitro_port_gx3d.h
-index 6f93050..003e41a 100644
---- a/nitro/include/nitro_port_gx3d.h
-+++ b/nitro/include/nitro_port_gx3d.h
-@@ -30,8 +30,15 @@ typedef struct NitroGx3dVertex {
-     uint32_t depth;
-     float inv_w, s, t;
-     uint16_t color;               /* DS RGB555 */
-+    /* NITRO_GX3D_VERTEX_CAMERA_POINT: clip was exactly (0,0,0,0), so the
-+     * store keeps screen (0,0) and clip[3] = 1 (see to_screen in
-+     * port_gx3d.c). The GPU path then needs a different w; see put_vertex
-+     * in port_gx3d_vertex.c. */
-+    uint8_t flags;
- } NitroGx3dVertex;
- 
-+#define NITRO_GX3D_VERTEX_CAMERA_POINT 0x01u
-+
- typedef struct NitroGx3dTriangle {
-     NitroGx3dVertex v[3];
-     uint32_t polygon_attr;
 diff --git a/nitro/src/port_gx3d.c b/nitro/src/port_gx3d.c
-index c782c1c..9d5c7e0 100644
+index c782c1c..49ec179 100644
 --- a/nitro/src/port_gx3d.c
 +++ b/nitro/src/port_gx3d.c
-@@ -557,6 +557,18 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
-     int i;
-     memset(&out,0,sizeof(out));
-     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
-+    /* A vertex exactly at the camera: clip (0,0,0,0). It survives the six
-+     * clip planes (w + v < 0 is false at 0), and the viewport transform
-+     * below leaves it at screen (0,0), as the PC reference and the DS's
-+     * own title do. Keep clip[3] = 1 here so the software rasteriser and
-+     * the W-buffer depth keep their values; the GPU vertex gets a large w
-+     * in put_vertex(), which makes its 1/w negligible like the software
-+     * rasteriser's inv_w = 0 (otherwise the PICA's perspective-correct
-+     * interpolation lets this vertex's texel dominate a whole fan). */
-+    if(v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && v->clip[3]==0) {
-+        out.clip[3]=1;
-+        out.flags|=NITRO_GX3D_VERTEX_CAMERA_POINT;
-+    }
-     /* The DS's viewport transform: x = (X + W) * width / 2W + x0, and
-      * y = (W - Y) * height / 2W + top, top = 191 - the viewport's top line
-      * (y counts down; viewport edges are inclusive). Kept to 1/256 pixel
-diff --git a/nitro/src/port_gx3d_vertex.c b/nitro/src/port_gx3d_vertex.c
-index e04c3fc..55a0e27 100644
---- a/nitro/src/port_gx3d_vertex.c
-+++ b/nitro/src/port_gx3d_vertex.c
-@@ -67,7 +67,13 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
-         for(k=0;k<3;k++){
-             const NitroGx3dVertex *v=&tri->v[k];
-             NitroGx3dGpuVertex *dst=&out[count++];
--            float w=v->clip[3]/4096.0f;
-+            /* Same camera-point w as put_vertex(): its stored clip[3] is 1 only
-+             * to keep the software values finite; the GPU needs it negligible
-+             * in the perspective interpolation. Scale z with w in a Z-buffer
-+             * scene (W-buffer scenes store the DS W itself). */
-+            int camera=(v->flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0;
-+            float base=(float)v->clip[3]/4096.0f;
-+            float w=camera?262144.0f:base;
-             float x=v->x/256.0f;
-             float y=v->y/256.0f;
-             /* Map final DS pixels into NDC without applying the DS viewport
-@@ -80,6 +86,8 @@ size_t NitroPort_Gx3dBuildOpaqueVertices(const NitroGx3dScene *scene,
-             dst->position[0]=ndc_x*w;
-             dst->position[1]=ndc_y*w;
-             dst->position[2]=NitroPort_Gx3dClipZ(v,scene->swap_param);
-+            if(camera && !(scene->swap_param&2u) && base>0.0f)
-+                dst->position[2]*=w/base;
-             dst->position[3]=w;
-             dst->color[0]=color8(v->color&31u);
-             dst->color[1]=color8((v->color>>5)&31u);
-@@ -265,12 +273,25 @@ static void put_vertex(NitroGx3dGpuVertex *dst,const NitroGx3dVertex *v,
-                        uint32_t swap_param,unsigned alpha,float tw,float th,
-                        float sx,float sy)
+@@ -414,6 +414,15 @@ static int64_t plane_distance(const GeoVertex *v,int plane)
  {
--    float w=v->clip[3]/4096.0f;
-+    /* The PICA's w, and the clip z that goes with it. A camera-point vertex
-+     * stores clip[3] = 1 so the software path and the W-buffer depth stay
-+     * finite; on the GPU its 1/w is the perspective weight, and the software
-+     * rasteriser weights that vertex by inv_w = 0 (the corner of the fan is
-+     * the rim vertices' texel, not the camera point's grey one). Give the GPU
-+     * a huge w instead: 1/w becomes negligible, so perspective-correct
-+     * interpolation matches the software/DS fan. In a Z-buffer scene z must
-+     * scale with w to keep z/w (the stored depth); W-buffer scenes store the
-+     * DS W itself, so z stays as NitroPort_Gx3dClipZ gave it. */
-+    int camera=(v->flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0;
-+    float base=(float)v->clip[3]/4096.0f;
-+    float w=camera?262144.0f:base;
-     float ndc_x=sx/128.0f-1.0f;
-     float ndc_y=1.0f-sy/96.0f;
-     dst->position[0]=ndc_x*w;
-     dst->position[1]=ndc_y*w;
-     dst->position[2]=NitroPort_Gx3dClipZ(v,swap_param);
-+    if(camera && !(swap_param&2u) && base>0.0f)
-+        dst->position[2]*=w/base;
-     dst->position[3]=w;
-     dst->color[0]=color8(v->color&31u);
-     dst->color[1]=color8((v->color>>5)&31u);
+     return (int64_t)v->clip[3]+(plane&1?-(int64_t)v->clip[plane>>1]:v->clip[plane>>1]);
+ }
++/* A vertex on the camera plane: clip (0,0,0,0). Both edges to a real vertex
++ * project to that vertex's screen point, so a triangle with one of these has
++ * zero screen area. The DS's clipper stores nothing for it. The software
++ * rasteriser used to take its screen (0,0) literally, which fanned a whole
++ * title wing out of the corner; drop the polygon before it is staged. */
++static int camera_plane(const GeoVertex *v)
++{
++    return v->clip[0]==0 && v->clip[1]==0 && v->clip[2]==0 && v->clip[3]==0;
++}
+ /* Which clip planes a vertex is outside of, one bit per plane. */
+ static inline unsigned outcode(const int32_t clip[4])
+ {
+@@ -734,6 +743,11 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
+ {
+     GeoVertex v[12],tmp[12];
+     unsigned i,p,n=3,clipped=0;
++    /* See camera_plane(): the polygon has no screen area. */
++    if(camera_plane(a) || camera_plane(b) || camera_plane(c)){
++        sDiag.clipped++;
++        return;
++    }
+     /* All three outside one plane: nothing is left (but for the shadows,
+      * if it's only the view's sides). None outside any: no clipping
+      * needed. Most of a map is one or the other. */
 diff --git a/nitro/tests/test_gx3d.c b/nitro/tests/test_gx3d.c
-index cb96aca..5050c9c 100644
+index cb96aca..5ed8a0a 100644
 --- a/nitro/tests/test_gx3d.c
 +++ b/nitro/tests/test_gx3d.c
-@@ -372,6 +372,63 @@ static void test_triangle_strip(void)
+@@ -372,6 +372,32 @@ static void test_triangle_strip(void)
      }
  }
  
-+static void test_camera_point_vertex(void)
++/* A vertex on the camera plane: clip (0,0,0,0). Both edges to the rim
++ * vertices project to the same points, so the triangle has no screen area and
++ * the DS stores no polygon. Leaving it to the software rasteriser (which took
++ * screen (0,0) literally) fanned the title's left wing out of the corner. */
++static void test_camera_plane_triangle(void)
 +{
-+    /* A vertex exactly at the camera: clip (0,0,0,0). It is on all six clip
-+     * planes, so the clipper keeps it, and the scene stores screen (0,0) as
-+     * the PC reference and the DS title do. The PICA cannot divide by w = 0,
-+     * so the port must give it a positive w (20.12) without moving it. The
-+     * title's fans are quad strips whose spine is this vertex. */
 +    static const uint32_t proj[16]={10713,0,0,0, 0,14283,0,0,
 +                                    0,0,-4096,-4096, 0,0,0,0};
-+    NitroGx3dGpuVertex gpu[3];
-+    NitroGx3dBatch batches[2];
 +    const NitroGx3dScene *scene;
-+    size_t count,batch_count;
 +    unsigned k;
 +
 +    reset_geometry();
@@ -131,44 +61,17 @@ index cb96aca..5050c9c 100644
 +    NitroPort_GxDirectWrite(0x41,0);
 +    swap();
 +    scene=NitroPort_Gx3dScene();
-+    CHECK(scene->count==1);
-+    if(scene->count==1){
-+        const NitroGx3dTriangle *tri=&scene->triangles[0];
-+        /* v[0] is the camera point: still screen (0,0), but w is 1 now. */
-+        CHECK(tri->v[0].clip[0]==0 && tri->v[0].clip[1]==0 &&
-+              tri->v[0].clip[2]==0);
-+        CHECK(tri->v[0].clip[3]==1);
-+        CHECK((tri->v[0].flags&NITRO_GX3D_VERTEX_CAMERA_POINT)!=0);
-+        CHECK(tri->v[0].x==0 && tri->v[0].y==0);
-+        /* The rim vertices keep the real w the projection gave them. */
-+        CHECK(tri->v[1].clip[3]>0);
-+        CHECK(tri->v[2].clip[3]>0);
-+    }
-+    count=NitroPort_Gx3dBuildBatches(scene,gpu,3,batches,2,&batch_count,NULL);
-+    CHECK(count==3);
-+    CHECK(batch_count==1);
-+    if(count==3){
-+        /* The camera vertex's GPU w is huge, so its 1/w (the perspective
-+         * weight) is negligible like the software rasteriser's inv_w = 0:
-+         * the fan takes the rim texels, not its own grey one. Its NDC is
-+         * still the top-left corner. In a Z-buffer scene z scales with w,
-+         * so z/w (the stored depth) is the camera point's 0.5. */
-+        CHECK(gpu[0].position[3]>1000.0f*gpu[1].position[3]);
-+        CHECK(gpu[0].position[3]>1000.0f);
-+        CHECK(gpu[0].position[0]<0.0f);
-+        CHECK(gpu[0].position[1]>0.0f);
-+        CHECK(fabs((double)(gpu[0].position[2]/gpu[0].position[3])+0.5)<1e-3);
-+    }
++    CHECK(scene->count==0);
 +}
 +
  static void test_box_test(void)
  {
      reset_geometry();
-@@ -1802,6 +1859,7 @@ static void run_all(void)
+@@ -1802,6 +1828,7 @@ static void run_all(void)
      test_interpolation_tile_a_scene();
      test_interpolation_swaying();
      test_triangle_strip();
-+    test_camera_point_vertex();
++    test_camera_plane_triangle();
      test_hidden_vertices();
      test_textures();
      test_box_test();

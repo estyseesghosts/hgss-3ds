@@ -154,6 +154,8 @@ static int32_t wave_sample(NitroSoundVoice *v, unsigned channel,
     if (format == 3u) {
         if (channel >= 14) return (v->noise & 1u) ? -32767 : 32767;
         if (channel < 8) return 0;
+        /* Duty 7 is 0% high (GBATEK): silence. */
+        if (((ctrl >> 24) & 7u) == 7u) return 0;
         return (v->sampleIndex & 7u) <= ((ctrl >> 24) & 7u) ? 32767 : -32767;
     }
     if (!source) return 0;

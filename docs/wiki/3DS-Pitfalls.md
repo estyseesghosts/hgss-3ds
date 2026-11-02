@@ -22,11 +22,12 @@ sequence.
 | 3D scene black while 2D text draws | [Only engine B may skip composition](#only-engine-b-may-skip-composition) |
 | Black 3D, `3D images: 0` in the log, scene-builder lines present | [The 3D needs a GPU worker](#the-3d-needs-a-gpu-worker) |
 | 3D shows but updates about once a second; `3D images:` barely moves | [A worker on the game's core runs at 1 fps](#a-worker-on-the-games-core-runs-at-1-fps) |
-| Black shards fanning out from a corner of the 3D image | [A camera-plane vertex is a fan from the top-left corner](#a-camera-plane-vertex-is-a-fan-from-the-top-left-corner) |
+| Ho-oh's wings fanned out to a corner of the 3D image | [A camera-plane triangle has no screen area](#a-camera-plane-triangle-has-no-screen-area) |
 | Log text drawn over the game's bottom screen | [No console on the game's screens](#no-console-on-the-games-screens) |
 | 13 Hz with drawing at 78 ms | [Ask for the New 3DS clock](#ask-for-the-new-3ds-clock) |
 | Silence with `NDSP started` in the log | [NDSP must be fed](#ndsp-must-be-fed) |
 | A note hangs until the next note starts; sounds distort | [The NNS volume table is an empty alias](#the-nns-volume-table-is-an-empty-alias) |
+| Notes sound right but the mix clips, even at low console volume | [The 16-bit mix has 6 dB more level than the DS](#the-16-bit-mix-has-6-db-more-level-than-the-ds) |
 | A noise note writes an unused hole (1407; related) | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 
@@ -235,33 +236,34 @@ being built at `-O0` by the harness while the port archives were `-O2`).
 own. Priority alone cannot schedule a thread on a core another thread is
 holding.
 
-## A camera-plane vertex is a fan from the top-left corner
+## A camera-plane triangle has no screen area
 
-**Symptom.** Black triangular shards fanning out from a corner of the 3D
-image -- on the title screen, they stretch Ho-oh's wings to an off-screen
-point.
+**Symptom.** Ho-oh's left wing stretches to an off-screen point at the
+top-left corner of the title's 3D image; on the PICA it can be a black or
+grey fan. The bird looks deformed rather than like the DS title.
 
-**Cause.** The port clips to the DS's six planes ±x/y/z <= w. A vertex at
-`(0, 0, 0, 0)` satisfies all six, so it survives: `w + v < 0` is false for
-every one. The GPU vertex is `(ndc * w, w)`, and with `w = 0` that is
-`(0, 0, z, 0)`: the PICA cannot divide it, and the triangles touching it
-were drawn black. The PC reference and the DS put the vertex at screen
-`(0, 0)`; every triangle touching it is a fan from that corner.
+**Cause.** HGSS's title quads and quad strips contain vertices whose clip
+coordinates are exactly `(0, 0, 0, 0)` — on the camera plane. The port's
+clipper keeps it (it satisfies all six planes ±x/y/z <= w with equality), and
+the software rasteriser stored its screen position as `(0, 0)` and drew a real
+triangle from the corner. Both edges from a camera-plane vertex to a real
+vertex project to that vertex's screen point, so the triangle has **zero
+screen area**: the DS's clipper stores no polygon for it. The port was
+drawing a fan that the DS never draws. (A real DS title capture in melonDS
+shows Ho-oh intact.)
 
-**Fix.** `3ds_port/nitro/src/port_gx3d.c` (`to_screen`) detects the exact
-`(0, 0, 0, 0)` vertex and stores `clip[3] = 1` (20.12) while leaving its
-screen position, depth and `inv_w` alone. The GPU then divides it to
-`(0, 0)` with valid texture and colour. This is a deliberate divergence from
-`platinum.lock` (upstream PR: "gx3d: give a camera-plane vertex a positive
-w"), recorded in `docs/decisions.md`; the synthetic case in
-`nitro/tests/test_gx3d.c` (`test_camera_point_vertex`) covers it. The old
-HGSS-side drop workaround (`pica_scene.c`) is removed: it deleted the
-geometry and left a transparent gap.
+**Fix.** `3ds_port/nitro/src/port_gx3d.c` `stage_triangle()` detects the exact
+`(0, 0, 0, 0)` vertex (`camera_plane()`) and drops the polygon before it is
+staged, for both the software reference and the PICA scene. Do **not** drop
+every triangle with `w <= 0`: real wing geometry crosses the near plane, and
+the old HGSS `pica_scene.c` drop removed it and left a transparent gap.
+`nitro/tests/test_gx3d.c` (`test_camera_plane_triangle`) checks that the
+synthetic camera-plane triangle stores no polygon. The PC title render now
+shows the complete bird.
 
-**Rule.** The DS's `w = 0` plane is not the GPU's: a vertex the CPU accepts at
-`w = 0` cannot be divided. Give exactly that vertex a positive `w`; do not
-move it (the corner is the DS's own projection) and do not drop its
-triangles.
+**Rule.** A vertex on the camera plane is degenerate, not a corner to project
+to. Drop its polygon; do not give it a `w`, and do not drop the whole
+near-plane-crossing set.
 
 ## No console on the game's screens
 
@@ -381,6 +383,29 @@ own order and never runs the port's object step.
 **Rule.** A zero-size data alias is only valid where the linker's section order
 is pinned. When a port links the same objects with a different order, give the
 symbol its real data; an empty alias silently points at whatever follows.
+
+## The 16-bit mix has 6 dB more level than the DS
+
+**Symptom.** After the volume-table fix the notes and fades are right, but the
+mix still sounds clipped/crunchy. Turning the console's volume down does not
+remove it: the damage is in the samples, not the amplifier.
+
+**Cause.** The DS's output stage is 10-bit. A retail title captured in melonDS
+and calibrated with a full-scale tone through the same path peaks at about
+**0.42** of full scale (RMS 0.071); the port's 16-bit mix of the same
+registers peaks at **1.0** (RMS 0.139). The port was about 6 dB hot, so
+percussion peaks hit the rails and hard-clipped. PSG duty 7 was also emitted
+as 100% high instead of GBATEK's 0% (silence), adding a full-scale DC step
+whenever a sequence used it.
+
+**Fix.** `NitroPort_SoundRender` trims 6 dB (`>> 1`) at the shared output
+stage, matching the measured DS headroom; the mixer itself is unchanged, so
+its unit tests still check the register maths. `port_sound_chip.c` (and the
+test reference) return silence for PSG duty 7.
+
+**Rule.** "Sounds like the amp" is not proof it is the amp: lower the volume
+and listen. If the distortion remains, it is baked into the samples; compare
+the digital level against a calibratable reference before adding gain.
 
 ## A frame under the refresh is not a 60 Hz frame
 
