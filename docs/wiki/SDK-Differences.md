@@ -117,6 +117,10 @@ BIOS volume curve with NitroSDK 4.2's 724-entry table: its low entries stay non-
 - `hgss/compat/include/nitro/gx/g3imm.h`'s `G3_StoreMtx`, `G3_RestoreMtx`, `G3_Scale` and
   `G3_TexCoord` wrote `reg_G3_MTX_*` directly. The port's geometry engine only sees
   `NitroPort_GxDirectWrite` (HGSS's own header already routes the other G3 helpers that way).
+- The same was true of the G2D software-sprite files (`g2d_softsprite.c`, `g2d_renderer_core.c`,
+  `g2d_oam_soft_emu.c`) and of `g3_util.c`'s ortho/look-at matrix-mode switch and `G3_RotX/Y/Z`.
+  They were not visible in the header comparison; the battle's invisible Poképics exposed them
+  (NitroSystem 0304 and NitroSDK 0605).
 
 ### NitroSystem differences
 
@@ -180,7 +184,7 @@ The sdk-diff record is now complete. What it settled:
 
 - `OSThread` and `OSContext` layouts, the IRQ table, and the interrupt handler offsets (section 9.1). The handler C replacements (patches 0401/0501/0901) apply to confirmed-identical offsets.
 - The payload formats of the RTC, touch, power and mic PXI requests (sections 3.2-3.5).
-- NitroSystem differences for Platinum's five NitroSystem patches (section 9.2): the GCC-build fixes are covered where they apply (NNS 0301 for CLZ, pokeheartgold 1101 for the return type); the sound-capture division has no HGSS counterpart; the GXFIFO-forwarding, queued-3D-transfer and OAM-disable-bit equivalents are located but not yet written.
+- NitroSystem differences for Platinum's five NitroSystem patches (section 9.2): the GCC-build fixes are covered where they apply (NNS 0301 for CLZ, pokeheartgold 1101 for the return type); the sound-capture division has no HGSS counterpart; the GXFIFO-forwarding, queued-3D-transfer and OAM-disable-bit equivalents were located here and written later (NitroSystem 0302, and 0304 for the G2D software-sprite path).
 - The `OSSystemWork` offsets (section 4) and the ARM7 sound entry-point mapping (section 5).
 
 What is still work, not comparison: writing the compat headers, the HGSS PXI decoders, the three owed NitroSystem equivalents, and the ARM7-sound rewrite. Those are tracked in [docs/progress/STATE.md](../progress/STATE.md) under "Next actions".

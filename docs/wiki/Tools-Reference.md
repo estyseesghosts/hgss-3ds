@@ -1,6 +1,6 @@
 # Tools reference
 
-Every script in `tools/` and every test runner in `tests/`, with what it does, how to call it, and what it needs. Usage lines are copied from each script's header. Where a header and the code disagree, the entry says so.
+Every script in `tools/`, the player scripts in `scripts/`, and every test runner in `tests/`, with what it does, how to call it, and what it needs. Usage lines are copied from each script's header. Where a header and the code disagree, the entry says so.
 
 Terms used below:
 
@@ -9,6 +9,46 @@ Terms used below:
 - **ROM**: your own game ROM. Nothing in this table needs one unless it says so.
 
 Dot-named files in `tools/` (for example `tools/.gate.sh`) are local scratch. `.gitignore` excludes `tools/.*`, so they are not part of the repository and are not documented here.
+
+## Player scripts (`scripts/`)
+
+These are the end-user entry points: plain Python 3, no container, no MWCC
+and no Nitro SDK. The [player's guide](../USER-GUIDE.md) is the prose version;
+this is the reference. They add devkitPro's `tools/bin`, `devkitARM/bin` and
+`pacman/bin` to `PATH` for every child process, so they work before the user's
+shell has exported the paths.
+
+### `scripts/setup_toolchain.py`
+
+Installs or checks everything needed to build the port: devkitARM,
+libctru/citro3d, `3dsxtool`/`smdhtool`, `picasso`/`bin2s`, `git`, `make` and
+Python 3.
+
+- **Usage:** `python3 scripts/setup_toolchain.py [--check] [--yes]`
+- **Platforms:** Debian/Ubuntu (devkitPro's apt repository, then `dkp-pacman -S 3ds-dev general-tools picasso`) and macOS (downloads devkitPro's `devkitpro-pacman-installer.pkg`, installs it to `/opt/devkitpro`, then the same packages). Anything else stops with the manual instructions; Windows is [WINDOWS.md](../WINDOWS.md).
+- **Needs:** `sudo`/your password for the system install, and network access. No ROM, save, MWCC or Nitro SDK.
+- **Output:** a table of each required tool, its version and its path; exit 0 only when all are present. `--check` changes nothing.
+
+### `scripts/prepare_game.py`
+
+Verifies one of the two supported US dumps, extracts NitroFS and packs the
+game data the port reads.
+
+- **Usage:** `python3 scripts/prepare_game.py ROM.nds [-o PAK] [--data-dir DIR] [--force] [--clean]`
+- **Both games:** HeartGold packs to `build/heartgold3ds.pak` (build ID `heartgold-nitrofs-1`, data in `build/game-data`); SoulSilver packs to `build/soulsilver3ds.pak` (build ID `soulsilver-nitrofs-1`, data in `build/game-data-ss`). The names match [SD-Card-Layout](SD-Card-Layout.md). SoulSilver is prepared correctly but today's 3DS app loads HeartGold only; the script says so.
+- **Reads:** the ROM (read-only). **Writes:** the extracted files, `manifest.json` and the `.pak`; all private and git-ignored.
+- **Re-runs:** it compares the existing manifest's ROM SHA-1 with the file and reuses the extraction when they match; `--force` extracts again. `--clean` removes the extracted files after packing, keeping the manifest.
+- **Calls:** `builder/verify_rom.py`, `builder/extract_rom.py`, `builder/pack.py`.
+
+### `scripts/build_3dsx.py`
+
+Builds the `.3dsx` and stages the SD-card folder.
+
+- **Usage:** `python3 scripts/build_3dsx.py (--rom ROM.nds | --pak PAK) [--manifest FILE] [--out DIR] [--build-dir DIR] [-j N] [--skip-bootstrap] [--skip-build]`
+- **What it calls, in order:** `prepare_game.prepare()` when `--rom` is given; `tools/bootstrap.py` (fetch the decomp and apply the patches; skipped with `--skip-bootstrap`); `tools/hgss_game.py --target 3ds` (compile and package; skipped with `--skip-build`); optional `3dsxdump` validation; then the copy.
+- **Output:** `<out>/3ds/pokeheartgold.3dsx` and `<out>/3ds/<game folder>/{pak,manifest.json}` (default `out` is `dist/sd-card`, which is git-ignored). It prints the size and SHA-256 of the `.3dsx` and the exact paths to copy. `--out /Volumes/3DS` stages directly onto a mounted card.
+- **Manifest lookup:** `--manifest` if given, else next to the pack, else `build/game-data/manifest.json` (then the SoulSilver data folder). A clear error lists those places when none exists.
+- **Needs:** the toolchain from `setup_toolchain.py`, `git`, network for the first bootstrap, and the pack. No container.
 
 ## Tools
 
@@ -294,7 +334,7 @@ Notes:
 - `tests/sdk/port_memory.c` is a helper, not a suite: it defines the eleven port memory arrays for the suites whose SDK objects touch registers or main memory (patches 1301/1302). A test that needs them links it from its `run.sh`.
 - `tests/layout_probe/run.sh` reads `PY` (Python with pyelftools; default `python3`), `DECOMP` (default `/work/pokeheartgold`) and `FILES` (default `$DECOMP/files`). Extra arguments are passed to `run_probe.py`.
 - `tests/inputs/*.txt` are the frame-indexed input scripts (`boot-title`, `main-menu-nosave`, `newgame-buttons`, `newgame-touch`) for the PC runner and the 3DS `script.txt`. They are calibrated against the PC run; a melonDS capture is still open.
-- The vendored `3ds_port/` builds and tests through `tools/hgss_nitro.py`; `make port-tests` is **green at 80 patches** (exit 0, nitrosystem 17,122 checks). See [docs/port-wiring.md](../port-wiring.md).
+- The vendored `3ds_port/` builds and tests through `tools/hgss_nitro.py`; `make port-tests` is **green at 82 patches** (exit 0, nitrosystem 17,122 checks). See [docs/port-wiring.md](../port-wiring.md).
 
 ## Make targets
 
@@ -306,7 +346,7 @@ From the repo `Makefile`:
 | `make tool-tests` | `python3 -I -m unittest discover -s tests` | |
 | `make sdk-tests` | every `tests/sdk/*/run.sh build/upstream` | |
 | `make sdk-survey` | `tools/sdk_compile_survey.py -j $(nproc) --m32` | Exits 1 while files fail (14 at last run). |
-| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 80 patches** (nitrosystem 17,122 checks; gx3d 327+229). |
+| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 82 patches** (nitrosystem 17,122 checks; gx3d 327+229). |
 | `make content-check` | `python3 tools/check_repo_content.py` | Fails if a ROM/save/pak/build artifact is tracked; also part of `make test`. |
 | `make layout` | `bash tests/layout_probe/run.sh` | |
 | `make clean` | `rm -rf build` | Deletes everything under `build/`, including `build/upstream` and `build/reference`. |

@@ -100,6 +100,7 @@ static FILE *sLog;
 static LightLock sLogLock;
 static bool sLogLockReady;
 static volatile bool sGameThreadAlive;
+static bool sThreadsStuck;
 static unsigned long sFrame;
 static volatile bool sQuit;
 static volatile bool sPaused;
@@ -435,6 +436,13 @@ static bool GpuStartGeometry(s32 priority)
 
 static void GpuStopGeometry(void)
 {
+    /* Drain while the worker still runs. NitroPort_Gx3dStopThread waits for
+     * the ring to empty, and on a close the game's thread left
+     * NitroPort_OnFrame before its Gx3dFlush: its last frame is still in the
+     * producer's buffer. With the thread already joined and gone, that wait
+     * has nobody to consume the words and never ends (log-12's quit hung
+     * here, after "closing at frame"). */
+    NitroPort_Gx3dStopThread();
     if (sGeoThread != NULL) {
         sGeoRunning = 0;
         LightEvent_Signal(&sGeoWorkerEvent);
@@ -446,7 +454,6 @@ static void GpuStopGeometry(void)
         }
         sGeoThread = NULL;
     }
-    NitroPort_Gx3dStopThread();
 }
 
 /* Once a frame, from the game's idle path: keep the HOME menu serviced, feed
@@ -725,8 +732,12 @@ static void AudioStop(void)
 {
     if (sAudioThread != NULL) {
         sAudioRunning = false;
-        threadJoin(sAudioThread, 1000 * 1000000LL);
-        threadFree(sAudioThread);
+        if (R_SUCCEEDED(threadJoin(sAudioThread, 1000 * 1000000LL))) {
+            threadFree(sAudioThread);
+        } else {
+            sThreadsStuck = true;
+            NitroPort_Log("[quit] the audio thread didn't stop");
+        }
         sAudioThread = NULL;
     }
 }
@@ -1115,33 +1126,45 @@ int main(int argc, char **argv)
             NitroPort_Log("running the game (thread stack %d KiB)", GAME_STACK_SIZE / 1024);
             WaitForGame(thread);
         }
+        /* Each step is logged: a close that hangs shows where. */
+        NitroPort_Log("[quit] closing");
         aptUnhook(&hook);
+        NitroPort_Log("[quit] APT unhooked");
         /* Geometry first (it may still be finishing a scene for the GPU),
          * then the GPU. Both are no-ops if they never started. */
         GpuStopGeometry();
+        NitroPort_Log("[quit] geometry stopped");
         GpuStop();
+        NitroPort_Log("[quit] display stopped");
         NitroPort_Log("[gx3d] %lu 3D images, %lu scenes drawn",
                       (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes);
     }
 
     if (sAudio) {
         AudioStop();
+        NitroPort_Log("[quit] sound stopped");
         NitroPort_Log("audio: %lu dropped frames of %lu",
                       (unsigned long)ndspGetDroppedFrames(),
                       (unsigned long)ndspGetFrameCount());
     }
     NitroPort_Log("stopping (frame %lu)", sFrame);
     NitroPort_CardFlush();
+    if (sGpuStopFailed || sThreadsStuck) {
+        /* A thread is still inside citro3d/libctru/NDSP: tearing the runtime
+         * down around it crashes on the way out, so end the process (the log
+         * above already says which thread and why). */
+        NitroPort_Log("[quit] a thread is still running; ending the process");
+        if (sLog != NULL) {
+            fflush(sLog);
+            fclose(sLog);
+            sLog = NULL;
+        }
+        svcExitProcess();
+    }
     if (sLog != NULL) {
         fflush(sLog);
         fclose(sLog);
         sLog = NULL;
-    }
-    if (sGpuStopFailed) {
-        /* A GPU/geometry thread is still inside citro3d/libctru: tearing the
-         * runtime down around it crashes on the way out, so end the process
-         * (the log above already says which thread and why). */
-        svcExitProcess();
     }
     if (sAudio) {
         ndspExit();

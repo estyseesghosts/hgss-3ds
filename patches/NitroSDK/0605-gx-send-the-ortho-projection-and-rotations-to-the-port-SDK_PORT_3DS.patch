@@ -1,0 +1,149 @@
+From d927dc237f7f041dbe04ba1903a89772e1167f32 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 06:33:28 +0000
+Subject: [PATCH] gx: send the ortho projection and the rotations to the port
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The port GXFIFO is ordinary memory: only writes that go through the port's
+decoder reach the geometry engine. The g3imm.h inlines and the g3imm.c/g3x.c
+functions were converted (patch 0604), but g3_util.c still wrote the command
+registers directly:
+
+- G3i_OrthoW_ set reg_G3_MTX_MODE to PROJECTION and G3i_LookAt_ set it to
+  POSITION_VECTOR, then loaded the matrix. The mode write never reached the
+  port, so G3_LoadMtx44/43 (which are converted) loaded the matrix into the
+  wrong stack (the field camera's position matrix), and the projection stayed
+  at the field's.
+- G3_RotX/Y/Z sent their nine MTX_MULT_3x3 words through a pointer to
+  reg_G3_MTX_MULT_3x3, which the port never saw; the sprites' rotations were
+  lost.
+
+Everything the battle's Pokepic (the trainer's and the wild Pokémon's 3D
+sprites) draws came through these: the pokepic manager sets the screen-space
+ortho camera once, and every quad is translated/rotated. With the projection
+left at the field camera's, every quad was clipped ("lost: 360 clipped" in the
+PC's gx3d log), so both Pokémon were invisible except during attacks, which
+use the G3D path that was already converted.
+
+Under SDK_PORT_3DS the mode writes and rotations go through
+NitroPort_GxDirectWrite with the same opcodes and parameters. The DS text is
+unchanged (#else keeps the original lines).
+
+Not touched here: G3X_InitMtxStack/ResetMtxStack's reg_G3_MTX_MODE/POP writes.
+They are reset-time calls whose stack level the port also reads through its
+own G3X_GetMtxStackLevel hooks; the field, the summary and the battle all set
+their matrices afterwards. They can be converted the same way if a mismatch
+shows up.
+---
+ src/gx/g3_util.c | 49 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+diff --git a/src/gx/g3_util.c b/src/gx/g3_util.c
+index d618f22..fa80eda 100644
+--- a/src/gx/g3_util.c
++++ b/src/gx/g3_util.c
+@@ -1,5 +1,10 @@
+ #include <nitro.h>
+ #include <nitro/code32.h>
++/* Under SDK_PORT_3DS the command-register writes below go through
++ * NitroPort_GxDirectWrite (declared by nitro/gx/g3imm.h): the port GXFIFO is
++ * ordinary memory and only the decoder sees the commands. Without that the
++ * ortho projection and the rotations never reach the port, and the battle's
++ * software-sprite quads are clipped by the field camera's stale projection. */
+ 
+ void G3i_OrthoW_(fx32 t, fx32 b, fx32 l, fx32 r, fx32 n, fx32 f, fx32 scaleW, BOOL draw, MtxFx44 *mtx);
+ void G3i_LookAt_(const VecFx32 *camPos, const VecFx32 *camUp, const VecFx32 *target, BOOL draw, MtxFx43 *mtx);
+@@ -15,7 +20,11 @@ void G3i_OrthoW_(fx32 t, fx32 b, fx32 l, fx32 r, fx32 n, fx32 f, fx32 scaleW, BO
+     MtxFx44 *out = mtx != NULL ? mtx : &local;
+     MTX_OrthoW(t, b, l, r, n, f, scaleW, out);
+     if (draw) {
++#if defined(SDK_PORT_3DS)
++        NitroPort_GxDirectWrite(G3OP_MTX_MODE, GX_MTXMODE_PROJECTION);
++#else
+         reg_G3_MTX_MODE = GX_MTXMODE_PROJECTION;
++#endif
+         G3_LoadMtx44(out);
+     }
+ }
+@@ -25,12 +34,27 @@ void G3i_LookAt_(const VecFx32 *camPos, const VecFx32 *camUp, const VecFx32 *tar
+     MtxFx43 *out = mtx != NULL ? mtx : &local;
+     MTX_LookAt(camPos, camUp, target, out);
+     if (draw) {
++#if defined(SDK_PORT_3DS)
++        NitroPort_GxDirectWrite(G3OP_MTX_MODE, GX_MTXMODE_POSITION_VECTOR);
++#else
+         reg_G3_MTX_MODE = GX_MTXMODE_POSITION_VECTOR;
++#endif
+         G3_LoadMtx43(out);
+     }
+ }
+ 
+ void G3_RotX(fx32 sinphi, fx32 cosphi) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, FX32_ONE);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)cosphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)sinphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)(-sinphi));
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)cosphi);
++#else
+     vu32 *reg_ptr = (vu32 *)&reg_G3_MTX_MULT_3x3;
+     *reg_ptr = FX32_ONE;
+     *reg_ptr = 0;
+@@ -41,8 +65,20 @@ void G3_RotX(fx32 sinphi, fx32 cosphi) {
+     *reg_ptr = 0;
+     *reg_ptr = (vu32)(-sinphi);
+     *reg_ptr = (vu32)cosphi;
++#endif
+ }
+ void G3_RotY(fx32 sinphi, fx32 cosphi) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)cosphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)(-sinphi));
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, FX32_ONE);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)sinphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)cosphi);
++#else
+     vu32 *reg_ptr = (vu32 *)&reg_G3_MTX_MULT_3x3;
+     *reg_ptr = (vu32)cosphi;
+     *reg_ptr = 0;
+@@ -53,8 +89,20 @@ void G3_RotY(fx32 sinphi, fx32 cosphi) {
+     *reg_ptr = (vu32)sinphi;
+     *reg_ptr = 0;
+     *reg_ptr = (vu32)cosphi;
++#endif
+ }
+ void G3_RotZ(fx32 sinphi, fx32 cosphi) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)cosphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)sinphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)(-sinphi));
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, (vu32)cosphi);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, 0);
++    NitroPort_GxDirectWrite(G3OP_MTX_MULT_3x3, FX32_ONE);
++#else
+     vu32 *reg_ptr = (vu32 *)&reg_G3_MTX_MULT_3x3;
+     *reg_ptr = (vu32)cosphi;
+     *reg_ptr = (vu32)sinphi;
+@@ -65,4 +113,5 @@ void G3_RotZ(fx32 sinphi, fx32 cosphi) {
+     *reg_ptr = 0;
+     *reg_ptr = 0;
+     *reg_ptr = FX32_ONE;
++#endif
+ }
+-- 
+2.43.0
+

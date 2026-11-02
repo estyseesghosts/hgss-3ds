@@ -42,18 +42,25 @@ The three files go together: a pack without its `manifest.json` opens as
 "can't read the data pack or its manifest.json", and a manifest from another
 build is rejected as "damaged, or they don't belong together".
 
-> **SoulSilver status.** The builder accepts the SoulSilver US dump
-> (`f8dc38ea…`, see below), but there is no SoulSilver ROM in this
-> workspace and no SoulSilver shell yet: the current 3DS shell
-> (`hgss/game/app/main_3ds.c`) hardcodes the HeartGold folder and file names.
-> A SoulSilver build has to set its own `DATA_DIR`, pack and save constants
-> (the proposed names are in the table). Until then, SoulSilver extraction
-> and packing are tested with synthetic NitroFS images only.
+> **SoulSilver status.** `scripts/prepare_game.py` verifies the SoulSilver US
+> dump (`f8dc38ea…`), extracts it and packs it with the proposed name and
+> `soulsilver-nitrofs-1` build ID, but the current 3DS shell
+> (`hgss/game/app/main_3ds.c`) hardcodes the HeartGold folder and file names,
+> so there is no SoulSilver app to play it yet. The pack is ready for when
+> that shell exists; the extraction and packing are also tested with synthetic
+> NitroFS images only (no retail SS dump was available in this workspace).
 
 ## Building the pack
 
-Run these inside the dev container, against a directory you own. The ROM is
-only read; the output is private (`/work` is not in the repository).
+The easy way is the [player's guide](../USER-GUIDE.md); it handles both games
+and writes the names above:
+
+```sh
+python3 scripts/prepare_game.py /private/heartgold-retail.nds
+python3 scripts/prepare_game.py /private/soulsilver-retail.nds
+```
+
+The manual steps below are what the script runs, if you prefer to see them:
 
 ```sh
 # 1. Verify the dump. Exit 0, or a reason (trimmed, patched, wrong region).
@@ -134,6 +141,20 @@ loaded. The one deliberate `3ds_port/` divergence is the camera-plane
 triangle drop in `nitro/src/port_gx3d.c` (recorded in
 [decisions.md](../decisions.md)); the pak reader itself is untouched. The host
 boot test `tests/sdk/pak_boot` covers the OK path and every other result.
+
+## Staging the card automatically
+
+`scripts/build_3dsx.py` builds the `.3dsx` and writes this exact shape into
+`dist/sd-card/` (or a folder you choose with `--out`), so copying is one drag:
+
+```text
+dist/sd-card/3ds/pokeheartgold.3dsx
+dist/sd-card/3ds/pokeheartgold/heartgold3ds.pak
+dist/sd-card/3ds/pokeheartgold/manifest.json
+```
+
+It prints the `.3dsx` size and SHA-256 and the exact destination paths. See
+the [player's guide](../USER-GUIDE.md#step-4--copy-it-to-the-sd-card).
 
 ## Read cache
 

@@ -6,8 +6,8 @@ buttons, gender choice, naming keyboard) and into the first field scene. The rem
 are the golden comparison (needs the user's melonDS captures), a port-written save verified in
 melonDS, the sanitizer replay and the upstream drafts.
 
-Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`, 78 patches
-(NitroSDK 15, NitroSystem 3, pokeheartgold 60). The PC boot behaviour below is unchanged by the
+Last verified: **2026-11-02**, container `/workspaces/pokeheartgold-3ds`, 82 patches
+(NitroSDK 16, NitroSystem 4, pokeheartgold 62). The PC boot behaviour below is unchanged by the
 Phase 5 shell fixes; the hardware side is in [phase-5.md](phase-5.md).
 
 ## What the scripted run does

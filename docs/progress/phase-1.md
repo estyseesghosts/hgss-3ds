@@ -1,5 +1,11 @@
 # Phase 1 progress
 
+> **Update 2026-11-02 (session 13):** the tree is at **82 patches** (NitroSDK 16, NitroSystem 4,
+> pokeheartgold 62). `make test` is **354 Python tests + 20 SDK suites**; `make port-tests` is green;
+> the DS gate last ran at **78** and still reproduces both retail ROMs (the four later patches — 1904,
+> 1905, 0304 and 0605 — are `SDK_PORT_3DS`-only with their `#else` text unchanged). The living status
+> is [STATE.md](STATE.md).
+
 > **Update 2026-11-01 (session 9):** the tree is at **78 patches** (NitroSDK 15, NitroSystem 3,
 > pokeheartgold 60). `make test` is **338 Python tests + 20 SDK suites**; `make port-tests` is green;
 > the DS gate at **78** reproduces both retail ROMs (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patch

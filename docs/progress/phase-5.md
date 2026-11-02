@@ -1,15 +1,16 @@
 # Phase 5 progress
 
 Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap, audio
-level/staging fixes, the Settings-close fix and the raw-DS-address fix package,
-pending a console re-run.** The game boots, plays the intro, reaches Oak's
+level/staging fixes, the Settings-close fix, the raw-DS-address fix, the battle
+Poképics and the close-hang fix package, pending a console re-run.** The game boots, plays the intro, reaches Oak's
 speech and the player's house, draws both screens and plays audio. The ninth
 run (log-9) showed the GPU pipeline working at 87 Hz; frame starts are now
 capped at 60 Hz, the NNS volume table, pre-saturation 6 dB headroom and NDSP
 cache/rate fixes address the audio, the title's zero-area camera-plane
 triangles are dropped instead of being drawn as a fan, closing the in-game
-Settings returns to the field (patch 1904), and the battle's raw DISPCNT read
-that crashed the tenth run is gone (patch 1905). Remaining Phase 5 exits: the
+Settings returns to the field (patch 1904), the battle's raw DISPCNT read
+that crashed the tenth run is gone (patch 1905), the battle's Poképics render
+(0304/0605) and a HOME-menu close no longer hangs. Remaining Phase 5 exits: the
 owner's hardware re-run (3D rate and title, audio by ear, frame times,
 Settings open/close, a wild encounter), a full-speed run through Oak's speech,
 the save round-trip, the Old 3DS decision and the `.cia` decision.
@@ -729,6 +730,19 @@ loads `NitroPort_IoReg` in `LoadChar` and the port's VRAM arrays in
 into tall grass and finish a battle. A PC replay needs a field save with a
 starter (the scripted new game has none), so the next session should keep the
 owner's `heartgold.sav` if it is available.
+
+**Battle graphics and closing, session 13.** With the raw-address crashes
+fixed the battle ran, but both Pokémon were invisible between attacks (log-12:
+every battle 3D scene `0 vtx`). The Poképics are 3D quads from NitroSystem's
+software-sprite path under an ortho projection; those files write the G3
+command registers directly, which the port's memory-based GXFIFO never sees.
+NitroSystem **0304** and NitroSDK **0605** convert the remaining writes; the PC
+battle (the owner's save) now logs 720 tris per scene with nothing clipped and
+both Pokémon visible. The same log-12 ended at `closing at frame` and hung:
+the shell joined the geometry thread before draining its last scene. The close
+now drains first, logs each `[quit]` step, and ends the process if a thread
+will not stop. Both are hardware checks: finish a battle and choose Close from
+the HOME menu.
 
 ## Pending user runs
 

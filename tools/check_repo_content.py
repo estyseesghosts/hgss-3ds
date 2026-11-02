@@ -27,7 +27,7 @@ FORBIDDEN_SUFFIXES = {
     ".mp3", ".ogg", ".flac",
 }
 FORBIDDEN_PREFIXES = (
-    "build/", "tests/golden/", ".worktrees/", ".opencode/",
+    "build/", "dist/", "tests/golden/", ".worktrees/", ".opencode/",
     "private/", "extracted/", "data_pack/", "roms/", "saves/",
 )
 # The only images/audio allowed. They are original Platinum/shell assets, not

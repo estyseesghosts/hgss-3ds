@@ -22,6 +22,7 @@ tests/golden/
 
 # ---- Build output ----
 build/
+dist/
 .local-tools/
 *.3dsx
 *.smdh

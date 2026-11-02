@@ -33,6 +33,8 @@ sequence.
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
 | Closing the in-game Settings (OPTIONS → QUIT) crashes instead of returning to the field | [The V-blank survives the app that owned its buffers](#the-v-blank-survives-the-app-that-owned-its-buffers) |
 | A wild encounter (or any battle) crashes as the battle overlays finish loading | [A raw DS address is unmapped memory](#a-raw-ds-address-is-unmapped-memory) |
+| A battle's Pokémon are invisible except for a flicker during attacks | [The poképics never reach the port's 3D scene](#the-poképics-never-reach-the-ports-3d-scene) |
+| Closing from the HOME menu hangs and the console has to be power-cycled | [The geometry thread is stopped before its last scene is drained](#the-geometry-thread-is-stopped-before-its-last-scene-is-drained) |
 
 ## A weak hook binds to NULL
 
@@ -588,6 +590,60 @@ Full trace and the class table: [agent-notes/s15-ds-address-literals.md](../prog
 macros. A literal DS address works on the DS and is unmapped on the port.
 `tests/test_hw_addresses.py` is the gate; run it (or `make test`) after adding
 code that pokes hardware.
+
+## The poképics never reach the port's 3D scene
+
+**Symptom.** In a wild or trainer battle the opponent appears for an instant
+and vanishes, the player's Pokémon never shows, and the fight menu works. The
+PC's `gx3d` log is the same: after the battle overlays load, every scene is
+`0 vtx, 0 polys` (log-12: 120 scenes empty for the whole battle); during an
+attack a few polygons appear, then nothing.
+
+**Cause.** HGSS draws its battle Pokémon as **Poképics**: 3D quads from
+`NitroSystem`'s software-sprite path (`NNS_G2dDrawSpriteFast`,
+`NNS_G2dSetupSoftwareSpriteCamera`), rotated and translated with
+`G3_RotX/Y/Z`, under a one-time screen-space ortho projection. The port's
+GXFIFO is ordinary memory: only writes that go through
+`NitroPort_GxDirectWrite`/`NitroPort_GxFifoWord` reach the geometry engine.
+The SDK's `g3imm.h` inlines and `g3imm.c`/`g3x.c` were converted, but
+`g3_util.c` (the ortho and the rotations), `g2d_softsprite.c`,
+`g2d_renderer_core.c` and `g2d_oam_soft_emu.c` still wrote the raw command
+registers. So the quads never entered the scene (0 vtx), and once they did,
+they were transformed with the field camera's stale projection and every one
+was clipped (`lost: 360 clipped`).
+
+**Fix.** NitroSystem **0304** sends the software-sprite commands through
+`NitroPort_GxDirectWrite`, and NitroSDK **0605** does the same for the ortho
+projection, the look-at mode switch and the rotations. The PC battle now logs
+`720 tris (720 opaque), lost: 0 clipped` per scene and both Pokémon render.
+
+**Rule.** A direct `reg_G3_*` write in linked code must be converted, in the
+same way as the existing G3D hooks. The G3D path being converted does not
+cover the G2D software-sprite path, and the ortho path lives in `g3_util.c`.
+
+## The geometry thread is stopped before its last scene is drained
+
+**Symptom.** Choosing **Close** in the HOME menu hangs: `log.txt` ends at
+`closing at frame N` and the console has to be power-cycled (log-12).
+
+**Cause.** `GpuStopGeometry` stopped and joined the geometry thread first and
+called `NitroPort_Gx3dStopThread()` after. That call's `drain()` waits for the
+command ring to empty, and the close path leaves `NitroPort_OnFrame` before
+its `NitroPort_Gx3dFlush`: the frame's last commands are still in the
+producer's buffer. With the worker already joined and gone, the published
+words have no consumer and the wait never ends.
+
+**Fix.** Drain **before** stopping the worker: `GpuStopGeometry` calls
+`NitroPort_Gx3dStopThread()` first (the worker is still alive to consume the
+last frame), then signals and joins it. The shutdown also logs each step
+(`[quit] closing`, `APT unhooked`, `geometry stopped`, `display stopped`,
+`sound stopped`) and a thread that will not stop now ends the process at once
+(`svcExitProcess`) instead of tearing the runtime down around it — a close can
+no longer freeze silently.
+
+**Rule.** A producer-side flush that waits for a consumer must run while the
+consumer is alive; stop the consumer only after the drain. Log every shutdown
+step, so a hang points at one.
 
 ## Reading a Luma crash dump
 

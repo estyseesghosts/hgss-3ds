@@ -169,7 +169,9 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 ## P
 
-**pak.** The port's data-pack format: an archive indexed by file ID, with the original FAT IDs kept. The port reads `heartgold3ds.pak` instead of the ROM. The vendored `3ds_port/pak/` holds the reader; the HGSS builder is not written yet ([gameplan.md](../../gameplan.md), Phase 3).
+**pak.** The port's data-pack format: an archive indexed by file ID, with the original FAT IDs kept. The port reads `heartgold3ds.pak` instead of the ROM. The vendored `3ds_port/pak/` holds the reader; the HGSS builder is `builder/{verify_rom,extract_rom,pack}.py`, driven for players by `scripts/prepare_game.py`.
+
+**Poképic.** HGSS's battle Pokémon picture: a 3D quad drawn by NitroSystem's G2d software-sprite path (`NNS_G2dDrawSpriteFast`) under a screen-space ortho projection, and rotated with `G3_RotX/Y/Z`. The port must forward those command-register writes to its decoder, or the quads never reach the scene and both Pokémon are invisible between attacks (patches NitroSystem 0304 and NitroSDK 0605; [3DS-Pitfalls](3DS-Pitfalls.md#the-poképics-never-reach-the-ports-3d-scene)).
 
 **Patch stack.** The ordered set of patch files for one target: NitroSDK, NitroSystem, or the game. See [Patch-Stack](Patch-Stack.md).
 

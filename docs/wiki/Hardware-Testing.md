@@ -57,7 +57,7 @@ The `.3dsx` is the **program**, not a ROM — the ROM-derived data is
 the top of `/3ds`:
 
 ```text
-sdmc:/3ds/pokeheartgold.3dsx   # the payload (about 8.7 MiB)
+sdmc:/3ds/pokeheartgold.3dsx   # the payload (about 8.9 MiB)
 ```
 
 The Homebrew Launcher lists it by file name, so `pokeheartgold.3dsx` reads
@@ -66,6 +66,9 @@ icon are already embedded in it by `3dsxtool --smdh=…`, so
 `pokeheartgold-3ds.smdh` does **not** go on the card. Put the payload next
 to the `pokeheartgold/` folder rather than inside it — the folder is
 created by the game if missing.
+
+`scripts/build_3dsx.py` stages exactly this layout under `dist/sd-card/`, so
+copying is one drag; see the [player's guide](../USER-GUIDE.md#step-4--copy-it-to-the-sd-card).
 
 The data pack is about 120 MiB, so leave room on a FAT32 card (the 3DS does
 not read exFAT).
@@ -223,7 +226,10 @@ field.
 With a field save (or after getting the starter), walk into tall grass on
 Route 29 until a wild Pokémon appears. The battle must load: the screen
 transitions, the battle overlays load, the Pokémon and the opponent's
-silhouette appear, and the menu accepts input. Before patch **1905** the
+silhouette appear, and the menu accepts input. **Both Pokémon must be
+visible** while the menu waits (their 3D sprites are the Poképics; before
+patches 0304/0605 they were invisible between attacks). Finish the battle:
+the HP bars change and the field returns. Before patch **1905** the
 battle aborted on its first frame: `WirelessStatusIcon_LoadChar` read DISPCNT
 through `0x04000000`, which is unmapped on the port (log-10: exception,
 `r3 04000000`, pc in that function). With that fixed it aborted a little
@@ -237,6 +243,17 @@ dump; the pc maps with `arm-none-eabi-addr2line -e pokeheartgold-3ds.elf`.
 The same class of literal crashed later screens (the Pokémon summary, the
 encounter transition, the Hall of Fame, trades); patch 1905 converted all of
 them. Reaching any of those screens is a bonus check.
+
+## Closing the app
+
+From the field (or any screen), open the HOME menu and choose **Close**. The
+app must return to the HOME menu within a second or two. `log.txt` ends with
+the shutdown steps: `[quit] closing`, `[quit] APT unhooked`, `[quit] geometry
+stopped`, `[quit] display stopped`, `[quit] sound stopped`, `stopping (frame
+N)`. Before the fix it stopped at `closing at frame N` and the console had to
+be power-cycled (the geometry thread was joined before its last scene was
+drained; log-12). If it hangs, the last `[quit]` line names the stuck step;
+send the log.
 
 ## Frame-time budget
 

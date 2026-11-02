@@ -4,25 +4,29 @@ A native 3DS port of Pokémon HeartGold and SoulSilver, built from the [ctrl-che
 
 **It runs on a New 3DS.** The build boots HeartGold, plays the intro, reaches
 Oak's speech and the player's bedroom, draws both screens with the PICA 3D
-layer, and plays audio. The latest artifact (60 Hz cap, NNS volume table,
-pre-saturation 6 dB headroom, NDSP cache/rate, and the camera-plane drop) is
-staged for a hardware re-run; its visual/audio/timing results are still
-pending. This is not a finished port:
-the save round-trip, Old 3DS and `.cia` decisions are open. The living status
-is [docs/progress/STATE.md](docs/progress/STATE.md).
+layer, and plays audio. The latest artifact fixes the **invisible battle
+Pokémon** (NitroSystem 0304 / NitroSDK 0605) and the **close hang** (the
+geometry ring is drained before its worker is stopped); it is staged for a
+hardware re-run, and its visual/timing results are still pending. This is not
+a finished port: the save round-trip, Old 3DS and `.cia` decisions are open.
+The living status is [docs/progress/STATE.md](docs/progress/STATE.md).
+
+**Just want to play?** You do not need the container, MWCC or the Nitro SDK:
+[the player's guide](docs/USER-GUIDE.md) builds the app and the SD-card folder
+with three Python scripts on Linux or macOS ([Windows plan](docs/WINDOWS.md)).
 
 The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 
 ## Current status
 
 - **Phase 0 (baseline): complete, with open items.** Both US versions of the decomp build byte-identically inside the dev container, checked against their SHA1s and (for HeartGold) against a retail dump. In the container this needs `tools/matching-build.sh`, not plain `make`: the linker there strips five sections the original keeps, and the script restores them in the generated linker file. Still open: the golden reference captures (never run), the fixture saves, and the CI matching job, which is disabled. Details: [docs/progress/phase-0.md](docs/progress/phase-0.md).
-- **Phase 1 (SDK patch stack): done.** **80 patches** apply cleanly from scratch (NitroSDK 15, NitroSystem 3, pokeheartgold 62; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**345 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate last ran at 78, reproducing both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`; patches 1904 and 1905, added after that run, are `SDK_PORT_3DS`-only with their `#else` text unchanged). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
+- **Phase 1 (SDK patch stack): done.** **82 patches** apply cleanly from scratch (NitroSDK 16, NitroSystem 4, pokeheartgold 62; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**354 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate last ran at 78, reproducing both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`; patches 1904, 1905, 0304 and 0605, added after that run, are `SDK_PORT_3DS`-only with their `#else` text unchanged). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
 - **Phase 2 (game under GCC): done for the exit criterion.** 1092/1092 game files compile on host32 and 3DS, 150/150 ARM9 `.s` assemble, both port archives build, and both programs link with **0 unresolved**.
 - **Phase 3 (data pipeline): done.** `builder/{verify_rom,extract_rom,pack}.py` make the HG/SS pack from your own cartridge; the real HG pack opens in the PC program and the boot errors are mapped.
 - **Phase 4 (boot to Oak): in progress.** The PC build reaches the logo, movie, title, main menu, Oak's speech, naming and the first bedroom; boot smoke tests and scripted inputs exist. Golden captures and the save round-trip are open.
-- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The ninth run showed the 3D at ~87 Hz; the latest tree adds a **60 Hz frame cap**, the **NNS volume-table fix**, a **pre-saturation 6 dB headroom shift**, **PSG duty-7 silence**, **NDSP cache flushing at the DSP's native rate**, and the **camera-plane triangle drop** that keeps Ho-oh's wings intact. Its artifact is staged; a hardware re-run is pending.
+- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The latest tree adds the **battle Poképics** (the G2D software-sprite and ortho paths reach the port's 3D scene: both Pokémon render, `720 tris/scene`, 0 clipped) and a **close that no longer hangs** (the geometry ring is drained before its worker is joined; every shutdown step is logged). Its artifact is staged; a hardware re-run is pending.
 
-What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain.
+What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`, `make game-3ds` (packages `pokeheartgold.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain. Players use the three scripts in `scripts/` ([USER-GUIDE](docs/USER-GUIDE.md)).
 
 ## Content rules
 
@@ -30,14 +34,28 @@ This repo never holds game content. It contains no ROMs, no extracted assets, no
 
 ## Requirements
 
-- An Apple-silicon Mac with OrbStack (tested) or Docker Desktop (documented, not tested here), and Node.js for the Dev Containers CLI. This is the setup the repo documents in full.
+- **To play (no container):** Python 3.9+, `git`, and devkitPro's 3DS packages on Linux or macOS. `scripts/setup_toolchain.py` installs them; the [player's guide](docs/USER-GUIDE.md) has the steps, and [docs/WINDOWS.md](docs/WINDOWS.md) covers the Windows/WSL2 plan.
+- An Apple-silicon Mac with OrbStack (tested) or Docker Desktop (documented, not tested here), and Node.js for the Dev Containers CLI. This is the setup the repo documents in full for contributing.
 - Linux: `.github/workflows/port.yml` builds the image and runs `make test` on GitHub; the first public push passed (content check, image build, bootstrap, tests, 3m3s). The DS-side steps are documented for the macOS container only.
 - Your own copies of the MWCC 2.0 archive (`mwccarm.zip`, with `license.dat`) and the Nitro SDK 3.2-060901 archive. The container refuses to set up without them.
 - Your own US HeartGold or SoulSilver ROM to build the data pack (`builder/`) and run the game. The setup and test steps above do not use it; the game does. A save is optional.
 
 ## Quick start
 
-Full steps, with what you should see at each one, are in [docs/wiki/Getting-Started.md](docs/wiki/Getting-Started.md). The short version, from your checkout on the Mac:
+**Players** (Linux or macOS, no container or proprietary SDK): follow
+[the player's guide](docs/USER-GUIDE.md). In short, from your checkout:
+
+```
+python3 scripts/setup_toolchain.py                      # devkitARM, libctru, 3dsxtool
+python3 scripts/prepare_game.py ~/Downloads/game.nds    # your own HG or SS dump
+python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak
+# then copy dist/sd-card/3ds onto the SD card
+```
+
+**Contributors** need the full developer setup. Full steps, with what you
+should see at each one, are in
+[docs/wiki/Getting-Started.md](docs/wiki/Getting-Started.md). The short
+version, from your checkout on the Mac:
 
 ```
 brew install orbstack                       # open OrbStack once
@@ -66,18 +84,24 @@ pokeheartgold-3ds/
                       camera-plane drop diverges from platinum.lock, see docs/decisions.md)
   patches/            numbered patches for the decomp, in three stacks: NitroSDK, NitroSystem, pokeheartgold
   builder/            verify/extract/pack the user's own ROM into the data pack
+  scripts/            the player-facing Python scripts: setup_toolchain, prepare_game,
+                      build_3dsx (see docs/USER-GUIDE.md)
   tools/              bootstrap, toolchain install, matching build, surveys, savetool,
                       layout probe, golden capture scripts, content check
   tests/              Python tests, SDK host suites (tests/sdk/*), layout probe runner, input scripts
-  docs/               progress records, decision log, pins, the wiki, and docs/upstream/ patches
-                      for third-party projects (the Platinum camera-plane drop)
+  docs/               progress records, decision log, pins, the wiki, the player's guide
+                      (USER-GUIDE.md) and the Windows plan (WINDOWS.md), and docs/upstream/
+                      patches for third-party projects (the Platinum camera-plane drop)
   .devcontainer/      dev container image and its setup scripts
   .github/workflows/  port.yml (public CI; green on the first push) and matching.yml (disabled)
   build/              git-ignored output; a Docker volume inside the container
+  dist/               git-ignored SD-card staging (scripts/build_3dsx.py)
 ```
 
 ## Where to read next
 
+- [docs/USER-GUIDE.md](docs/USER-GUIDE.md): build and play with three Python scripts, in plain language.
+- [docs/WINDOWS.md](docs/WINDOWS.md): the hypothetical Windows/WSL2 setup.
 - [docs/wiki/Home.md](docs/wiki/Home.md): the wiki index.
 - [docs/MONOREPO.md](docs/MONOREPO.md): what is in the monorepo, what is deliberately outside, and how to stage/push it to GitHub, including the Platinum port patch.
 - [docs/wiki/Build-Reference.md](docs/wiki/Build-Reference.md): the toolchain, every build target and its exact command.

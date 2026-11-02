@@ -1,0 +1,248 @@
+From c9358d9a75d0be4e1c0fa2792e44bb5e4de940b2 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 06:33:28 +0000
+Subject: [PATCH] g2: send the software sprite commands to the port
+ (SDK_PORT_3DS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The port GXFIFO is ordinary memory; the g3d_sbc.c and g3d_gecom.c writes were
+converted in 0302, but the G2D software-sprite path still wrote the G3 command
+registers directly:
+
+- g2d_softsprite.c: DrawOneQuad_ (BEGIN_VTXS/VTX_16/TEXCOORD/END_VTXS),
+  NNS_G2dDrawSpriteFast (MTX_TRANS/MTX_SCALE) and
+  NNS_G2dSetupSoftwareSpriteCamera (MTX_STORE).
+- g2d_renderer_core.c: NNS_G2dRndCoreBeginRendering's 3D surface
+  (MTX_MODE/MTX_PUSH/MTX_TRANS).
+- g2d_oam_soft_emu.c: the OAM-as-quad path (TEXIMAGE_PARAM, TEXPLTT_BASE,
+  MTX_SCALE, TEXCOORD, BEGIN/END, VTX_10).
+
+So the battle's Pokepic quads (NNS_G2dDrawSpriteFast) never reached the port's
+scene: the gx3d log showed 0 vertices per battle scene and the Pokémon were
+invisible. Under SDK_PORT_3DS each write goes through
+NitroPort_GxDirectWrite with the register's opcode, exactly as the g3imm.h
+inlines do; the DS text in #else is unchanged.
+
+The G3_* calls around the quads (G3_Translate, G3_TexImageParam, ...) were
+already converted in the SDK headers, so this completes the path.
+---
+ src/g2d_oam_soft_emu.c  | 37 +++++++++++++++++++++++++++++++++++++
+ src/g2d_renderer_core.c | 15 +++++++++++++--
+ src/g2d_softsprite.c    | 33 +++++++++++++++++++++++++++++++++
+ 3 files changed, 83 insertions(+), 2 deletions(-)
+
+diff --git a/src/g2d_oam_soft_emu.c b/src/g2d_oam_soft_emu.c
+index 2e46496..2ea8190 100644
+--- a/src/g2d_oam_soft_emu.c
++++ b/src/g2d_oam_soft_emu.c
+@@ -1,14 +1,24 @@
+ #include <nitro.h>
+ #include <nnsys/g2d_internal.h>
++/* Under SDK_PORT_3DS the command-register writes below go through
++ * NitroPort_GxDirectWrite (see g2d_softsprite.c). */
+ 
+ #pragma force_active on
+ 
+ static inline void TexImageParam(GXTexFmt fmt, GXTexGen gen, GXTexSizeS s, GXTexSizeT t, GXTexRepeat rep, GXTexFlip flip, GXTexPlttColor0 pltt0, u32 addr) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_TEXIMAGE_PARAM, GX_PACK_TEXIMAGE_PARAM(fmt, gen, s, t, rep, flip, pltt0, addr));
++#else
+     reg_G3_TEXIMAGE_PARAM = GX_PACK_TEXIMAGE_PARAM(fmt, gen, s, t, rep, flip, pltt0, addr);
++#endif
+ }
+ 
+ static inline void TexPlttBase(u32 addr, GXTexFmt fmt) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_TEXPLTT_BASE, GX_PACK_TEXPLTTBASE_PARAM(addr, fmt));
++#else
+     reg_G3_TEXPLTT_BASE = GX_PACK_TEXPLTTBASE_PARAM(addr, fmt);
++#endif
+ }
+ 
+ // sets the texture and palette of an OBJ drawn as a quad and computes its texture coordinates
+@@ -33,7 +43,11 @@ void CalcSpriteParams_(const GXOamAttr *pOam, const NNSG2dImageAttr *pTexAttr, u
+         u16 shape16 = shape;
+         u16 size16 = size;
+         u32 addr = texBase + (charNo << (((pTexAttr->mappingType & 0x700000) >> 20) + 5));
++#if defined(SDK_PORT_3DS)
++        NitroPort_GxDirectWrite(G3OP_TEXIMAGE_PARAM, (pTexAttr->fmt << REG_G3_TEXIMAGE_PARAM_TEXFMT_SHIFT) | (addr >> 3) | (GX_TEXGEN_TEXCOORD << REG_G3_TEXIMAGE_PARAM_TGEN_SHIFT) | (gObjTexSizeS[shape16][size16] << REG_G3_TEXIMAGE_PARAM_V_SIZE_SHIFT) | (gObjTexSizeT[shape16][size16] << REG_G3_TEXIMAGE_PARAM_T_SIZE_SHIFT) | (pTexAttr->plttUse << REG_G3_TEXIMAGE_PARAM_TR_SHIFT));
++#else
+         reg_G3_TEXIMAGE_PARAM = (pTexAttr->fmt << REG_G3_TEXIMAGE_PARAM_TEXFMT_SHIFT) | (addr >> 3) | (GX_TEXGEN_TEXCOORD << REG_G3_TEXIMAGE_PARAM_TGEN_SHIFT) | (gObjTexSizeS[shape16][size16] << REG_G3_TEXIMAGE_PARAM_V_SIZE_SHIFT) | (gObjTexSizeT[shape16][size16] << REG_G3_TEXIMAGE_PARAM_T_SIZE_SHIFT) | (pTexAttr->plttUse << REG_G3_TEXIMAGE_PARAM_TR_SHIFT);
++#endif
+         pParams->u0 = 0;
+         pParams->v0 = 0;
+     }
+@@ -98,15 +112,25 @@ static inline fx32 GetZ(int z) {
+ }
+ 
+ static inline void Scale(fx32 x, fx32 y, fx32 z) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)x);
++    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)y);
++    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)z);
++#else
+     reg_G3_MTX_SCALE = (u32)x;
+     reg_G3_MTX_SCALE = (u32)y;
+     reg_G3_MTX_SCALE = (u32)z;
++#endif
+ }
+ 
+ static inline void TexCoord(fx32 s, fx32 t) {
+     s16 tt = (s16)(t >> 8);
+     s16 ss = (s16)(s >> 8);
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_TEXCOORD, (u16)ss | ((u32)(u16)tt << REG_G3_TEXCOORD_DECIMAL_T_SHIFT));
++#else
+     reg_G3_TEXCOORD = (u16)ss | ((u32)(u16)tt << REG_G3_TEXCOORD_DECIMAL_T_SHIFT);
++#endif
+ }
+ 
+ void NNS_G2dDrawOneOam3DDirectWithPosFast(int posX, int posY, int posZ, const GXOamAttr *pOam, const NNSG2dImageAttr *pTexAttr, u32 texBaseAddr, u32 pltBaseAddr) {
+@@ -132,6 +156,18 @@ void NNS_G2dDrawOneOam3DDirectWithPosFast(int posX, int posY, int posZ, const GX
+         G3_Translate(posX << FX32_SHIFT, posY << FX32_SHIFT, GetZ(posZ));
+     }
+     Scale(params.w << FX32_SHIFT, params.h << FX32_SHIFT, FX32_ONE);
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_BEGIN, GX_BEGIN_QUADS);
++    TexCoord(params.u0, params.v1);
++    NitroPort_GxDirectWrite(G3OP_VTX_10, 0x10000);
++    TexCoord(params.u1, params.v1);
++    NitroPort_GxDirectWrite(G3OP_VTX_10, 0x10040);
++    TexCoord(params.u1, params.v0);
++    NitroPort_GxDirectWrite(G3OP_VTX_10, 0x40);
++    TexCoord(params.u0, params.v0);
++    NitroPort_GxDirectWrite(G3OP_VTX_10, 0);
++    NitroPort_GxDirectWrite(G3OP_END, 0);
++#else
+     reg_G3_BEGIN_VTXS = GX_BEGIN_QUADS;
+     TexCoord(params.u0, params.v1);
+     reg_G3_VTX_10 = 0x10000;
+@@ -142,6 +178,7 @@ void NNS_G2dDrawOneOam3DDirectWithPosFast(int posX, int posY, int posZ, const GX
+     TexCoord(params.u0, params.v0);
+     reg_G3_VTX_10 = 0;
+     reg_G3_END_VTXS = 0;
++#endif
+     if (gOamSoftEmuState.bAutoZOffset) {
+         gOamSoftEmuState.autoZOffset += gOamSoftEmuAutoZOffsetStep;
+     }
+diff --git a/src/g2d_renderer_core.c b/src/g2d_renderer_core.c
+index d171e9f..7a47e07 100644
+--- a/src/g2d_renderer_core.c
++++ b/src/g2d_renderer_core.c
+@@ -1,5 +1,7 @@
+ #include <nitro.h>
+ #include <nnsys/g2d_internal.h>
++/* Under SDK_PORT_3DS the command-register writes below go through
++ * NitroPort_GxDirectWrite (see g2d_softsprite.c). */
+ 
+ #pragma force_active on
+ 
+@@ -376,15 +378,24 @@ void NNS_G2dRndCoreBeginRendering(NNSG2dRndCoreInstance *pRnd) {
+     gCurrentRndCore = pRnd;
+     type = pRnd->pCurrentTargetSurface->type;
+     if (type == NNS_G2D_SURFACETYPE_MAIN3D) {
+-        reg_G3_MTX_MODE = GX_MTXMODE_PROJECTION;
+-        reg_G3_MTX_PUSH = 0;
+         NNSG2dRndCoreSurface *pSurface = pRnd->pCurrentTargetSurface;
+         u32 x = pSurface->viewRect.posTopLeft.x;
+         u32 y = pSurface->viewRect.posTopLeft.y;
++#if defined(SDK_PORT_3DS)
++        NitroPort_GxDirectWrite(G3OP_MTX_MODE, GX_MTXMODE_PROJECTION);
++        NitroPort_GxDirectWrite(G3OP_MTX_PUSH, 0);
++        NitroPort_GxDirectWrite(G3OP_MTX_TRANS, 0u - x);
++        NitroPort_GxDirectWrite(G3OP_MTX_TRANS, 0u - y);
++        NitroPort_GxDirectWrite(G3OP_MTX_TRANS, 0);
++        NitroPort_GxDirectWrite(G3OP_MTX_MODE, GX_MTXMODE_POSITION);
++#else
++        reg_G3_MTX_MODE = GX_MTXMODE_PROJECTION;
++        reg_G3_MTX_PUSH = 0;
+         reg_G3_MTX_TRANS = 0u - x;
+         reg_G3_MTX_TRANS = 0u - y;
+         reg_G3_MTX_TRANS = 0;
+         reg_G3_MTX_MODE = GX_MTXMODE_POSITION;
++#endif
+         {
+             const NNSG2dImageProxy *pImgProxy = gCurrentRndCore->pImgProxy;
+             const NNSG2dImagePaletteProxy *pPltProxy;
+diff --git a/src/g2d_softsprite.c b/src/g2d_softsprite.c
+index 68073e5..fa38b3b 100644
+--- a/src/g2d_softsprite.c
++++ b/src/g2d_softsprite.c
+@@ -1,5 +1,8 @@
+ #include <nitro.h>
+ #include <nnsys/g2d_internal.h>
++/* Under SDK_PORT_3DS the command-register writes below go through
++ * NitroPort_GxDirectWrite (declared by nitro/gx/g3imm.h): the port GXFIFO is
++ * ordinary memory and only the decoder sees the commands. */
+ 
+ // draws a unit quad; the texture coordinates are texels in fx32 format
+ void DrawOneQuad_(u32 u0, u32 u1, u32 v0, u32 v1) {
+@@ -7,6 +10,22 @@ void DrawOneQuad_(u32 u0, u32 u1, u32 v0, u32 v1) {
+     u16 s1 = (s32)(u1 << 8) >> 16;
+     u16 t0 = (s32)(v0 << 8) >> 16;
+     u16 t1 = (short)(v1 >> 8);
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_BEGIN, GX_BEGIN_QUADS);
++    NitroPort_GxDirectWrite(G3OP_TEXCOORD, s0 | (t1 << 16));
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0x10000000);
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0);
++    NitroPort_GxDirectWrite(G3OP_TEXCOORD, s1 | (t1 << 16));
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0x10001000);
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0);
++    NitroPort_GxDirectWrite(G3OP_TEXCOORD, s1 | (t0 << 16));
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0x1000);
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0);
++    NitroPort_GxDirectWrite(G3OP_TEXCOORD, s0 | (t0 << 16));
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0);
++    NitroPort_GxDirectWrite(G3OP_VTX_16, 0);
++    NitroPort_GxDirectWrite(G3OP_END, 0);
++#else
+     REGType32v *texCoord = &reg_G3_TEXCOORD;
+     REGType32v *vtx16 = &reg_G3_VTX_16;
+     reg_G3_BEGIN_VTXS = GX_BEGIN_QUADS;
+@@ -23,6 +42,7 @@ void DrawOneQuad_(u32 u0, u32 u1, u32 v0, u32 v1) {
+     *vtx16 = 0;
+     *vtx16 = 0;
+     reg_G3_END_VTXS = 0;
++#endif
+ }
+ 
+ #pragma force_active on
+@@ -38,7 +58,11 @@ static inline void LookAt(const VecFx32 *camPos, const VecFx32 *camUp, const Vec
+ void NNS_G2dSetupSoftwareSpriteCamera(void) {
+     G3_ViewPort(0, 0, 255, 191);
+     OrthoW(0, 192 * FX32_ONE, 0, 256 * FX32_ONE, -1024 * FX32_ONE, 1024 * FX32_ONE, 1024 * FX32_ONE, NULL);
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_MTX_STORE, 0);
++#else
+     reg_G3_MTX_STORE = 0;
++#endif
+     {
+         VecFx32 camPos = { 0, 0, 0 };
+         VecFx32 camUp = gG2dSoftSpriteCameraUp;
+@@ -51,11 +75,20 @@ void NNS_G2dSetupSoftwareSpriteCamera(void) {
+ #pragma force_active off
+ 
+ void NNS_G2dDrawSpriteFast(s16 px, s16 py, int pz, int sx, int sy, int U0, int V0, int U1, int V1) {
++#if defined(SDK_PORT_3DS)
++    NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)(px << FX32_SHIFT));
++    NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)(py << FX32_SHIFT));
++    NitroPort_GxDirectWrite(G3OP_MTX_TRANS, (u32)(pz << FX32_SHIFT));
++    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)(sx << FX32_SHIFT));
++    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)(sy << FX32_SHIFT));
++    NitroPort_GxDirectWrite(G3OP_MTX_SCALE, (u32)FX32_ONE);
++#else
+     reg_G3_MTX_TRANS = px << FX32_SHIFT;
+     reg_G3_MTX_TRANS = py << FX32_SHIFT;
+     reg_G3_MTX_TRANS = pz << FX32_SHIFT;
+     reg_G3_MTX_SCALE = sx << FX32_SHIFT;
+     reg_G3_MTX_SCALE = sy << FX32_SHIFT;
+     reg_G3_MTX_SCALE = FX32_ONE;
++#endif
+     DrawOneQuad_(U0 << FX32_SHIFT, U1 << FX32_SHIFT, V0 << FX32_SHIFT, V1 << FX32_SHIFT);
+ }
+-- 
+2.43.0
+

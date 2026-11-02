@@ -1,7 +1,7 @@
 # Current state
 
-Last verified: **2026-11-01 (session 12: the wild-encounter crash)**, inside the dev container
-(`/workspaces/pokeheartgold-3ds`), with the tree at **80 patches** (`NitroSDK` 15, `NitroSystem` 3,
+Last verified: **2026-11-02 (session 13: the battle's Poképics and the close hang)**, inside the dev container
+(`/workspaces/pokeheartgold-3ds`), with the tree at **82 patches** (`NitroSDK` 16, `NitroSystem` 4,
 `pokeheartgold` 62). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
 this page; do not trust it blindly.
@@ -11,7 +11,7 @@ self-check passes on the real binary (129/0), the symbol cross-check reports **0
 program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
 **Both halves of the Phase 1 DS gate pass at 78 patches**; both matching builds reproduce the retail
-ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 1904 and 1905 are
+ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 1904, 1905, 0304 and 0605 are
 `SDK_PORT_3DS`-only (`#else` text unchanged), and the gate is the evidence.
 
 ## Phases
@@ -19,11 +19,11 @@ ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 80 patches apply from scratch (the DS gate last ran at 78; 1904/1905 are port-only); `make test` 345 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 82 patches apply from scratch (the DS gate last ran at 78; 1904/1905 are port-only); `make test` 354 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, pre-saturation 6 dB headroom, NDSP cache flush/native rate and the camera-plane drop are in the latest artifact; hardware re-run pending. |
+| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, pre-saturation 6 dB headroom, NDSP cache flush/native rate, the camera-plane drop, the battle Poképics (0304/0605) and the close-hang fix are in the latest artifact; hardware re-run pending. |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -33,8 +33,8 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (80 patches applied)` |
-| Host tests | `make test` | **exit 0**; **345 Python tests** + **20 SDK suites** |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (82 patches applied)` |
+| Host tests | `make test` | **exit 0**; **354 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
@@ -42,7 +42,9 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
 | Settings open/close (PC) | scripted new game → bedroom → mother → X → OPTIONS → QUIT | **returns to the field at frame 35032**; two further cycles pass. Before patch 1904 it aborted at 35028 in `LoadBgVramScr` (`src=0x02C002C0`) |
 | Raw DS addresses | `python3 -m unittest tests.test_hw_addresses` | **7 tests, OK**; 0 raw `0x02000000`-`0x07FFFFFF` pointer literals in `src/` (20 before patch 1905, including the battle read and the background copy) |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,840 B (`sha256 168bc1a2…5f6b`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j8` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` **9,279,628 B** (`sha256 6bad8620…303f`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Battle Poképics (PC) | owner's `heartgold.sav` + the zig-zag input, `--frames 14000` | both Pokémon render; each battle scene is **720 tris (720 opaque), lost: 0 clipped**; before 0304/0605, `0 vtx` and then `360 clipped` |
+| Close from HOME (3DS) | HOME menu → Close | fixed in the shell (`[quit]` steps); the console run is the owner's check |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
@@ -66,8 +68,7 @@ phases:
   extraction/packing are image-driven, and the synthetic tests cover the layout; the real SS run is
   an open gap. The shell is a compile-time `HGSS_SS_VARIANT`, but there is no SS data pack/ROM to
   exercise it here.
-- **3DS depth:** the `.3dsx` runs on a New 3DS and draws both screens, audio and 3D; the latest
-  artifact's 60 Hz/audio-level/camera-plane results are still the owner's hardware run.
+- **3DS depth:** the `.3dsx` runs on a New 3DS and draws both screens, audio and 3D; the battle Poképics render on the PC (720 tris/scene, 0 clipped) and the close path drains before joining. The hardware run of the latest artifact (60 Hz/audio-level/camera-plane, the battle look and a HOME-menu close) is still the owner's.
 - **Web builder and CIA assets** are deferred (recorded in `docs/decisions.md` and the SD doc).
 
 The old failure classes are documented with root causes in
@@ -110,7 +111,8 @@ and the rule that prevents it — is in [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pi
 
 Still open on hardware: the re-run after these fixes (3D rate and no
 title fan or gap, no hung/clipped/rough audio, 60 Hz frame times, Settings
-open/close, and a wild and a trainer battle), a full run through Oak's speech
+open/close, a wild and a trainer battle with both Pokémon visible, and a
+HOME-menu close), a full run through Oak's speech
 at full speed, the save round-trip, the Old 3DS measurement, and the `.cia`
 decision. The next log should show `[gx3d]
 display on core 2`, a rising `3D images:` near 300 per 600 frames, no
@@ -158,8 +160,9 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
 - **PC program boot depth:** the Phase 2 binary is a link/overlay-check target, not a playable build;
   Phase 4 owns the first frame. No decision needed now.
 - **SoulSilver folder and pak name** (`sdmc:/3ds/pokeheartgold-ss/`, `soulsilver3ds.pak`) are documented
-  in `docs/wiki/SD-Card-Layout.md` and must be set together with a `soulsilver-nitrofs-1` build ID when
-  the SS build exists.
+  in `docs/wiki/SD-Card-Layout.md` and implemented by `scripts/prepare_game.py` (build ID
+  `soulsilver-nitrofs-1`); the 3DS shell still hardcodes the HeartGold `DATA_DIR` and constants, so it
+  must gain the SS names when that build exists.
 - Port-side fixes that are generic go to the Platinum maintainer as upstream PRs (assert/math
   force-includes, NNS table weak refs). HGSS-only shape changes stay in `hgss/`.
 - Commit trailer is `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
@@ -172,8 +175,8 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
-python3 tools/bootstrap.py            # "already at ... with 80 patches" if in sync
-make test                            # exit 0 (345 tests + 20 SDK suites)
+python3 tools/bootstrap.py            # "already at ... with 82 patches" if in sync
+make test                            # exit 0 (354 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
                                      # 1092/1092, 0 unresolved, binary exists
@@ -248,6 +251,43 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
 
+### 2026-11-02 (session 13) — invisible battle Pokémon; the close hung
+
+- **The Pokémon were invisible.** Log-12's battle runs (the fight completes,
+  the UI works) but every 3D scene is `0 vtx, 0 polys` except for a flicker
+  during attacks. The battle's Pokémon are **Poképics**: 3D quads drawn by
+  NitroSystem's software-sprite path (`NNS_G2dDrawSpriteFast`,
+  `NNS_G2dSetupSoftwareSpriteCamera`) under a one-time screen-space ortho
+  projection, rotated with `G3_RotX/Y/Z`. Those files wrote the G3 command
+  registers directly; the port's GXFIFO is ordinary memory and only sees
+  writes through `NitroPort_GxDirectWrite`. The quads never entered the scene;
+  once the sprite path was converted, they showed up but were all clipped
+  (`lost: 360 clipped`) because `g3_util.c`'s `MTX_MODE = PROJECTION` and the
+  rotations were still raw, leaving the field camera's projection in place.
+  Patches **NitroSystem 0304** and **NitroSDK 0605** convert the remaining
+  writes. The PC battle (the owner's `heartgold.sav`, the scripted zig-zag in
+  the grass) now renders both Pokémon: `720 tris (720 opaque), lost: 0`.
+- **The close hung.** Log-12 ends at `closing at frame 15296` and the console
+  has to be power-cycled. `GpuStopGeometry` stopped and joined the geometry
+  thread and then called `NitroPort_Gx3dStopThread()`; its `drain()` waits for
+  the command ring to empty, but the close path leaves `NitroPort_OnFrame`
+  before `Gx3dFlush`, so the frame's last commands were still in the
+  producer's buffer and the worker that would have consumed them had already
+  exited. Drain first, then stop the worker; the shutdown now logs each
+  `[quit]` step and ends the process at once if a thread will not stop.
+- **Trace.** [agent-notes/s16-pokepics-and-quit.md](agent-notes/s16-pokepics-and-quit.md)
+  has the two causes, the PC reproduction (the owner's save plus the zig-zag
+  input) and the log lines.
+- **Checks.** `make test` 354 tests; `bootstrap` 82 patches; the PC battle and
+  the 3DS build below. The close and the battle's look on hardware are the
+  owner's run.
+- **Artifact.** `.3dsx` **9,279,628 B**, `sha256
+  6bad8620e3fcb01b482ad0087b820f19e13ea7b8e1e05746ad6a4224ef70303f`; 3DS
+  build **1092/1092**, 150/150 `.s`, **0 unresolved**; `3dsxdump` rc 0
+  (CODE 2126, RODATA 112, DATA 13, BSS 4446). The non-`SDK_PORT_3DS` text of
+  0304/0605 is unchanged, but the DS gate has not been re-run with them (the
+  last DS gate was at 78 patches).
+
 ### 2026-11-01 (session 12) — the tall-grass wild encounter crashed
 
 - **Log-10.** `=== exception (type 1) pc 008bcf0c ... r3 04000000 ===` right
@@ -291,7 +331,7 @@ Newest first. Each entry: what changed, what was run, what it proved.
   the hardware run is the end-to-end check.
 - **Trace.** [agent-notes/s15-ds-address-literals.md](agent-notes/s15-ds-address-literals.md)
   has the log decode, the site table, the preprocessor method and what is unverified.
-- **Counts.** **80 patches**; the DS gate last ran at 78 and 1905's `#else`
+- **Counts.** **82 patches**; the DS gate last ran at 78 and 1905's `#else`
   text is unchanged. Artifact **9,278,840 B**
   (`sha256 168bc1a2f49becc022cad3d017feff62191308e4242d49cdec142a24feac76b5`),
   1092/1092, `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages).
