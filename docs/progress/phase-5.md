@@ -27,7 +27,8 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
 - **Paths** `sdmc:/3ds/pokeheartgold/` for `heartgold3ds.pak`, `manifest.json`,
   `heartgold.sav`, `log.txt`, `port.ini` and `script.txt`. The SoulSilver
   variant (folder `pokeheartgold-ss/`, `soulsilver3ds.pak`, save name, build
-  ID) is selected by `HGSS_SS_VARIANT`; the shared sources carry the default.
+  ID, game code and `pokesoulsilver.3dsx`) is selected by the decomp's
+  `SOULSILVER` define; the shared sources carry the HeartGold default.
 - **Display** centered 1:1 only: top 256×192 at (72,24) in 400×240, bottom at
   (32,24) in 320×240. The framebuffer is written in its stored orientation
   (`fb[x * 240 + (239 - y)]`), not rotated twice. The remaster, wide and
