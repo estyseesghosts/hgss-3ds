@@ -29,4 +29,4 @@ then runs `python3 tools/bootstrap.py && make test` (tool tests + the `tests/sdk
 `tools/check_repo_content.py` before the image build. The first public push at
 `main` passed all of it (run 41353964864, 3m3s). The layout probe needs MWCC
 and is not part of it. The DS gate (`matching.yml`) was run locally at **78 patches** and passed for both
-games; the workflow remains disabled until the private runner and variable exist.
+games (patch `1904`, added later, is `SDK_PORT_3DS`-only and its `#else` text is unchanged); the workflow remains disabled until the private runner and variable exist.

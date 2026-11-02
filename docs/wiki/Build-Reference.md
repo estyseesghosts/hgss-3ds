@@ -80,7 +80,7 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 | DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` / `SOULSILVER` | ROM in `/work` | works; needs MWCC; **PASSED at 78** for both (retail SHA1s) |
 | Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
 | Game for PC | `make game-pc` | `build/pokeheartgold-pc` | **1092/1092 compile, 0 unresolved** |
-| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; the program also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob; `3dsxtool` packages the `.3dsx` (9,278,696 B with the latest fixes) |
+| Game for 3DS | `make game-3ds` | `build/game-3ds/pokeheartgold-3ds.elf` + `pokeheartgold.3dsx` | 1092/1092 compile, both archives build, 0 unresolved; the program also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob; `3dsxtool` packages the `.3dsx` (9,278,712 B with the latest fixes) |
 
 There is no `make game` or `make matching`; the DS gate is `tools/matching-build.sh`. See
 [Tools-Reference](Tools-Reference.md#named-in-the-docs-but-not-in-the-repo).

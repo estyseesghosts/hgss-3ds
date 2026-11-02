@@ -233,6 +233,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **V-blank.** The vertical blanking period between frames, and the interrupt that marks it. On the port, `OS_Halt` advances one frame: it calls the frame hook, starts V-blank and requests its interrupt ([3ds_port/nitro/README.md](../../3ds_port/nitro/README.md)).
 
+**V-blank callback (`Main_SetVBlankIntrCB`).** The function the game registers to run at each V-blank, with its argument; the game's overlay apps use it for OAM and VRAM transfers. It must be cleared in the frame its buffers are freed — `OptionsApp_Free` did that one frame late, and the port's V-blank then ran a DMA from the freed BG config (patch 1904; [3DS-Pitfalls](3DS-Pitfalls.md#the-v-blank-survives-the-app-that-owned-its-buffers)).
+
 **VRAM.** The DS video memory for the 2D and 3D engines. It is split into banks, A to D, that the registers map onto the engines ([gameplan.md](../../gameplan.md), Phase 6b).
 
 **Virtual ARM7.** The port's in-process stand-in for the ARM7. It answers PXI requests for card, RTC, power, touch and sound ([3ds_port/nitro/src/port_arm7.c](../../3ds_port/nitro/src/port_arm7.c) header).

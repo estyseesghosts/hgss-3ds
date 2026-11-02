@@ -19,7 +19,7 @@ pokeheartgold-3ds/
   3ds_port/            Platinum's hardware layer (GPL-3.0) + one local fix
                       see 3ds_port/LOCAL-CHANGES.md
   hgss/                HGSS shell, game-facing glue, compat headers/runtime
-  patches/             78 patches against the pinned decomp (three stacks)
+  patches/             79 patches against the pinned decomp (three stacks)
   builder/             ROM verify/extract/pack (the user's own cartridge)
   tools/               harness, bootstrap, surveys, matching build, reports
   tests/               Python, SDK host suites, layout probe, input scripts
@@ -165,7 +165,7 @@ public push. The current history has none; keep it that way.
 - `upstream.lock`: `8cbb4a19ab781611ff1767035dcaea6b47baeded`
 - `platinum.lock`: `359fbec80a5c0664d4fa72caaae87465b640f9d6`
   plus `docs/upstream/platinum-camera-point.patch`
-- Patches: **78** (NitroSDK 15, NitroSystem 3, pokeheartgold 60)
-- DS gate at 78: HG and SS retail SHA1s pass
-- Latest `.3dsx`: 9,278,696 bytes
-  (`sha256 fc4472b5…68a7`); not in git
+- Patches: **79** (NitroSDK 15, NitroSystem 3, pokeheartgold 61)
+- DS gate at 78: HG and SS retail SHA1s pass (1904 is port-only)
+- Latest `.3dsx`: 9,278,712 bytes
+  (`sha256 18833d57…9ebb`); not in git

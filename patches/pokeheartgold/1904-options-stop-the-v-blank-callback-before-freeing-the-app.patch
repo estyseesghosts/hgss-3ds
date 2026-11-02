@@ -1,0 +1,50 @@
+From 542e5c8a4be27595af20693e396713dff4821aad Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 03:31:05 +0000
+Subject: [PATCH] options: stop the V-blank callback before freeing the app's
+ buffers (SDK_PORT_3DS)
+
+OptionsApp_Free frees the app's BgConfig and its other buffers in its first
+call (setupAndFreeState 0) and stops Main_SetVBlankIntrCB only in its second
+(setupAndFreeState 1), one frame later. The V-blank in between still runs
+OptionsApp_OnVBlank, which calls DoScheduledBgGpuUpdates(data->bgConfig) on
+the freed config. The NNS heap's free-list header has overwritten
+bufferTransferScheduled and the bgs[] tilemap buffers, so a layer looks
+scheduled and LoadBgVramScr starts a DMA from a scribbled pointer (0x02C002C0
+in the PC run, count 0x2C0). The DS reads whatever the RAM holds and carries
+on; the port's DMA dereferences that value as a host pointer and data-aborts,
+which is the crash when the Settings menu is closed and the field is
+returning.
+
+Stop the callback with the buffers, as the app's siblings do. The #else text
+is unchanged, so the Metrowerks build still preprocesses identically; the
+only difference is that the one frame of garbage VRAM transfer the freed
+config would have produced no longer happens.
+
+Reproduced on the PC runner (new game -> bedroom -> mother -> X -> OPTIONS ->
+QUIT): before this patch it aborts at the V-blank after the free, in
+OptionsApp_OnVBlank -> DoScheduledBgGpuUpdates -> LoadBgVramScr; after it the
+run returns to the field.
+---
+ src/options_app.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/options_app.c b/src/options_app.c
+index 80c46cc..000efa1 100644
+--- a/src/options_app.c
++++ b/src/options_app.c
+@@ -516,6 +516,11 @@ static BOOL OptionsApp_Setup(OptionsApp_Data *data) {
+ static BOOL OptionsApp_Free(OptionsApp_Data *data) {
+     switch (data->setupAndFreeState) {
+     case 0:
++#ifdef SDK_PORT_3DS
++        // The port runs the V-blank between this call and case 1, while the
++        // app's callback is still installed, and it would update the freed bgConfig.
++        Main_SetVBlankIntrCB(NULL, NULL);
++#endif
+         GF_DestroyVramTransferManager();
+         OptionsApp_FreeWindows(data);
+ 
+-- 
+2.43.0
+

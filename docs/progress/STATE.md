@@ -1,8 +1,8 @@
 # Current state
 
-Last verified: **2026-11-01 (session 10: NNS volume table, pre-saturation headroom, NDSP cache/rate, camera-plane drop)**, inside the dev container
-(`/workspaces/pokeheartgold-3ds`), with the tree at **78 patches** (`NitroSDK` 15, `NitroSystem` 3,
-`pokeheartgold` 60). Everything below that says "verified" was run on that tree on that date, and the
+Last verified: **2026-11-01 (session 11: the Options close crash)**, inside the dev container
+(`/workspaces/pokeheartgold-3ds`), with the tree at **79 patches** (`NitroSDK` 15, `NitroSystem` 3,
+`pokeheartgold` 61). Everything below that says "verified" was run on that tree on that date, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
 this page; do not trust it blindly.
 
@@ -11,15 +11,15 @@ self-check passes on the real binary (129/0), the symbol cross-check reports **0
 program compiles 1092/1092, builds both archives and packages `pokeheartgold.3dsx`. Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
 **Both halves of the Phase 1 DS gate pass at 78 patches**; both matching builds reproduce the retail
-ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patch 1407 is `SDK_PORT_3DS`-only, and
-the gate is the evidence.
+ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407 and 1904 are
+`SDK_PORT_3DS`-only (`#else` text unchanged), and the gate is the evidence.
 
 ## Phases
 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 78 patches apply from scratch; `make test` 338 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 79 patches apply from scratch (the DS gate last ran at 78; 1904 is port-only); `make test` 338 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold-pc` and `pokeheartgold.3dsx` exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** (SS tested synthetically) | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; synthetic-image tests; real HG pack opens in the PC program. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
@@ -33,14 +33,15 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (78 patches applied)` |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (79 patches applied)` |
 | Host tests | `make test` | **exit 0**; **338 Python tests** + **20 SDK suites** |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,696 B (`sha256 fc4472b5…68a7`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Settings open/close (PC) | scripted new game → bedroom → mother → X → OPTIONS → QUIT | **returns to the field at frame 35032**; two further cycles pass. Before patch 1904 it aborted at 35028 in `LoadBgVramScr` (`src=0x02C002C0`) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,712 B (`sha256 18833d57…9ebb`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
@@ -169,7 +170,7 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
-python3 tools/bootstrap.py            # "already at ... with 78 patches" if in sync
+python3 tools/bootstrap.py            # "already at ... with 79 patches" if in sync
 make test                            # exit 0 (338 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
@@ -244,6 +245,40 @@ Newest first. Each entry: what changed, what was run, what it proved.
   [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md)
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
+
+### 2026-11-01 (session 11) — closing the in-game Settings crashed
+
+- **Symptom.** In the field, X → **OPTIONS** → **QUIT** crashed instead of
+  fading back to the field. Every other start-menu app returned.
+- **Reproduction.** No field save existed, so the PC runner played the new
+  game through the intro (scripted: bedroom → downstairs → mother's dialogue)
+  to the field, then X → OPTIONS (touch `125,115`) → QUIT (touch `222,183`).
+  It aborted at frame 35028, `rc 139`, fault pc in `Transfer()`
+  (`port_dma.c`), with `src=0x02C002C0`, `dest=0x0E8A1D80`, `count=352`.
+  A temporary guard in `Transfer()` plus `backtrace()` (the container forbids
+  `ptrace`, so gdb cannot attach) gave the stack:
+  `OptionsApp_OnVBlank → DoScheduledBgGpuUpdates → LoadBgVramScr →
+  GXi_DmaCopy16 → MIi_DmaSetParams_wait → NitroPort_DmaStart → Transfer`.
+- **Cause.** `OptionsApp_Free` runs twice: `setupAndFreeState == 0` frees the
+  `BgConfig` and the app's buffers, and only `== 1`, one frame later, stops
+  `Main_SetVBlankIntrCB`. The port raises that frame's V-blank in between, so
+  `OptionsApp_OnVBlank` used the freed config; the NNS free-list header had
+  scribbled `bufferTransferScheduled` and the `bgs[]` tilemap pointers, and a
+  "scheduled" layer started a DMA from a bogus pointer. The DS reads that RAM
+  (one frame of garbage into VRAM); the port's DMA treats it as a host
+  pointer. The decomp is matching — this is a latent game bug the DS survives.
+- **Fix.** Patch **1904** clears the callback in the same call that frees the
+  buffers (port-only `#ifdef SDK_PORT_3DS`; `#else` unchanged). The PC repro
+  now returns to the field at frame 35032 and survives two more open/close
+  cycles. Details: [../wiki/3DS-Pitfalls.md](../wiki/3DS-Pitfalls.md#the-v-blank-survives-the-app-that-owned-its-buffers).
+- **Counts.** The tree is at **79 patches**; the DS gate last ran at 78 and
+  1904's DS text is unchanged. The full trace and the reproduction are in
+  [agent-notes/s14-options-vblank.md](agent-notes/s14-options-vblank.md).
+- **Artifact.** 3DS build **1092/1092**, 0 unresolved; `.3dsx`
+  **9,278,712 B** (`sha256 18833d57c6a84dee990008ddabef5b443207c01d59193d284f46c58553bc9ebb`),
+  `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). In the
+  ELF, `OptionsApp_Free` calls `Main_SetVBlankIntrCB` before
+  `GF_DestroyVramTransferManager`, as intended.
 
 ### 2026-11-01 (session 10, audio + 3D) — the output level, NDSP staging and the camera-plane drop
 

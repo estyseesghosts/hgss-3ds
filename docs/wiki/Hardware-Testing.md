@@ -206,6 +206,18 @@ frames of M` near zero is the other half of the audio result.
    `audio: N dropped frames of M` should be near zero relative to `M`.
 4. Save a copy of `log.txt` and note the frame count and any dropped frames.
 
+## Settings open and close
+
+Once the field is up (the scripted run ends in the bedroom; the start menu
+becomes available after mother's dialogue), open the start menu with **X**,
+choose **OPTIONS**, then close it with **QUIT**. The game must fade back to
+the field and keep running. This was the session-11 crash: `OptionsApp_Free`
+freed the BG config one frame before it stopped its V-blank callback, and the
+V-blank in between started a DMA from the freed config (patch **1904** fixes
+it). A crash here is a data abort in `LoadBgVramScr`; send `log.txt` or the
+Luma dump. Open and close it twice in a row; both returns must reach the
+field.
+
 ## Frame-time budget
 
 The shell logs a `frame N` line every 600 frames. Once the instrumentation

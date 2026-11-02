@@ -31,6 +31,7 @@ sequence.
 | Notes sound right, level is fine, but the timbre is rough/crunchy | [The mix is level-right but still sounds rough](#the-mix-is-level-right-but-still-sounds-rough) |
 | A noise note writes an unused hole (1407; related) | [A noise note writes an unused hole](#a-noise-note-writes-an-unused-hole) |
 | Game runs at 87 Hz; cutscenes finish early | [A frame under the refresh is not a 60 Hz frame](#a-frame-under-the-refresh-is-not-a-60-hz-frame) |
+| Closing the in-game Settings (OPTIONS → QUIT) crashes instead of returning to the field | [The V-blank survives the app that owned its buffers](#the-v-blank-survives-the-app-that-owned-its-buffers) |
 
 ## A weak hook binds to NULL
 
@@ -494,6 +495,47 @@ clock is per frame, so it is a comparison mode only.
 
 **Rule.** If the display swap can return before a refresh, pace the frame loop
 yourself and measure the interval between frame starts.
+
+## The V-blank survives the app that owned its buffers
+
+**Symptom.** In the field, open the start menu (X), choose **OPTIONS**, then
+**QUIT**: the game crashes instead of fading back to the field — a data abort
+on the 3DS, and a SIGSEGV in the PC runner at the V-blank after the close. It
+is the Options app only; BAG, SAVE and the trainer card return normally.
+
+**Cause.** `OptionsApp_Free` tears the app down in two calls. Its
+`setupAndFreeState == 0` call frees the `BgConfig`, the windows, the strings
+and the sprite renderer; only the `== 1` call, one frame later, stops the
+V-blank callback (`Main_SetVBlankIntrCB(NULL, NULL)`). In between, the port
+raises that frame's V-blank, and `OptionsApp_OnVBlank` calls
+`DoScheduledBgGpuUpdates(data->bgConfig)` on the freed config. The NNS heap's
+free-list header now covers its first words, so `bufferTransferScheduled`
+looks like a layer is due and the `bgs[]` tilemap pointers are scribbled;
+`LoadBgVramScr` then starts a DMA from one of them. The PC run read
+`src=0x02C002C0, count=0x2C0` and faulted in `Transfer()`
+(`NitroPort_DmaStart`); the 3DS data-aborts at the same instruction.
+
+On the DS the same frame runs the same stale handler, but the scribbled values
+are RAM addresses the DMA can read: it writes one frame of garbage into VRAM
+and carries on. The port's DMA dereferences the value as a host pointer, so it
+cannot.
+
+**Fix.** Patch **1904** clears the V-blank callback at the top of
+`OptionsApp_Free`'s `setupAndFreeState == 0` call, together with the buffers
+it would look at (port-only `#ifdef SDK_PORT_3DS`; the `#else` text is
+unchanged). The app's siblings (`Bag_Exit`, `PartyMenuApp_Exit`, …) already
+clear the callback in the same call that frees their BG layers.
+
+**Reproduction and check.** PC runner: new game → bedroom → mother's dialogue
+→ X → OPTIONS → QUIT. Before 1904 it aborts at frame 35028 in
+`OptionsApp_OnVBlank → DoScheduledBgGpuUpdates → LoadBgVramScr → GXi_DmaCopy16
+→ NitroPort_DmaStart`; with 1904 the field reloads at frame 35032 and the run
+continues, including two more open/close cycles. The defect is in the game
+code, so the patch is the fix; do not weaken `Transfer()` to hide it.
+
+**Rule.** An overlay app's V-blank callback must stop in the same frame its BG
+config is freed. If its teardown takes more than one frame, clear the callback
+in the first one.
 
 ## Reading a Luma crash dump
 

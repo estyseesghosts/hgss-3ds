@@ -1,15 +1,17 @@
 # Phase 5 progress
 
-Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap and audio
-level/staging fixes package, pending a console re-run.** The game boots, plays
-the intro, reaches Oak's speech and the player's house, draws both screens and
-plays audio. The ninth run (log-9) showed the GPU pipeline working at 87 Hz;
-frame starts are now capped at 60 Hz, the NNS volume table, pre-saturation
-6 dB headroom and NDSP cache/rate fixes address the audio, and the title's
-zero-area camera-plane triangles are dropped instead of being drawn as a fan.
-Remaining Phase 5 exits: the owner's hardware re-run (3D rate and title, audio
-by ear, frame times), a full-speed run through Oak's speech, the save
-round-trip, the Old 3DS decision and the `.cia` decision.
+Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap, audio
+level/staging fixes and the Settings-close crash fix package, pending a console
+re-run.** The game boots, plays the intro, reaches Oak's speech and the
+player's house, draws both screens and plays audio. The ninth run (log-9)
+showed the GPU pipeline working at 87 Hz; frame starts are now capped at
+60 Hz, the NNS volume table, pre-saturation 6 dB headroom and NDSP cache/rate
+fixes address the audio, the title's zero-area camera-plane triangles are
+dropped instead of being drawn as a fan, and closing the in-game Settings
+returns to the field (patch 1904). Remaining Phase 5 exits: the owner's
+hardware re-run (3D rate and title, audio by ear, frame times, Settings
+open/close), a full-speed run through Oak's speech, the save round-trip, the
+Old 3DS decision and the `.cia` decision.
 
 Last verified: **2026-11-01**, container `/workspaces/pokeheartgold-3ds`.
 
@@ -39,7 +41,7 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   thread. The exit log prints `audio: N dropped frames of M`. Without
   `dspfirm.cdc` the game runs silent, `log.txt` says so, and nothing else
   changes.
-- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,696 bytes** with the latest camera-plane-drop/audio-table/pre-saturation-headroom/NDSP-cache fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-plane sections below.
+- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,712 bytes** with the latest camera-plane-drop/audio-table/pre-saturation-headroom/NDSP-cache and Options-close fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-plane sections below.
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
   six-frame button holds and touch positions. Without a script the console's
@@ -693,6 +695,21 @@ matching gate remains at **78 patches** for both games (HG `4fcded0e…b5a37`,
 SS `f8dc38ea…e582`). The PICA's title and the audio are the owner's hardware
 check.
 
+**Settings close, session 11.** The owner's next hardware run reported a crash
+when the in-game Settings were closed. The PC runner reproduced it on a
+scripted new game (bedroom → mother → X → OPTIONS → QUIT) at frame 35028: the
+V-blank between `OptionsApp_Free`'s two calls ran `OptionsApp_OnVBlank` with
+the freed `BgConfig` and started a DMA from a scribbled pointer
+(`src=0x02C002C0`). Patch **1904** stops the callback in the first call
+(port-only); the same run now returns to the field at frame 35032 and passes
+two further open/close cycles. The defect is in the game code, so the DMA
+layer is not weakened to hide it. The tree is now at **79 patches**; the DS
+gate last ran at 78 and 1904's `#else` text is unchanged. The DS-side check is
+in [../wiki/Hardware-Testing.md](../wiki/Hardware-Testing.md); the trace is in
+[agent-notes/s14-options-vblank.md](agent-notes/s14-options-vblank.md). The
+artifact is **9,278,712 B** (`sha256 18833d57…9ebb`), 3DS build 1092/1092,
+`3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages).
+
 ## Pending user runs
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
@@ -700,6 +717,8 @@ definition of a pass:
 
 - Scripted New 3DS run to Oak's speech (full speed, visually correct).
 - New 3DS frame-time log and budget table.
+- In-game Settings open → QUIT → field, twice in a row (patch 1904; the
+  session-11 crash).
 - Old 3DS measurement (the support decision is recorded only after it).
 - Save round-trip both ways: port save → melonDS Continue; cartridge save →
   port Continue.
@@ -711,9 +730,10 @@ SD card or run a cartridge.
 ## Open gaps
 
 - The classic PICA pipeline runs on hardware; the latest **60 Hz cap, NNS
-  volume-table/pre-saturation-headroom/NDSP-cache audio fixes and camera-plane
-  drop** are pending the owner's re-run (frame times, no clipping or rough
-  timbre, no title fan or gap).
+  volume-table/pre-saturation-headroom/NDSP-cache audio fixes, camera-plane
+  drop and the Options close fix (1904)** are pending the owner's re-run
+  (frame times, no clipping or rough timbre, no title fan or gap, and the
+  in-game Settings close back to the field).
 - Old 3DS 3D: the classic target and images need several MB of linear memory;
   `NitroPort_PicaInit` logs and falls back to 2D if it cannot get it, but the
   Old 3DS case is still unmeasured.
