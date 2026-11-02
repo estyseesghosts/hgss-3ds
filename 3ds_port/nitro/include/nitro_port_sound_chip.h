@@ -58,6 +58,14 @@ typedef struct NitroSoundChip {
      * (the DS's own way, NitroSound_Reset's default): no harsh images of
      * the sound above it, as on the DS's own output and in emulators. */
     uint8_t interpolate;
+    /* Right shift applied to the final left/right mix *before* the 16-bit
+     * saturation (0 = no shift). The mixer's sum can leave the 16-bit range;
+     * the DS's own 20.8-bit mixer attenuates at the output stage and clips
+     * only at its final 10-bit DAC, so applying the headroom here keeps loud
+     * peaks smooth instead of flat-topping them and then halving the flat
+     * top. The port's output stage sets 1 (6 dB), matching the measured DS
+     * title level. */
+    uint8_t outputShift;
 } NitroSoundChip;
 
 void NitroSound_Reset(NitroSoundChip *chip, uint32_t outputRate);

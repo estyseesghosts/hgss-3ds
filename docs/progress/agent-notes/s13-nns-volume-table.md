@@ -59,8 +59,8 @@ link order, and the port's object step runs only in `hgss_game.py`.
 | natural mixer ends in 90 s | 4 | 192 |
 | start volumes (ctrl low byte/shift) | 127/0 (0 dB) | 41–103 with shifts |
 
-These are **before** the 6 dB output trim below; the trim halves them to
-0.067–0.088 RMS and a 0.5 peak, matching the DS.
+These are **before** the 6 dB headroom shift below; the final render is
+0.0708 RMS and a 0.586 peak (no flat tops), matching the DS.
 
 `tests/test_hgss_game.py::NnsVolumeTableTests` keeps the port table equal to
 the NitroSDK source (128 entries, monotonic, -32768..0) and asserts the port
@@ -71,11 +71,23 @@ were right but the mix still sounded clipped, and that turning the console's
 volume down did not remove it — so the damage was in the samples. A retail
 title captured from melonDS, calibrated with a full-scale tone through the
 same macOS output path, peaks at ≈0.42 of full scale (RMS 0.071); the port's
-title peaks at 1.0 (RMS 0.139). `NitroPort_SoundRender` now trims 6 dB
-(`>> 1`) at the shared output stage: the title is **0.067-0.088 RMS, peak
-0.5, 0% of samples clipped**, matching the DS headroom. PSG duty 7 is also
-fixed to GBATEK's 0% (silence) instead of the 100% DC level the mixer used to
-emit; the sound-chip suite now checks it (52 checks).
+title peaks at 1.0 (RMS 0.139). `NitroSound_Mix` now applies the 6 dB
+headroom **before** its 16-bit `saturate()` (`NitroSoundChip.outputShift`):
+the first `NitroPort_SoundRender` trim ran **after** saturation, leaving
+18-44 flat-top runs of 4-20 samples at ±16384 in `trim.wav`. PSG duty 7 is
+also fixed to GBATEK's 0% (silence) instead of the 100% DC level the mixer
+used to emit.
+
+**Then the NDSP staging.** Even with the right samples, HGSS's shell (unlike
+Platinum's) never called `DSP_FlushDataCache` before `ndspChnWaveBufAdd`, so
+the DSP's DMA could read stale FCRAM: recognizable music, scratchy. It also
+announced 32768 Hz to a DSP whose native rate is ~32728.5, asking libctru for
+a 1.0012 2-tap resample; that amplitude-modulates the top octave at 39.5 Hz.
+`main_3ds.c` now flushes each 2048-byte block and announces
+`NDSP_SAMPLE_RATE` (0.12% / two cents flat, inaudible). The PC render
+`shift.wav` is clean (0.0708 RMS, 0.586 peak, no flat tops); the hardware
+roughness was the staging, not the mixer.
+
 
 ## The 3D: the fan is a zero-area triangle
 
@@ -105,11 +117,11 @@ geometry and left the gap.
 **Not yet run on hardware:** the PICA must be checked on the title, with the
 3D slider both at 2D and 3D. The bird should be intact, no fan and no gap.
 
-**Local artifact.** 3DS build 1092/1092, 0 unresolved; `.3dsx` **9,278,600 B**
-(`sha256 4cecadd071b4aa4557ad651c0982255132672ae90b86c0f74ce6679c25d508ab`),
+**Local artifact.** 3DS build 1092/1092, 0 unresolved; `.3dsx` **9,278,696 B**
+(`sha256 fc4472b59eada839e31e5d46f2c7e58dd285989c924e561a6420d0f2a0eb68a7`),
 `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). Staged as
-`sdmc:/3ds/pokeheartgold.3dsx`; the audio-only build (`63d880e7…`) and the
-previous `3f493661…` are kept beside it for rollback.
+`sdmc:/3ds/pokeheartgold.3dsx`; the previous `4cecadd0…`, the audio-only
+`63d880e7…` and the original `3f493661…` are beside it for rollback.
 
 ## What went wrong, and the lesson
 
@@ -134,12 +146,24 @@ previous `3f493661…` are kept beside it for rollback.
   fader at 0 dB, the title was ~6 dB hotter than the DS; the remaining
   crunch was hard clipping in the samples, which is why lowering the console
   volume did not help. Calibrating a melonDS capture with a full-scale tone
-  gave the number and the fix. Lesson: distinguish "the amplifier is too
-  loud" from "the samples are clipped" before adding gain.
+  gave the number. A first trim after the mixer's `saturate()` left flat-topped
+  peaks at ±16384; the final headroom shift is applied before saturation.
+  Lesson: distinguish "the amplifier is too loud" from "the samples are
+  clipped" before adding gain, and apply attenuation before the clipper.
 - **A stale unit test failed after the change.** The test
   `test_3d_camera_point_gets_a_positive_w_in_the_port` still asserted the
   removed `out.clip[3]=1`; it was updated to assert the camera-plane drop.
   Lesson: change the test with the design, not after the gate complains.
+- **The PC WAV was clean, so the roughness had to be after it.** The shell
+  never flushed the rendered blocks before `ndspChnWaveBufAdd`, and it asked
+  the DSP to resample 32768→32728.5. Both are invisible in a WAV. Lesson: when
+  a file render measures clean but the device is rough, audit the DMA/cache
+  hand-off and the device's own sample rate before touching the mixer again.
+- **The 6 dB trim was applied after the mixer's `saturate()`.** It halved
+  already flat-topped peaks (18-44 runs at ±16384), so the “0% clipped” check
+  at the new 0.5 FS ceiling missed the remaining distortion. Applying the
+  headroom before saturation removed every flat top. Lesson: attenuate before
+  the clipper, not after it.
 - **The audio capture needed calibration and cleanup.** BlackHole captured at
   the system volume (38%) and input volume (27%), so absolute numbers were
   meaningless until a full-scale tone went through the same path; the output

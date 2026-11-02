@@ -618,12 +618,26 @@ static void HgssOnException(ERRF_ExceptionInfo *info, CpuRegisters *regs)
 /* ---------------------------------------------------------------- audio */
 
 /* The DS sound chip mixes into NitroPort_SoundRender: 32768 Hz stereo, the
- * same stream the PC shell writes to a WAV. NDSP's own rate is
- * SYSCLOCK_SOC/512 (~32728.5 Hz), so running the channel at 32768 is 0.12%
- * flat -- about two cents -- and lets the DSP do the resampling. Four blocks
- * of 15.6 ms keep it fed while the game thread is busy; the mixer takes its
- * own lock, so this thread never holds the game up. */
-#define AUDIO_RATE 32768
+ * same stream the PC shell writes to a WAV. NDSP mixes at
+ * SYSCLOCK_SOC/512 (~32728.5 Hz) and its channel-rate word is "how many
+ * source samples per second", so announcing 32768 asks the DSP to read
+ * 1.0012 source samples per output sample. Its interpolator for that case
+ * is 2-tap linear (libctru maps any 1.0 < rate <= 4/3 to NDSP_INTERP_LINEAR,
+ * even for POLYPHASE), and a 2-tap interpolator's gain depends on the
+ * fractional position: at a 1.0012 ratio that position sweeps 0..1 every
+ * ~25 ms, so the high band is amplitude-modulated at 39.5 Hz (0 to -2.9 dB
+ * at 8 kHz, -7.8 dB at 12 kHz, -12.9 dB at 14 kHz). That is audible
+ * roughness, and a per-buffer interpolation-phase reset would add a click
+ * train at the 64 Hz buffer rate. Announcing the DSP's own rate instead
+ * makes the ratio exactly 1.0, so the DSP copies samples and none of it
+ * exists; the price is that the 32768 Hz stream is then consumed 0.12%
+ * slow (two cents flat, and the whole soundtrack 0.12% longer), which is
+ * inaudible. (Announcing 32768 itself introduced no pitch error -- the
+ * DSP consumed exactly 32768 source samples a second -- so earlier notes
+ * that called this path "two cents sharp" were describing nothing.)
+ * Four blocks of 15.6 ms keep it fed while the game thread is busy; the
+ * mixer takes its own lock, so this thread never holds the game up. */
+#define AUDIO_RATE 32768                       /* the DS mixer's rate */
 #define AUDIO_FRAMES 512                       /* per block, per channel */
 #define AUDIO_BLOCKS 4
 #define AUDIO_THREAD_STACK (16 * 1024)
@@ -658,6 +672,15 @@ static void AudioThread(void *arg)
         }
         NitroPort_SoundRender(sAudioData + (size_t)slot * AUDIO_FRAMES * 2u,
                               AUDIO_FRAMES);
+        /* The DSP reads the block with its own DMA, which does not see the
+         * ARM11's write-back L1. libctru's ndsp never flushes (every NDSP
+         * example calls this itself), so without it the DSP plays whatever
+         * happens to still be in FCRAM: an untouched buffer, or -- the usual
+         * case, since the game keeps evicting 64-byte lines -- a random mix
+         * of the current block and pieces of the block from ~62 ms ago.
+         * That sounds like the music, only scratchy/crunchy. */
+        (void)DSP_FlushDataCache(sAudioData + (size_t)slot * AUDIO_FRAMES * 2u,
+                                 AUDIO_FRAMES * 4u);
         ndspChnWaveBufAdd(0, &sAudioWave[slot]);
     }
 }
@@ -676,7 +699,9 @@ static void AudioStart(void)
     memset(sAudioWave, 0, sizeof(sAudioWave));
     ndspChnReset(0);
     ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
-    ndspChnSetRate(0, (float)AUDIO_RATE);
+    /* The DSP's own rate, not AUDIO_RATE: ratio exactly 1.0, no resampling.
+     * See the comment above AUDIO_RATE. */
+    ndspChnSetRate(0, (float)NDSP_SAMPLE_RATE);
     ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
     for (i = 0; i < AUDIO_BLOCKS; i++) {
         sAudioWave[i].data_pcm16 = sAudioData + (size_t)i * AUDIO_FRAMES * 2u;
@@ -691,8 +716,9 @@ static void AudioStart(void)
         NitroPort_Log("audio: can't start its thread; staying silent");
         return;
     }
-    NitroPort_Log("audio: %d Hz stereo, %d blocks of %d frames",
-                  AUDIO_RATE, AUDIO_BLOCKS, AUDIO_FRAMES);
+    NitroPort_Log("audio: mixer %d Hz, DSP %d Hz (no resampling), %d blocks of %d frames",
+                  AUDIO_RATE, (int)(NDSP_SAMPLE_RATE + 0.5),
+                  AUDIO_BLOCKS, AUDIO_FRAMES);
 }
 
 static void AudioStop(void)

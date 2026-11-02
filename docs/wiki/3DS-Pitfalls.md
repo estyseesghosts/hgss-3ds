@@ -306,9 +306,13 @@ size_t frames)` mixes the ARM7's 32768 Hz stereo.
 
 **Fix.** `AudioThread` renders 512-frame blocks into four NDSP wave buffers on
 its own thread; `NitroPort_OnFrame` pumps the ARM7's alarm replies with
-`NitroPort_SoundPumpReplies()`. The channel runs at 32768 Hz against NDSP's
-~32728.5 Hz (about two cents sharp, inaudible) and the DSP resamples. The exit
-log prints `audio: N dropped frames of M`, which is how starvation shows.
+`NitroPort_SoundPumpReplies()`. Each block is flushed out of the ARM11's
+write-back cache (`DSP_FlushDataCache`) before it is queued — the DSP's DMA
+does not see that cache, and libctru does not flush for you — and the channel
+announces NDSP's own rate (`NDSP_SAMPLE_RATE`, ~32728.5 Hz), not the mixer's
+32768 Hz, so the DSP copies samples instead of resampling them (see "The mix
+is level-right but still sounds rough"). The exit log prints
+`audio: N dropped frames of M`, which is how starvation shows.
 
 The thread's priority matters on a slow frame: it was `0x31` (below the game's
 `0x30`), and a 20-30 ms software composite kept it off the core for longer than
@@ -402,14 +406,68 @@ percussion peaks hit the rails and hard-clipped. PSG duty 7 was also emitted
 as 100% high instead of GBATEK's 0% (silence), adding a full-scale DC step
 whenever a sequence used it.
 
-**Fix.** `NitroPort_SoundRender` trims 6 dB (`>> 1`) at the shared output
-stage, matching the measured DS headroom; the channel/volume maths stays in
-the mixer (whose tests still check it), except that PSG duty 7 is now silence
-in `port_sound_chip.c` and the test reference.
+**Fix.** The 6 dB headroom is applied **inside `NitroSound_Mix`, before the
+16-bit `saturate()`** (`NitroSoundChip.outputShift`, set to 1 by
+`NitroPort_ResetSoundState`). The first version trimmed in
+`NitroPort_SoundRender`, *after* the mixer had already clipped at ±32767: the
+trim halved the flat-topped peaks to ±16384 (18-44 runs of 4-20 samples in
+`trim.wav`, invisible to a 0.999-FS clip detector) and the crunch remained.
+Attenuating before saturation keeps loud peaks smooth. The final render is
+0.0708 RMS, peak 0.586, **no flat-top runs** (down from 18). The
+channel/volume maths stays in the mixer (whose tests still check it), except
+that PSG duty 7 is now silence in `port_sound_chip.c` and the test reference.
 
 **Rule.** "Sounds like the amp" is not proof it is the amp: lower the volume
 and listen. If the distortion remains, it is baked into the samples; compare
 the digital level against a calibratable reference before adding gain.
+
+## The mix is level-right but still sounds rough
+
+**Symptom.** After the 6 dB trim the mix is not hot and does not clip, yet
+tones are still not smooth: "rough", "crunchy". Loudness is fine; the timbre
+is wrong.
+
+**Cause.** The mixer's own output is not the problem. `/work/shift.wav` (the
+final render with the 6 dB headroom applied before saturation) measures clean:
+peak 0.586, RMS 0.0708, **no flat-top runs**. The earlier `/work/trim.wav` had
+the same RMS but 18 flat-top runs at ±16384 from the post-saturation trim
+(fixed above); otherwise both are clean: 26k distinct 16-bit levels, and no
+periodic component at 39.5/64/170.7/192 Hz in the 6-14 kHz band (all below the
+music's own 9.5 Hz rhythm peak). The high band is 5-6 dB *below* the DS
+capture above 9 kHz. The two defects below are in the NDSP staging the WAV
+bypasses:
+
+1. **No cache flush.** The DSP reads a wave buffer with its own DMA, which
+   does not see the ARM11's write-back L1, and libctru's `ndsp` never flushes
+   (`ndspChnWaveBufAdd` only queues; every NDSP example calls
+   `DSP_FlushDataCache` itself). Unflushed, the DSP reads stale FCRAM — the
+   previous contents of that buffer, or, when the game evicts 64-byte lines
+   at random, a mix of the current block and 16-frame fragments from ~62 ms
+   ago. Recognisable music, scratchy.
+2. **The channel asked for a resample.** `ndspChnSetRate(0, 32768)` against
+   NDSP's 32728.5 Hz is a ratio of 1.0012, and libctru maps any
+   `1.0 < rate <= 4/3` to a **2-tap linear** interpolator (even for
+   `NDSP_INTERP_POLYPHASE`). A 2-tap interpolator's gain depends on the
+   fractional position, which at that ratio sweeps 0..1 every ~25 ms, so the
+   top octave is amplitude-modulated at 39.5 Hz: 0 to -2.9 dB at 8 kHz,
+   **-7.8 dB at 12 kHz**, -12.9 dB at 14 kHz. On a real 4 s music segment the
+   resample error is -16.9 dB broadband, and the 6-14 kHz band shows a
+   +7.6 dB spike at 39.5 Hz. A per-buffer interpolation-phase reset would add
+   a click train at the 64 Hz buffer rate.
+
+**Fix.** `DSP_FlushDataCache` the rendered block before
+`ndspChnWaveBufAdd`, and announce the DSP's own rate
+(`ndspChnSetRate(0, NDSP_SAMPLE_RATE)`) so the ratio is exactly 1.0 and the
+DSP copies samples. The price is that the 32768 Hz stream is consumed 0.12%
+slow (two cents flat; the soundtrack also runs 0.12% longer), which is
+inaudible. A channel rate of 32768 does *not* introduce a pitch error — the
+source is consumed at exactly 32768 samples/s — so "two cents sharp" in
+earlier notes was wrong.
+
+**Rule.** A digital stream that measures clean in a file can still be
+mangled by the output staging. When the mix is right but the timbre is not,
+check (a) who flushes the cache the DMA master reads and (b) whether the
+channel announces the device's own rate or asks the device to resample.
 
 ## A frame under the refresh is not a 60 Hz frame
 

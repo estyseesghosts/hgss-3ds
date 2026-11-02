@@ -39,7 +39,7 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   thread. The exit log prints `audio: N dropped frames of M`. Without
   `dspfirm.cdc` the game runs silent, `log.txt` says so, and nothing else
   changes.
-- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,600 bytes** with the latest camera-plane-drop/audio-table/6 dB-trim fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-plane sections below.
+- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,696 bytes** with the latest camera-plane-drop/audio-table/pre-saturation-headroom/NDSP-cache fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-plane sections below.
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
   six-frame button holds and touch positions. Without a script the console's
@@ -376,7 +376,7 @@ fast rather than save time; only the composite and the blit are skipped.
 
 ### What to read in the next log
 
-- `audio: 32768 Hz stereo, 4 blocks of 512 frames` at startup, and
+- `audio: mixer 32768 Hz, DSP 32728 Hz (no resampling), 4 blocks of 512 frames` at startup, and
   `audio: N dropped frames of M` at exit.
 - `draw_us` per frame now varies with what actually changed: near zero while a
   screen is still, the full composite when it moves. `total_us` is still the
@@ -636,10 +636,10 @@ s13-nns-volume-table.md) and
 
 **Then the output level.** The notes were right, but the title was still about
 6 dB hotter than a calibrated melonDS capture (DS peak ≈0.42/RMS 0.071, port
-1.0/0.139), so percussion peaks hard-clipped in the samples — lowering the
-console volume did not remove it. `NitroPort_SoundRender` now trims 6 dB at the
-shared output stage; the title is 0.067-0.088 RMS, peak 0.5, 0% clipped. PSG
-duty 7 is also silence (GBATEK 0%) rather than a 100% DC level.
+1.0/0.139). `NitroSound_Mix` now applies the 6 dB headroom **before** its
+16-bit saturation (`outputShift`); the first `NitroPort_SoundRender` trim ran
+after saturation and left flat-topped peaks at ±16384, so the crunch survived.
+PSG duty 7 is also silence (GBATEK 0%) rather than a 100% DC level.
 
 ## The camera-plane triangle: zero area, not a wing
 
@@ -672,8 +672,8 @@ history.
 **Local verification (session 10, container, 2026-11-01).** `make test` **338
 Python tests**, OK, plus 20 SDK suites; `make port-tests`: gx3d **327 + 229**,
 nitrosystem **17,122 checks, 0 failed**; host32 and 3DS 1092/1092, 0
-unresolved; 3DS `pokeheartgold.3dsx` **9,278,600 bytes**
-(`sha256 4cecadd071b4aa4557ad651c0982255132672ae90b86c0f74ce6679c25d508ab`),
+unresolved; 3DS `pokeheartgold.3dsx` **9,278,696 bytes**
+(`sha256 fc4472b59eada839e31e5d46f2c7e58dd285989c924e561a6420d0f2a0eb68a7`),
 `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages). The PC title
 frame 4800 now shows the complete bird; the DS capture is the visual
 reference. The DS matching gate remains at **78 patches** for both games (HG

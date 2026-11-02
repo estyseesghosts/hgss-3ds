@@ -316,6 +316,11 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
             uint32_t volume = reg8(0x500u) & 127u;
             outputL = (mixL * (int32_t)volume) / 127;
             outputR = (mixR * (int32_t)volume) / 127;
+            if (chip->outputShift) {
+                unsigned shift = chip->outputShift > 4u ? 4u : chip->outputShift;
+                outputL >>= shift;
+                outputR >>= shift;
+            }
         } else {
             outputL = outputR = 0;
         }

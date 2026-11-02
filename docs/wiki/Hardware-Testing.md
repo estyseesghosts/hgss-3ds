@@ -145,7 +145,7 @@ connected:
 [perf] New 3DS: 804 MHz + L2 requested     (or "268 MHz, the speedup is New-3DS only")
 [perf] frame cap 60 Hz
 NDSP started
-audio: 32768 Hz stereo, 4 blocks of 512 frames
+audio: mixer 32768 Hz, DSP 32728 Hz (no resampling), 4 blocks of 512 frames
 ```
 
 Then the run. These lines mean specific things, and each one is there because

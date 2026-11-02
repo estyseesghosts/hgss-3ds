@@ -40,7 +40,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
 | Overlay self-check | `build/pokeheartgold-pc --check-overlays` | **exit 0**; `[check] 129 overlays (2 with static initializers), 0 failed` |
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,600 B (`sha256 4cecadd0…508ab`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
+| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/final3-3ds -j6` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` 9,278,696 B (`sha256 fc4472b5…68a7`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
@@ -266,8 +266,9 @@ Newest first. Each entry: what changed, what was run, what it proved.
   clipping that survived turning the console down, so it was in the samples.
   A retail title captured from melonDS and calibrated with a full-scale tone
   peaks at ≈0.42 (RMS 0.071); the port's title peaked at 1.0 (RMS 0.139), about
-  6 dB hot. `NitroPort_SoundRender` now trims 6 dB at the shared output stage;
-  the title is 0.067-0.088 RMS, peak 0.5, **0% clipped**, matching the DS.
+  6 dB hot. `NitroSound_Mix` now applies the 6 dB headroom **before its 16-bit
+  saturation** (`outputShift`); the earlier `NitroPort_SoundRender` trim ran
+  after saturation and left 18-44 flat-top runs at ±16384 in the render.
   PSG duty 7 is also silence now (GBATEK's 0%), not a 100% DC level.
 - **3D.** A real DS title capture (melonDS, retail ROM) showed Ho-oh intact;
   the PC reference itself was deformed. The `(0,0,0,0)` vertex is on the
@@ -280,10 +281,11 @@ Newest first. Each entry: what changed, what was run, what it proved.
   `test_camera_plane_triangle` asserts no polygon is stored.
 - **Hardware is still the owner's run:** the bird must be intact (no fan, no
   gap) and notes must fade without clipping. Local artifact: `.3dsx`
-  **9,278,600 B** (`sha256 4cecadd0…508ab`), 3DS build **1092/1092**, 0
+  **9,278,696 B** (`sha256 fc4472b5…68a7`), 3DS build **1092/1092**, 0
   unresolved, `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446
-  pages); staged as `sdmc:/3ds/pokeheartgold.3dsx` (the audio-only
-  `63d880e7…` and the original `3f493661…` are beside it for rollback).
+  pages); staged as `sdmc:/3ds/pokeheartgold.3dsx` (the previous `4cecadd0…`,
+  the audio-only `63d880e7…` and the original `3f493661…` are beside it for
+  rollback).
   [agent-notes/s13-nns-volume-table.md](agent-notes/s13-nns-volume-table.md) ·
   [3DS-Pitfalls](../wiki/3DS-Pitfalls.md)
 

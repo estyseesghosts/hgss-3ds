@@ -102,6 +102,13 @@ void NitroPort_ResetSoundState(void)
     /* Smooth sampled sounds, as the DS's own output (and emulators) give
      * them: held samples sound harsh, with a hiss above the music. */
     sChip.interpolate = 1;
+    /* 6 dB of headroom before the mixer's 16-bit saturation. The DS's
+     * 20.8-bit mixer attenuates at its output stage and clips only at the
+     * final 10-bit DAC; the title's calibrated DS capture peaks around 0.42
+     * of full scale, so the port's mix is trimmed to match. Applying the
+     * shift in NitroSound_Mix (not after it) keeps loud peaks smooth: a
+     * post-saturation trim would only halve an already flat-topped sample. */
+    sChip.outputShift = 1;
     /* Executes Nintendo's ARM7 init, but not its OS/CreateThread path. */
     N7_SND_Init(0);
     __atomic_store_n(&sReady, 1, __ATOMIC_RELEASE);
@@ -223,19 +230,7 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames)
         toTick = (SOUND_TICK_SAMPLES - sTickPhase + SOUND_BUS_CLOCK - 1u) / SOUND_BUS_CLOCK;
         n = frames - done;
         if (toTick < n) n = (size_t)toTick;
-        {
-            int16_t *out = stereo + 2u * done;
-            size_t k;
-            NitroSound_Mix(&sChip, out, n);
-            /* The DS's output stage is 10-bit; the title mix peaks at about
-             * 0.42 of that range (a melonDS capture of the retail title,
-             * calibrated with a full-scale tone through the same path). The
-             * same registers in the 16-bit mixer reach full scale, so
-             * percussion peaks hard-clip and the damage is in the samples:
-             * turning the speaker volume down cannot undo it. Trim 6 dB (-1
-             * bit) here, matching the measured DS headroom. */
-            for (k = 0; k < 2u * n; ++k) out[k] = (int16_t)(out[k] >> 1);
-        }
+        NitroSound_Mix(&sChip, stereo + 2u * done, n);
         sTickPhase += SOUND_BUS_CLOCK * (uint64_t)n;
         if (sTickPhase >= SOUND_TICK_SAMPLES) {
             sTickPhase -= SOUND_TICK_SAMPLES;

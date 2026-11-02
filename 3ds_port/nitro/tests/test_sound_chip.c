@@ -124,6 +124,45 @@ static void test_shift_and_master(void)
     CHECK(frame(out, 0, 1) == 0);
 }
 
+/* A PCM16 channel at base 16*ch, volume 127, hard left, one-shot. */
+static void setup_pcm16_at(unsigned ch, const void *bytes, unsigned words)
+{
+    unsigned b = 16u * ch;
+    reg32(0x400u + b, (1u << 31) | (1u << 29) | (2u << 27) |
+          (0u << 16) | (0u << 8) | 127u);
+    reg32(0x404u + b, (uint32_t)(uintptr_t)bytes);
+    reg16(0x408u + b, (uint16_t)(65536u - 511u));
+    reg16(0x40au + b, 0);
+    reg32(0x40cu + b, words);
+}
+
+/* The 6 dB output headroom must be applied before the 16-bit saturation,
+ * not after it. Two 20000 channels sum to 40000: without the shift the
+ * output is the rail (32767) and the waveform is flat-topped; with the
+ * shift it is 20000 and still a clean sample. A post-mix trim would give
+ * 16383 here, i.e. a halved flat top. */
+static void test_output_shift_before_saturation(void)
+{
+    static int16_t source[4] = {20000, 20000, 20000, 20000};
+    int16_t out[4];
+    NitroSoundChip chip;
+
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    setup_pcm16_at(0, source, 2);
+    setup_pcm16_at(1, source, 2);
+    NitroSound_Mix(&chip, out, 1);
+    CHECK(frame(out, 0, 0) == 32767);
+    CHECK(frame(out, 0, 1) == 0);
+
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    chip.outputShift = 1;
+    setup_pcm16_at(0, source, 2);
+    setup_pcm16_at(1, source, 2);
+    NitroSound_Mix(&chip, out, 1);
+    CHECK(frame(out, 0, 0) == 20000);
+    CHECK(frame(out, 0, 1) == 0);
+}
+
 static void test_adpcm(void)
 {
     /* Header: predictor=1000, stepIndex=0. Nibbles 0x7,0x7 produce
@@ -138,6 +177,133 @@ static void test_adpcm(void)
     CHECK(frame(out, 2, 0) > frame(out, 0, 0));
     CHECK(frame(out, 5, 0) < frame(out, 3, 0));
     CHECK(frame(out, 0, 1) == 0);
+}
+
+/* Exact IMA-ADPCM values (GBATEK, "IMA-ADPCM Format"): the header is
+ * predictor 0, step index 88; source bytes 07 80 77 hold the nibbles
+ * 7,0,0,8,7,7,0,0, low nibble first. Every value below follows from the
+ * published step table, the index deltas (-1,-1,-1,-1,2,4,6,8) and the
+ * +7FFFh saturation:
+ *   7: 32767>>3 + >>2 + >>1 + >>0 = 61436, saturated to 32767, index +8
+ *      (clamped to 88 again); 0: +4095, index 87; 0: +3724, index 86;
+ *   8: -3385 (index 86), index 85; 7: +46166, saturated, index +8 -> 88;
+ *   7: +61436, saturated; 0, 0: still saturated.
+ * If the nibble order, the step table, an index delta or the saturation
+ * changed, the sequence would differ. */
+static void test_adpcm_decodes_exact_samples(void)
+{
+    static const uint8_t source[8] __attribute__((aligned(4))) = {
+        0x00, 0x00, 0x58, 0x00, 0x07, 0x80, 0x77, 0x00
+    };
+    static const int16_t expected[9] = {
+        0, 32767, 32767, 32767, 29382, 32767, 32767, 32767, 32767
+    };
+    int16_t out[32];
+    NitroSoundChip chip;
+    unsigned i;
+
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    /* one-shot: loop register 0, two words of data, so 1 + 2*(8-4) = 9
+     * samples; the timer is a sample rate of 32768 (period 511), one frame a
+     * sample. */
+    setup_pcm(2, source, 0, 2, 2, 0, 127, 0);
+    reg16(0x408, (uint16_t)(65536u - 511u));
+    memset(out, 0x55, sizeof(out));
+    NitroSound_Mix(&chip, out, 12);
+    for (i = 0; i < 9; i++) CHECK(frame(out, i, 0) == expected[i]);
+    CHECK(frame(out, 9, 0) == 0);             /* past the end: stopped */
+    CHECK(frame(out, 0, 1) == 0);             /* pan 0: right silent */
+    CHECK(!(NitroPort_SoundRegisters[0x403] & 0x80));
+}
+
+/* A 512 Hz sine at 32768 samples a second, IMA-ADPCM encoded at the step
+ * size its own amplitude settles at (header -2966, index 58), 256 samples
+ * that loop from the first data nibble. Played at its own rate with
+ * interpolation, the mix is the sine: no step or corner at the loop seam,
+ * and every loop pass the same. A loop that restored the wrong predictor or
+ * step index (or an interpolation history carried over the wrap wrongly)
+ * shows up as a jump at the seam or as passes that drift in level. */
+static const uint8_t sAdpcmSine[132] __attribute__((aligned(4))) = {
+    0x6a, 0xf4, 0x3a, 0x00, 0x42, 0x32, 0x43, 0x32, 0x23, 0x33, 0x32, 0x12,
+    0x01, 0xa8, 0xca, 0xbd, 0xcd, 0xcb, 0xcb, 0xcb, 0xcb, 0xbb, 0xcb, 0xbb,
+    0xbb, 0xbb, 0xab, 0xaa, 0x89, 0x10, 0x53, 0x44, 0x34, 0x35, 0x34, 0x53,
+    0x33, 0x43, 0x43, 0x32, 0x23, 0x33, 0x32, 0x12, 0x01, 0x98, 0xcb, 0xbd,
+    0xbd, 0xbd, 0xbc, 0xbc, 0xcb, 0xcb, 0xbb, 0xbb, 0xcb, 0xba, 0xaa, 0x9a,
+    0x89, 0x10, 0x33, 0x36, 0x45, 0x43, 0x43, 0x43, 0x43, 0x33, 0x43, 0x33,
+    0x33, 0x33, 0x23, 0x13, 0x01, 0x98, 0xdb, 0xcc, 0xbc, 0xbd, 0xdb, 0xbb,
+    0xbc, 0xbc, 0xbb, 0xac, 0xbb, 0xab, 0xab, 0xaa, 0x09, 0x10, 0x42, 0x35,
+    0x45, 0x43, 0x43, 0x43, 0x43, 0x33, 0x43, 0x33, 0x33, 0x33, 0x23, 0x13,
+    0x01, 0x98, 0xdb, 0xcc, 0xbc, 0xbd, 0xbc, 0xdb, 0xbb, 0xcb, 0xcb, 0xba,
+    0xab, 0xbb, 0xba, 0x9a, 0x89, 0x10, 0x43, 0x35, 0x35, 0x35, 0x34, 0x34
+};
+
+static void test_adpcm_loop_stays_smooth(void)
+{
+    enum { FRAMES = 6000, SKIP = 100 };
+    static int16_t out[2 * FRAMES], again[2 * FRAMES];
+    NitroSoundChip chip;
+    unsigned i, pass;
+    double step, period;
+    int32_t worstStep = 0, worstCorner = 0;
+
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    chip.interpolate = 1;
+    /* 33 words, looping from word 1: 257 samples, loop at sample 1; the
+     * timer is the sample's own rate (period 511). */
+    setup_pcm(2, sAdpcmSine, 1, 32, 1, 0, 127, 0);
+    for (i = 0; i < FRAMES; i += 128)
+        NitroSound_Mix(&chip, out + 2 * i, FRAMES - i < 128 ? FRAMES - i : 128);
+    for (i = SKIP + 2; i < FRAMES; i++) {
+        int32_t s = frame(out, i, 0);
+        int32_t d = s - frame(out, i - 1, 0);
+        int32_t c = s - 2 * frame(out, i - 1, 0) + frame(out, i - 2, 0);
+
+        if (d < 0) d = -d;
+        if (c < 0) c = -c;
+        if (d > worstStep) worstStep = d;
+        if (c > worstCorner) worstCorner = c;
+    }
+    /* The sine's own largest step is 1920 (16000 * 2*pi*512/32768) and the
+     * ADPCM settles within a few hundred of that; a seam that jumped would
+     * be thousands. */
+    CHECK(worstStep <= 2400);
+    CHECK(worstCorner <= 1200);
+
+    /* Every pass of the 256-sample loop (256 * step frames) has the same
+     * peak and level: no drift from a state that was not restored. */
+    step = (double)16756991.0 / (511.0 * 32768.0);
+    period = 256.0 * step;
+    for (pass = 1; pass < 6; pass++) {
+        size_t a = (size_t)(pass * period), b = (size_t)((pass + 1) * period);
+        double sum = 0.0, ref = 0.0;
+        int32_t peak = 0, refPeak = 0;
+        size_t k, n = b - a;
+
+        for (k = a; k < b; k++) {
+            int32_t v = frame(out, k, 0);
+            sum += (double)v * v;
+            if (v < 0) v = -v;
+            if (v > peak) peak = v;
+        }
+        for (k = (size_t)period; k < (size_t)(2 * period); k++) {
+            int32_t v = frame(out, k, 0);
+            ref += (double)v * v;
+            if (v < 0) v = -v;
+            if (v > refPeak) refPeak = v;
+        }
+        sum /= (double)n;
+        ref /= (double)period;
+        CHECK(sum > ref * 0.96 && sum < ref * 1.04);
+        CHECK(peak > refPeak * 0.97 && peak < refPeak * 1.03);
+    }
+
+    /* The same frames mixed one at a time: identical, so nothing is redone
+     * or dropped at a block boundary. */
+    NitroSound_Reset(&chip, NITRO_SOUND_RATE);
+    chip.interpolate = 1;
+    setup_pcm(2, sAdpcmSine, 1, 32, 1, 0, 127, 0);
+    for (i = 0; i < FRAMES; i++) NitroSound_Mix(&chip, again + 2 * i, 1);
+    CHECK(memcmp(out, again, sizeof(out)) == 0);
 }
 
 static void test_psg(void)
@@ -623,7 +789,10 @@ int main(int argc, char **argv)
     test_interpolation();
     test_pcm8_loop();
     test_shift_and_master();
+    test_output_shift_before_saturation();
     test_adpcm();
+    test_adpcm_decodes_exact_samples();
+    test_adpcm_loop_stays_smooth();
     test_psg();
     test_noise();
     test_capture();

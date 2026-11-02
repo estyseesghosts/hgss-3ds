@@ -167,5 +167,5 @@ public push. The current history has none; keep it that way.
   plus `docs/upstream/platinum-camera-point.patch`
 - Patches: **78** (NitroSDK 15, NitroSystem 3, pokeheartgold 60)
 - DS gate at 78: HG and SS retail SHA1s pass
-- Latest `.3dsx`: 9,278,600 bytes
-  (`sha256 4cecadd0…508ab`); not in git
+- Latest `.3dsx`: 9,278,696 bytes
+  (`sha256 fc4472b5…68a7`); not in git

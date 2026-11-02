@@ -685,6 +685,15 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
 
                     outputL = (left * masterVolume) / 127;
                     outputR = (right * masterVolume) / 127;
+                    /* Headroom before the 16-bit saturation, not after it:
+                     * attenuating a flat-topped sample just halves the flat
+                     * top, leaving the clipping distortion in the waveform.
+                     * See outputShift in nitro_port_sound_chip.h. */
+                    if (chip->outputShift) {
+                        unsigned shift = chip->outputShift > 4u ? 4u : chip->outputShift;
+                        outputL >>= shift;
+                        outputR >>= shift;
+                    }
                 }
                 stereo[2u * (at + i)] = saturate(outputL);
                 stereo[2u * (at + i) + 1u] = saturate(outputR);

@@ -660,7 +660,18 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertIn("NitroPort_SoundRender(", text)
         self.assertIn("ndspChnWaveBufAdd(", text)
         self.assertIn("NitroPort_SoundPumpReplies()", text)
-        self.assertIn("ndspChnSetRate(0, (float)AUDIO_RATE)", text)
+        # The DSP reads the blocks with its own DMA, which does not see the
+        # ARM11's write-back L1: libctru never flushes, so the shell must, or
+        # the DSP plays stale FCRAM -- the music, only scratchy.
+        self.assertIn("DSP_FlushDataCache(", text)
+        self.assertLess(text.index("NitroPort_SoundRender(sAudioData"),
+                        text.index("DSP_FlushDataCache("))
+        self.assertLess(text.index("DSP_FlushDataCache("),
+                        text.index("ndspChnWaveBufAdd(0, &sAudioWave[slot])"))
+        # Announce the DSP's own rate: 32768 asks for a 2-tap linear resample
+        # at ratio 1.0012, which amplitude-modulates the high band at 39.5 Hz
+        # (up to -8 dB at 12 kHz) -- audible roughness.
+        self.assertIn("ndspChnSetRate(0, (float)NDSP_SAMPLE_RATE)", text)
         # Above the game: a 20-30 ms composite must not starve the mixer.
         self.assertIn("AUDIO_THREAD_PRIORITY 0x2e", text)
 
