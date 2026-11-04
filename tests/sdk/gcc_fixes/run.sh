@@ -21,6 +21,8 @@
 #   (k) struct DGTHash2Context offers both field sets (the port's ntrtwl names and the game's
 #       HGSS names) with unchanged size, and the compat nitro/dgt/dgt.h forwards the flat
 #       structs under the port's bare names; the ntrtwl fields are absent without the macro.
+#   (l) HGSS_MATH_KEEP_HGSS_CRC16_INIT selects HGSS's CCITT table, the one GF_CalcCRC16 uses,
+#       instead of the compat header's default reflected table (save footer CRCs).
 #
 # Each (e)-(k) test repeats the port's signatures, so without the macro it fails the same way the
 # port build did ("conflicting types", unknown type name, or no member); with the macro it
@@ -223,6 +225,17 @@ if "$GCC" -I"$REPO/hgss/compat/include" "${CC_FLAGS[@]}" -c "$HERE/test_dgt_comp
 else
     cat "$OUT/kc.err"
     fail "(k) compat dgt header test"
+fi
+
+# (l) HGSS_MATH_KEEP_HGSS_CRC16_INIT keeps MATH_CRC16InitTable as the CCITT
+# table GF_CalcCRC16 pairs it with. The port maps the name to ntrtwl's
+# reflected table unless the translation unit asks for HGSS's meaning.
+if "$GCC" -I"$REPO/hgss/compat/include" "${CC_FLAGS[@]}" -c "$HERE/test_crc_keep_hgss.c" -o "$OUT/test_crc_keep_hgss.o" \
+    && "$GCC" -m32 "$OUT/test_crc_keep_hgss.o" "$OUT/math_crc.o" -o "$OUT/test_crc_keep_hgss" \
+    && "$OUT/test_crc_keep_hgss"; then
+    note "ok   (l) HGSS's CRC-16 table survives the compat header"
+else
+    fail "(l) HGSS CRC-16 table escape hatch"
 fi
 
 if [ "$fails" -ne 0 ]; then

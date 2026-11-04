@@ -36,6 +36,15 @@ sequence.
 | A battle's Pokémon are invisible except for a flicker during attacks | [The poképics never reach the port's 3D scene](#the-poképics-never-reach-the-ports-3d-scene) |
 | Closing from the HOME menu hangs and the console has to be power-cycled | [The geometry thread is stopped before its last scene is drained](#the-geometry-thread-is-stopped-before-its-last-scene-is-drained) |
 | A SoulSilver build loads HeartGold's folder or is rejected with the wrong build ID | [The shell is compiled for one game at a time](#the-shell-is-compiled-for-one-game-at-a-time) |
+| A valid cartridge/emulator save shows New Game | [The CRC table was not CCITT](#the-crc-table-was-not-ccitt) |
+| Tall grass shows "A communication error" and returns to the title screen | [The communication-error screen can be an assert](#the-communication-error-screen-can-be-an-assert) |
+| Physical touches land up and to the left of the finger (open) | [Touch coordinates are still in 3DS space](#touch-coordinates-were-in-3ds-space) |
+| Old 3DS composes ~0.3/s; `hb_irq_us` is 12 ms | [The H-blank walk switches threads 192 times](#the-h-blank-walk-switches-threads-192-times) |
+| Characters duplicated across the map; rectangular halos round lamps and shadows | [Merged batches drew the scene twice](#merged-batches-drew-the-scene-twice) |
+| Clean exit turns into a crash on both consoles | [A live thread was freed at teardown](#a-live-thread-was-freed-at-teardown) |
+| A fix is missing on hardware although the source has it | [A missing patch compiles silently](#a-missing-patch-compiles-silently) |
+| A port-source edit seems to have no effect | [A vendored archive does not rebuild](#a-vendored-archive-does-not-rebuild) |
+| A diagnostic reports an impossible number (e.g. 0 sprites) | [Diagnose the diagnostic first](#diagnose-the-diagnostic-first) |
 
 ## A weak hook binds to NULL
 
@@ -384,11 +393,12 @@ channel volume clamped to 0 dB, and `SND_ExChannelMain`'s release stop
 key-on. A PC trace showed 15 channels at `ctrl` volume `0x7f`/shift 0 (0 dB)
 and only 4 natural ends in 90 s; a fixed run showed volumes 41-103 with 192.
 
-**Fix.** `hgss/compat/src/nns_volume_table.c` supplies the real 128-entry table
-(identical to `SNDi_DecibelTable`); `tools/hgss_game.py` removes the empty
-`.rodata.alias_d750` from the SDK data object for the port links and checks
-after the link that `_0210D750` is 256 bytes
-(`[sound] _0210D750 -> nns_volume_table.c (256 bytes)`). Tests:
+**Fix.** `hgss/compat/src/nns_volume_table.c` supplies the real 256-entry table
+(512 bytes: entries 0..127 identical to `SNDi_DecibelTable`, entries 128..255
+the DS `.rodata.unified_01` tail; see [decisions 2026-11-02](../decisions.md));
+`tools/hgss_game.py` removes the empty `.rodata.alias_d750` from the SDK data
+object for the port links and checks after the link that `_0210D750` is 512
+bytes with entry 128 = 0 dB. Tests:
 `tests/test_hgss_game.py` keeps the table equal to the NitroSDK source and
 fails the build if the link loses it; `test_sound_chip`/`test_sound_sequence`
 still cover the mixer and driver. The DS gate is untouched: it links with its
@@ -673,6 +683,70 @@ game define choose. The scripts pick the define from the pack's file name, and
 `tests/test_player_scripts.py` checks that both branches name the same pack,
 save and folder the SD layout documents.
 
+## The CRC table was not CCITT
+
+**Symptom.** `tools/savetool.py validate` called a cartridge/emulator save
+`IS_GOOD`, but the port showed New Game. Saves written by the port itself
+still loaded.
+
+**Cause.** `GF_CRC16Init()` built the table with `MATH_CRC16InitTable()`, and
+`GF_CalcCRC16()` used `MATH_CalcCRC16CCITT()`. On the DS that name builds the
+CCITT table. The port's `hgss/compat/include/nitro/math/crc.h` remaps it to
+ntrtwl's reflected table (the one that pairs with `MATH_CalcCRC16`), so the
+port built a reflected table and updated it MSB-first.
+
+**Fix.** Patch 1906 defines `HGSS_MATH_KEEP_HGSS_CRC16_INIT` before
+`math_util.c` includes anything, under `SDK_PORT_3DS`. `GF_CRC16Init` now
+calls `MATHi_CRC16InitTable` (the CCITT builder).
+
+**Rule.** A CRC is a *pair* of a table and an update; never change one
+without the other. `tests/sdk/gcc_fixes/test_crc_keep_hgss.c` checks the
+escape hatch, and `tests/test_save_crc.py` checks that the game source keeps
+it.
+
+## The communication-error screen can be an assert
+
+**Symptom.** Walking into tall grass showed "A communication error has
+occurred. You will be returned to the title screen."
+
+**Cause.** That text is also `msg_0041_00003`, used by
+`PrintErrorMessageAndReset()` in `src/error_message_reset.c`. It is called by
+`GF_AssertFail()` and by the heap allocation failure path. The assert was
+`SaveSubstruct_AssertCRC()`: early port builds wrote each save substruct's
+CRC with the wrong table (see above). The slot footer was the only CRC the
+loader checked, so the save loaded; the first `Save_*_Get()` of a substruct
+asserted. The main menu's beacon watch leaves a `CommState` alive, so the
+assert does not return silently as it would on the DS; it draws the error
+screen. The wild encounter was the first code to read the Mystery Gift /
+Wi-Fi History chunks.
+
+**Fix.** Patch 1907 accepts a substruct CRC only when it is exactly the old
+table's value, replaces it with the CCITT value and continues. Anything else
+still asserts. The next save writes the corrected substructs and footer.
+
+**Rule.** When a "communication error" appears with no link activity, check
+`error_message_reset.c` and `GF_AssertFail` before the wireless stack. The
+message text is shared.
+
+## Touch coordinates were in 3DS space
+
+**Symptom (fixed in Phase A).** A physical touch on the lower screen acted up
+and to the left of the finger; touches near the right/bottom edge clamped.
+
+**Cause.** `hgss/game/app/main_3ds.c` passed `touch.px`/`touch.py` (0..319,
+0..239) straight to `NitroPort_SetTouch`, which expects the DS's 0..255,
+0..191. The old 1:1 lower screen was drawn at (32,24), so the touch was offset
+by that much.
+
+**Fix.** The remaster's lower screen fills 320x240, and the shell now maps
+`touchX = touch.px * 4 / 5`, `touchY = touch.py * 4 / 5` before
+`NitroPort_SetTouch`.
+
+**Rule.** Map 3DS touch to DS touch (and later to the lower menu's panel)
+before `NitroPort_SetTouch`. Scripted input already uses DS coordinates, so a
+script can pass while the physical touch is wrong. See
+[3DS-Remaster-Audit](3DS-Remaster-Audit.md).
+
 ## Reading a Luma crash dump
 
 `crash_dump_*.dmp` on the SD card starts with `DEADC0DE DEADCAFE` and follows
@@ -692,3 +766,117 @@ abort. The pc is already adjusted to the faulting instruction, so
 yours*. A fault in a process named `loader` with a pc outside your image means
 the console rejected the program before it ran; look at the artifact, not the
 game.
+
+
+## The H-blank walk switches threads 192 times
+
+**Symptom.** On an Old 3DS the game frame reached 41 ms and composes fell to
+0.3–1/s, but only in scenes that armed H-blank. `FRAMETIME`'s `hblank_us` was
+9.5–18.7 ms there and 8 us elsewhere, and the split put 87–88 % of it in
+`hb_irq_us` (`hb_keep_us` 0.5 ms, `hb_dma_us` 0).
+
+**Cause.** `NitroPort_HBlankLines` raises the H-blank interrupt once per
+scanline — 192 times a frame — and `NitroPort_IrqThreadSwitch`, which runs at the
+end of every interrupt, entered the scheduler 192 times. The game's handlers are
+idle `HBlankSystem_Callback` tasks in ordinary field play, and hoisting
+`NitroPort_GxRefresh` out of the per-line raise changed nothing: the cost was
+neither the effect nor the FIFO refresh.
+
+**Fix.** `NitroPort_IrqSwitchDeferred` defers the switch across the walk. Each
+raise still dispatches its handler and does its bookkeeping; the switch request
+is noted and **one** switch runs when the walk ends, at the same point in the
+frame the game observes.
+
+**Result.** `hb_irq_us` 12,751 → 411 us, game frame 41 ms → 2.3–8.1 ms, drawer
+1.1 → 12.1 fps.
+
+**Rule.** For a synthetic interrupt storm, time *inside* the interrupt: the
+handler and the scheduler are different costs with different fixes, and guessing
+between them wasted two attempts here.
+
+## Merged batches drew the scene twice
+
+**Symptom.** NPCs and characters appeared many times across the map, walkable
+(visual only), and changed pose with the real sprite. Rectangular halos appeared
+around street lamps and the player's shadow. Both consoles.
+
+**Cause.** A command-build optimisation merged consecutive opaque batches into
+one `draw_arrays` and stopped writing the stencil when outlines and sun shadows
+were off. Merging changed which vertex ranges one draw covered; the stencil
+change removed writes later passes relied on.
+
+**Evidence that located it.** The sprite table on the top engine was pure
+`0x2C0` fill while characters were visible, so they were not sprites; the 2D
+renderer was already exonerated; that left the 3D command build.
+
+**Rule.** A batch merge is only safe when the full state tuple *and* the draw
+order semantics are identical — a `LEQUAL` guard alone is not enough, because
+the stencil and the bound texture are state too. When in doubt, keep the
+per-batch draw.
+
+## A live thread was freed at teardown
+
+**Symptom.** A build that had just been made faster died on both consoles at an
+otherwise clean-looking moment, after the log printed
+`the game's thread ended at frame 0` while the game was still loading overlays.
+
+**Cause.** `WaitForGame` loops on `sGameThreadAlive`, which the game thread sets
+as its first instruction. A new thread has not necessarily run when
+`threadCreate` returns, so the loop read `false`, treated "not started" as
+"ended", and after a 2-second `threadJoin` called `threadFree` on a thread that
+was still running. Teardown then unhooked APT and tore down NDSP/gfx underneath
+live game code.
+
+**Fix.** The creator sets the alive flag before `threadCreate` (and clears it if
+creation fails); `threadFree` runs only when the join succeeded; a timed-out join
+sets `sThreadsStuck` so the caller ends the process instead.
+
+**Rule.** Ownership flags belong to the creator. Never free a thread after a
+timed-out join.
+
+## A missing patch compiles silently
+
+**Symptom.** A data abort in `WirelessStatusIcon_LoadChar` reading `0x04000000`
+— an address patch 1905 replaces — and, separately, the Settings-close and
+PC-box fixes absent although their patch files were in the tree.
+
+**Cause.** `build/upstream` had never had five patches applied (1904, 1905,
+1909, NitroSDK 0605, NitroSystem 0304). The container's tree had 87 commits, the
+native one 85. `check-bootstrap` only tested that a header file existed, so the
+build compiled pre-patch sources without a word.
+
+**Fix.** `tools/check_patches.py` compares each patch's `git am` commit subject
+with the tree's history and fails the build; it is wired into `make
+check-bootstrap` and into `tools/game.py` so a direct invocation is covered too.
+
+**Rule.** `git apply --check` cannot detect an applied patch on a cumulative
+stack — a later patch rewrites the same lines, so both the forward and reverse
+checks fail. Compare commit subjects instead.
+
+## A vendored archive does not rebuild
+
+**Symptom.** The link failed on a symbol that plainly exists in the edited
+source; on another occasion a behaviour fix appeared not to take effect.
+
+**Cause.** `libnitro.a` was not rebuilt for the changed port source in an
+incremental run. The app objects are compiled by the Python tool and are always
+fresh; the vendored archives are not guaranteed to be.
+
+**Rule.** After editing anything under `3ds_port/nitro/src`, delete
+`build/<out>/sdk` (in both game trees) before building. A stale archive gives a
+build that silently contains older code — and every performance number measured
+from it is a lie.
+
+## Diagnose the diagnostic first
+
+**Symptom.** A new OAM probe reported `A 0 shown` for an engine that clearly had
+sprites on screen.
+
+**Cause.** attr0 bit 9 means "sprite disabled" only when bit 8 (affine) is
+clear; for an affine sprite it is the double-size flag, and HGSS draws its field
+sprites affine. The filter discarded every entry.
+
+**Rule.** When instrumentation reports an impossible state, check the
+instrumentation before the system. The same session also shipped a `FRAMETIME`
+pair (`total_us` < `state_us`) that was provably impossible and should have been
+trusted less than it was.

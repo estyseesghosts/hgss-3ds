@@ -80,6 +80,10 @@ Where the repo does not give a reason, this page says so.
 
 **Source:** [gameplan.md](../../gameplan.md), decisions table; Phase 5, step 2.
 
+**Updated 2026-11-02 (Phase A):** superseded. The user chose the native-resolution
+remaster as the only display and required it to work on Old 3DS as well, with no
+1:1 fallback. See [3DS-Remaster-Audit](3DS-Remaster-Audit.md).
+
 ### GPL-3.0
 
 **Decided:** the project is GPL-3.0 (2026-10-30).
@@ -217,8 +221,11 @@ These choices are explained in full inside the patch messages in `patches/`. Eac
 - **The battle's Poképics need the G2D and g3_util command hooks.** The port's GXFIFO is ordinary memory; only writes through `NitroPort_GxDirectWrite` reach the scene. The G3D path was converted, but the software-sprite path (`NNS_G2dDrawSpriteFast`) and `g3_util.c`'s ortho/rotation writes were not: the battle's Pokémon produced no geometry, and once the quads arrived the missing `MTX_MODE = PROJECTION` left the field camera's projection to clip them all. NitroSystem 0304 and NitroSDK 0605 complete the path. [3DS-Pitfalls](3DS-Pitfalls.md#the-poképics-never-reach-the-ports-3d-scene).
 - **The geometry ring is drained before its worker is stopped.** Joining the geometry thread and then calling `NitroPort_Gx3dStopThread()` deadlocks on a close: the stop waits for a ring the departed worker would have consumed, and the close path leaves `NitroPort_OnFrame` before the flush. The shell drains first, logs each `[quit]` step and ends the process if a thread will not stop. [3DS-Pitfalls](3DS-Pitfalls.md#the-geometry-thread-is-stopped-before-its-last-scene-is-drained).
 - **Both games are compile-time variants of one tree.** `tools/hgss_game.py --game heartgold|soulsilver` passes the decomp's own `HEARTGOLD`/`SOULSILVER` define, and `heartgold.h` selects the pack build ID, cartridge code/title, save name, folder and program name. HeartGold and SoulSilver get separate `.3dsx` files and SD folders, so a save can never be read by the other game. [SD-Card-Layout](SD-Card-Layout.md), [decisions.md](../decisions.md).
-- **The DS gate at 78 passed for both games**; patches 1407, 1904, 1905, 0304 and 0605 are `SDK_PORT_3DS`-only and their `#else` text is unchanged.
+- **The DS gate at 78 passed for both games**; patches 1407, 1904-1907, 0304 and 0605 are `SDK_PORT_3DS`-only and their `#else` text is unchanged.
 - **Game code touches DS memory only through the SDK's macros.** A literal such as `0x04000000` (DISPCNT) or `0x027E0000` (DTCM) works on the DS and is unmapped on the port, whose memory areas are ordinary arrays (patch 1301). The wild-encounter crash was `WirelessStatusIcon_LoadChar` reading DISPCNT by literal at battle setup (log-10: exception, `r3 = 0x04000000`); patch 1905 converts it and 16 more literals (the summary's swap-buffers request, the encounter effect's LCDC clear, eight DTCM IRQ-check writes, and so on). `tests/test_hw_addresses.py` scans the port-preprocessed game sources for new ones. [3DS-Pitfalls](3DS-Pitfalls.md#a-raw-ds-address-is-unmapped-memory).
+
+- **The save CRC table must be HGSS's CCITT table, and legacy substruct CRCs migrate on read.** The port's compat header remaps `MATH_CRC16InitTable` to ntrtwl's reflected table, but `GF_CalcCRC16` uses `MATH_CalcCRC16CCITT`; patch 1906 keeps the CCITT builder for `math_util.c`. The old builds therefore wrote both slot-footers and substruct CRCs wrongly; the loader only checked footers, so a legacy save loaded and then asserted at the first substruct read. Patch 1907 accepts only the exact old value, replaces it with CCITT and continues; real corruption still asserts. [3DS-Pitfalls](3DS-Pitfalls.md#the-crc-table-was-not-ccitt) · [3DS-Pitfalls](3DS-Pitfalls.md#the-communication-error-screen-can-be-an-assert).
+- **The display remaster is a planned reuse of the vendored Platinum path, not a new renderer.** `3ds_port` already has the compositor, upscaler, wide layout, wide art and lower-menu files at `platinum.lock`; the HGSS shell is the 1:1 classic path. The audit proposes shell wiring, HGSS window/overlay hooks, UI layouts and touch mapping in phases. No display code changed this session. [3DS-Remaster-Audit](3DS-Remaster-Audit.md).
 
 ## Notes on the record
 

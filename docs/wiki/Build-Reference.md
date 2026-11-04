@@ -9,6 +9,43 @@ Terms: **DS build** = the decompiled game built with MWCC, which must match the 
 **Host build** = 32-bit Linux x86 code compiled with GCC that models the DS and runs on the PC.
 **Port layer** = `3ds_port/`, vendored from pokeplatinum-3ds.
 
+## 0. Native macOS builds (the current workflow)
+
+The 3DS builds no longer need the container. Everything below in sections 1–2
+still describes the container and the DS/matching side, which does need it.
+
+```bash
+export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
+export PATH=$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH
+export HGSS_PRIVATE=$HOME/hgss-private          # replaces the container's /private
+VENV=/Users/terezi/hgss/bin/python             # pillow, numpy, pyelftools
+
+$VENV tools/hgss_game.py --target 3ds --keep-going -j $(sysctl -n hw.ncpu) \
+    --out "$PWD/build/game-3ds"
+$VENV tools/hgss_game.py --game soulsilver --target 3ds --keep-going \
+    -j $(sysctl -n hw.ncpu) --out "$PWD/build/game-3ds-ss"
+```
+
+- The decomp checkout is `/Users/terezi/hgss/pokeheartgold` at the pinned commit,
+  with MWCC and the SDK installed into its git-ignored `tools/` paths.
+- `--target host32` / `make game-pc` do **not** work on macOS (`-m32` cannot
+  link). That stays container-only.
+- All outputs stay under the repo's own `build/`.
+- The native Wine (Gcenx 11.16 in `pokeheartgold/.local-tools`) is only for the
+  MWCC/SDK matching builds, never for port builds.
+
+### Before trusting a 3DS build
+
+```bash
+python3 tools/check_patches.py      # must print "86/86 patches applied"
+```
+
+If you edited anything under `3ds_port/nitro/src/`, delete the vendored
+archives first: `rm -rf build/game-3ds/sdk build/game-3ds-ss/sdk`. An
+incremental run has been seen to leave a stale `libnitro.a` in place, and a
+build from it silently contains the old code. See
+[3DS-Pitfalls](3DS-Pitfalls.md#a-vendored-archive-does-not-rebuild).
+
 ## 1. Where builds run
 
 | Thing | Where | Notes |
@@ -70,8 +107,8 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 
 | Target | Command | Output | State |
 | --- | --- | --- | --- |
-| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **82 patches** |
-| Host test gate | `make test` | test results only | **green** (355 Python tests + 20 SDK suites) |
+| Patched decomp tree | `python3 tools/bootstrap.py [--clean]` | `build/upstream/`, `build/NitroSDK`, `build/NitroSystem` | works, **84 patches** |
+| Host test gate | `make test` | test results only | **green** at the last full run (355 Python tests + 20 SDK suites; session 15 adds 4 save-CRC tests) |
 | SDK syntax survey | `make sdk-survey` or `python3 tools/sdk_compile_survey.py --m32 -j8` | counts | 270/284 (gcc 13), 269/284 (gcc 10) |
 | Port source survey | `python3 tools/port_compile_survey.py` | counts + first errors | **46/46, exit 0** |
 | Port layer host32 libraries | `python3 tools/hgss_nitro.py make --target host32 --out /work/out/x lib -k -j8` | `libnitro.a`, `libnitrosystem.a` under `/work/out/x` | **both build, 0 errors** |
@@ -80,7 +117,7 @@ port's own build uses gcc-10. A file can pass with 13 and fail with 10 (this hap
 | DS matching build | `tools/matching-build.sh /work/pokeheartgold HEARTGOLD` / `SOULSILVER` | ROM in `/work` | works; needs MWCC; **PASSED at 78** for both (retail SHA1s) |
 | Game source list / headers / `.s` | `python3 tools/game_sources.py`, `tools/prepare_game_headers.py`, `tools/s_to_gas.py` | lists + generated headers | works; 150/150 `.s`, headers byte-identical |
 | Game for PC | `make game-pc` (HeartGold) / `make game-pc-ss` (SoulSilver), or `tools/hgss_game.py --game soulsilver --target host32` | `build/game-pc/pokeheartgold-pc` / `build/game-pc-ss/pokesoulsilver-pc` | **1092/1092 compile, 0 unresolved** for both |
-| Game for 3DS | `make game-3ds` (HeartGold) / `make game-3ds-ss` (SoulSilver) | `build/game-3ds/pokeheartgold.3dsx` (9,279,628 B, `sha256 92381334…5285`) and `build/game-3ds-ss/pokesoulsilver.3dsx` (9,279,668 B, `sha256 c2e9a50e…e4cf`) | 1092/1092 compile, both archives build, 0 unresolved; the program also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob; `3dsxtool` packages both `.3dsx`, `3dsxdump` rc 0 |
+| Game for 3DS | `make game-3ds` (HeartGold) / `make game-3ds-ss` (SoulSilver) | `build/game-3ds/pokeheartgold.3dsx` (5,763,136 B, `sha256 728d16c2…4462`) and `build/game-3ds-ss/pokesoulsilver.3dsx` (5,763,128 B, `sha256 ab2e23ff…2211`) | 1092/1092 compile, both archives build, 0 unresolved; the game objects are `-O2` (session 19), so the image is 29.84 MiB of the 64 MiB process; the program also compiles the remaster compositor (`port_compose_pica.c`), the 3D backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the `picasso`/`bin2s` shader blob; `3dsxtool` packages both `.3dsx`, `validate_3dsx` clean |
 | Player build (no container) | `python3 scripts/build_3dsx.py --rom GAME.nds` (either game) | `dist/sd-card/3ds/…` | runs `scripts/prepare_game.py`, `tools/bootstrap.py` and `tools/hgss_game.py --game … --target 3ds`, then stages the SD folder; see the [player's guide](../USER-GUIDE.md) |
 
 There is no `make game` or `make matching`; the DS gate is `tools/matching-build.sh`. See
@@ -99,7 +136,7 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && python3 tools/bootstrap.py'
 
-# 2. host tests (355 Python tests + 20 SDK suites)
+# 2. host tests (Python tests + 20 SDK suites)
 devcontainer exec --workspace-folder . bash -c \
   'cd /workspaces/pokeheartgold-3ds && make test'
 
@@ -165,6 +202,33 @@ The port's flags are in `3ds_port/common.mk` (`PORT_CFLAGS`) and are repeated by
 - **`SDK_PORT_3DS`** is defined for every port build and never by MWCC. All SDK/decomp changes are
   behind it.
 
+### Optimisation level (game objects)
+
+`tools/hgss_game.py`'s `port_cflags()` used to carry **no `-O` at all**, so all
+1,092 game objects were built at GCC's default `-O0` — no inlining, no
+frame-pointer elision, no IPA. They now get `-O2 -fno-ipa-icf` (the sanitizer
+build keeps its own level). Measured on devkitARM 16.1.0:
+
+| Level | game `.text` | vs `-O0` |
+| --- | ---: | ---: |
+| `-O0` (the old default) | 8,146,868 | — |
+| `-O2` | 4,512,808 | **−44.6%** |
+| `-O3` | 5,296,444 | −35.0% |
+| `-Os` | 3,902,940 | −52.1% |
+
+`-O3` costs 17% more code than `-O2` for no measured gain; `-Os` saves a further
+0.61 MB and slows hot code. `-fno-ipa-icf` stops `-O2` merging byte-identical
+functions, which matters because the port passes callbacks through IRQ tables
+and task queues. LTO, PGO, `-mthumb` (ARMv6K has no Thumb-2; GCC refuses it with
+the hard-float VFP ABI) and `-ffast-math` were all evaluated and rejected.
+
+On a 64 MiB Old 3DS the smaller code is also memory: the code segment is
+committed out of the same budget as the heaps, so `-O2` returns ~3.4 MiB to the
+linear heap.
+
+Pointers and ABI are unaffected by the level; the flags above are what keeps
+struct layouts matching.
+
 ## 6. Build outputs and cleanup
 
 | Path | Contents | Safe to delete? |
@@ -228,10 +292,12 @@ Current state: both libraries build with zero errors and **every suite passes**,
 
 ### The 3DS program's PICA backend
 
-`tools/hgss_game.py` compiles two vendored app sources only for the `3ds` target:
+`tools/hgss_game.py` compiles three vendored app sources only for the `3ds` target:
 
-- `3ds_port/game/app/port_gx3d_pica.c` — the classic 3D path: draw a scene into an off-screen
-  256×192 RGBA8 target, transfer it to linear memory, hand it to `NitroPort_Gx3dSubmitRGBA8`.
+- `3ds_port/game/app/port_gx3d_pica.c` — the PICA 3D renderer: draws each scene's polygons into the
+  compositor's targets (and, in the old classic path, an off-screen 256×192 image).
+- `3ds_port/game/app/port_compose_pica.c` — the remaster compositor: upscaled 2D layers plus 3D at
+  400×240/320×240, stereo, smooth 3D, presentation pacing.
 - `3ds_port/game/app/port_pica_abi.c` — libctru's struct layout exposed to the port. It is compiled
   **without** `-fno-short-enums` (the port's flags would make `DVLE_s`/`C3D_FrameBuf` a different
   size from libctru's).
@@ -240,9 +306,10 @@ The vertex programs are `3ds_port/game/app/gx3d_{passthrough,shadow_cast,shadow_
 that DVLE order. The harness assembles them with `picasso` into one `.shbin`, turns that into an
 assembly object with `bin2s`, and links it; the symbols are `gx3d_passthrough_shbin` and
 `gx3d_passthrough_shbin_size`, which `port_gx3d_pica.c` references. Both tools ship with devkitPro
-(like `3dsxtool`/`3dsxdump`), so this is not a new dependency. `hgss/game/app/pica_classic_stubs.c`
-supplies the two compose-only profiler hooks `port_gx3d_pica.c` mentions; the real ones live in
-`port_compose_pica.c`, which this program does not link. `3ds_port/nitro/src/port_gx3d.c`
+(like `3dsxtool`/`3dsxdump`), so this is not a new dependency. Since Phase A the program also links
+`3ds_port/game/app/port_compose_pica.c`, the real home of the two compose-only profiler hooks
+`port_gx3d_pica.c` mentions; the classic-only `hgss/game/app/pica_classic_stubs.c` is no longer part
+of the build. `3ds_port/nitro/src/port_gx3d.c`
 `stage_triangle()` drops a polygon with an exact clip-space `(0,0,0,0)` vertex: both edges to a rim
 vertex project to that rim point, so it has zero screen area and the DS stores no polygon. Drawing its
 stored screen `(0,0)` as a fan deformed Ho-oh's left wing; `nitro/tests/test_gx3d.c`

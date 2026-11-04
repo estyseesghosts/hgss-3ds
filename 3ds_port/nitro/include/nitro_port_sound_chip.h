@@ -74,4 +74,31 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames);
  * channel stopped, perhaps just before, and set up again), the channel
  * starts over from its beginning, as on the DS. */
 void NitroSound_KeyOn(NitroSoundChip *chip, unsigned channel);
+
+#ifdef NITRO_SOUND_STATS
+/* Test-only (3ds_port/nitro/tests/sdat_render.c): the mixer's state for one
+ * output frame, handed to the frame hook once the frame is made. Only built
+ * with NITRO_SOUND_STATS, so the port's own build has none of it. */
+#define NITRO_SOUND_TAP_OFF INT32_MIN   /* the channel made no sample in the frame */
+#define NITRO_SOUND_EV_START 1u         /* the channel started (its first frame) */
+#define NITRO_SOUND_EV_KILL 2u          /* the driver cleared its enable bit while it played */
+#define NITRO_SOUND_EV_END 4u           /* the sound ended (no repeat) */
+#define NITRO_SOUND_EV_LOOP 8u          /* the sound wrapped to its loop start after this frame */
+
+typedef struct NitroSoundFrame {
+    uint32_t index;                     /* output frames since the hook was set */
+    int32_t preL, preR;                 /* after master volume, before outputShift */
+    int32_t postL, postR;               /* after outputShift, before saturate() */
+    /* Per channel: its sample after volume and shift, before pan (what it
+     * adds to the mix), or NITRO_SOUND_TAP_OFF. */
+    int32_t tap[NITRO_SOUND_CHANNEL_COUNT];
+    uint8_t format[NITRO_SOUND_CHANNEL_COUNT];   /* ctrl bits 29-30 */
+    uint8_t volume[NITRO_SOUND_CHANNEL_COUNT];   /* ctrl bits 0-6 */
+    uint8_t shift[NITRO_SOUND_CHANNEL_COUNT];    /* the shift applied to the sample: 0, 1, 2 or 4 */
+    uint8_t event[NITRO_SOUND_CHANNEL_COUNT];    /* NITRO_SOUND_EV_*, for this frame */
+} NitroSoundFrame;
+
+typedef void (*NitroSoundFrameFn)(void *arg, const NitroSoundFrame *frame);
+void NitroSound_SetFrameHook(NitroSoundFrameFn fn, void *arg);
+#endif
 #endif

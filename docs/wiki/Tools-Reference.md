@@ -242,6 +242,7 @@ Normalizes, validates and diffs save images. The format it checks is described i
 - **Usage:**
   - `savetool.py normalize IN [-o OUT]`: strips a DeSmuME footer and checks the size. Writes a file only with `-o`. Without it, it prints `ok: N bytes`.
   - `savetool.py validate FILE [--layout SIZE0,SIZE1]`: checks both slot footers and CRCs, and prints the status and the newer mirror. Exit 0 only when the status is `IS_GOOD`.
+  - `savetool.py repair IN -o OUT [--layout SIZE0,SIZE1]`: recomputes the CRC in each structurally valid **slot footer** and writes a separate file. This repairs the outer CRCs of saves written by early 3DS builds; the port itself migrates their per-substruct CRCs on first read (patch 1907).
   - `savetool.py diff A B [--block 4096]`: prints the byte ranges that differ.
 - **Reads:** a save file. Use your own saves, or synthetic ones in tests.
 - **Needs:** Python 3 only (standard library). It does not need the container, MWCC or a ROM. Its unit tests are in `tests/test_savetool.py`.
@@ -321,20 +322,21 @@ Run from the repo root. `make test` runs the first two groups and nothing else. 
 | `tests/sdk/card_spi_wait/run.sh` | The `CARD_SpiWait*` stub: status `0xAA`, no peer. | NitroSDK 0701 | `[ROOT]` |
 | `tests/sdk/math_qsort/run.sh` | The C version of `MATH_QSort`, with a driver built against the system headers. | NitroSDK 0801 | `[ROOT]` |
 | `tests/sdk/irq_handler/run.sh` | The C version of `OS_IrqHandler`. | NitroSDK 0901 | `[ROOT]` |
-| `tests/sdk/gcc_fixes/run.sh` | The four GCC-10 fixes: `SND_command.c` compiles, both CRC headers in one TU, PXI PHI tag value, PHI absent without the macro. | pokeheartgold 1201 | `[ROOT]` |
+| `tests/sdk/gcc_fixes/run.sh` | The four GCC-10 fixes plus the HGSS CRC table escape hatch (group l): `SND_command.c` compiles, both CRC headers in one TU, PXI PHI tag value, PHI absent without the macro, and `HGSS_MATH_KEEP_HGSS_CRC16_INIT` keeps `MATH_CRC16InitTable` on the CCITT table. | pokeheartgold 1201, 1906 | `[ROOT]` |
 | `tests/sdk/memory_map/run.sh` | Every `HW_*` area, VRAM/PLTT/OAM view, main-memory offset and register macro lands in the port's arrays; includes the two absolute MI DMA registers. 35 checks. | pokeheartgold 1301, 1302 | `[ROOT]` |
 | `tests/layout_probe/run.sh` | The save-layout probe above, for all three GCC variants. Exit 1 on any difference. | pokeheartgold 1001 (types) | none; env vars below |
-| `tests/test_savetool.py` | `savetool` normalize, validate and diff, on synthetic images. 15 tests. | n/a | run by `make tool-tests` |
+| `tests/test_savetool.py` | `savetool` normalize, validate, repair and diff, on synthetic images. 18 tests. | n/a | run by `make tool-tests` |
+| `tests/test_save_crc.py` | Guards the HGSS CCITT table escape hatch (1906), the substruct-CRC migration (1907), and the patch files. 4 tests; skipped until `build/upstream` exists. | pokeheartgold 1906, 1907 | run by `make tool-tests` |
 | `tests/test_bootstrap.py` | `bootstrap.py` on a synthetic upstream repo. 4 tests. | n/a | run by `make tool-tests` |
 
 Notes:
 
 - The SDK runners take `[ROOT]`, which defaults to `build/upstream`, or a patched tree. `make test` passes `build/upstream`. Most runners compile with `-m32 -malign-double` and the flags of `tools/sdk_compile_survey.py`. `nns_clz` and `small` keep their own flag lists in the script. Each runner prints its own pass or fail lines and exits non-zero on failure.
-- `make test` runs `tool-tests` (the Python files under `tests/`, **338 tests in all**) and then each `tests/sdk/*/run.sh` (**20 suites**). Last run: exit 0.
+- `make test` runs `tool-tests` (the Python files under `tests/`) and then each `tests/sdk/*/run.sh` (**20 suites**). The last full run was exit 0; session 15 added four save-CRC tests and reran the targeted groups.
 - `tests/sdk/port_memory.c` is a helper, not a suite: it defines the eleven port memory arrays for the suites whose SDK objects touch registers or main memory (patches 1301/1302). A test that needs them links it from its `run.sh`.
 - `tests/layout_probe/run.sh` reads `PY` (Python with pyelftools; default `python3`), `DECOMP` (default `/work/pokeheartgold`) and `FILES` (default `$DECOMP/files`). Extra arguments are passed to `run_probe.py`.
 - `tests/inputs/*.txt` are the frame-indexed input scripts (`boot-title`, `main-menu-nosave`, `newgame-buttons`, `newgame-touch`) for the PC runner and the 3DS `script.txt`. They are calibrated against the PC run; a melonDS capture is still open.
-- The vendored `3ds_port/` builds and tests through `tools/hgss_nitro.py`; `make port-tests` is **green at 82 patches** (exit 0, nitrosystem 17,122 checks). See [docs/port-wiring.md](../port-wiring.md).
+- The vendored `3ds_port/` builds and tests through `tools/hgss_nitro.py`; `make port-tests` is **green at 84 patches** (exit 0, nitrosystem 17,122 checks). See [docs/port-wiring.md](../port-wiring.md).
 
 ## Make targets
 
@@ -346,7 +348,7 @@ From the repo `Makefile`:
 | `make tool-tests` | `python3 -I -m unittest discover -s tests` | |
 | `make sdk-tests` | every `tests/sdk/*/run.sh build/upstream` | |
 | `make sdk-survey` | `tools/sdk_compile_survey.py -j $(nproc) --m32` | Exits 1 while files fail (14 at last run). |
-| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 82 patches** (nitrosystem 17,122 checks; gx3d 327+229). |
+| `make port-tests` | the vendored `pak`, `nitro` and `nitrosystem` suites via `tools/hgss_nitro.py` | Real target. **Exit 0 at 84 patches** (nitrosystem 17,122 checks; gx3d 327+229). |
 | `make content-check` | `python3 tools/check_repo_content.py` | Fails if a ROM/save/pak/build artifact is tracked; also part of `make test`. |
 | `make layout` | `bash tests/layout_probe/run.sh` | |
 | `make clean` | `rm -rf build` | Deletes everything under `build/`, including `build/upstream` and `build/reference`. |

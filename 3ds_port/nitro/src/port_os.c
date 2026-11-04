@@ -19,6 +19,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* libctru's tick counter, for the H-blank split (NitroPort_HBlankSplit). This
+ * library does not include libctru's headers -- they clash with the SDK's --
+ * so the one prototype it needs is declared here. Host builds (tests, tools)
+ * have no counter: timings read 0, the same pattern as port_render2d.c. */
+#ifdef __3DS__
+extern u64 svcGetSystemTick(void);
+#define PORT_NOW() svcGetSystemTick()
+#else
+#define PORT_NOW() 0
+#endif
+
 extern unsigned char NitroPort_IoReg[];
 
 /* ---------------------------------------------------------------- the CPU */
@@ -28,7 +39,25 @@ u32 OSi_PortCpsr = HW_PSR_SYS_MODE;
 
 /* ------------------------------------------------------------- interrupts */
 
-void NitroPort_RaiseIrq(u32 mask)
+/* Per-interrupt-bit time in the last H-blank walk (NitroPort_HBlankIrqByBit):
+ * which handler the walk's interrupts ran -- bit 1 is the game's H-blank
+ * callback -- in ARM11 ticks, and how many times. Only dispatches made inside
+ * NitroPort_HBlankLines are counted; the one deferred scheduler switch at the
+ * end of the walk is not a handler and stays in the walk's total. */
+static u64 sHBlankIrqBitTicks[NITRO_PORT_IRQ_BITS];
+static u32 sHBlankIrqBitCalls[NITRO_PORT_IRQ_BITS];
+static int sHBlankWalking;
+
+/* `refresh` is off for the 192 raises of an H-blank walk.
+ *
+ * NitroPort_GxRefresh re-raises the GXFIFO level interrupt whenever the FIFO
+ * is under half. Doing that once per scanline means the GXFIFO handler runs
+ * 192 times a frame as well as the H-blank one, and on an Old 3DS the walk
+ * measures 9.5-13.8 ms with 87% of it inside these raises (hb_irq_us), while
+ * the H-blank callback itself is a field wipe task that is usually idle. The
+ * FIFO is refreshed once before the walk instead (NitroPort_HBlankLines).
+ */
+static void raise_irq(u32 mask, int refresh)
 {
     int guard;
     u32 saved;
@@ -41,7 +70,9 @@ void NitroPort_RaiseIrq(u32 mask)
      * program; level-triggered ones (the 3D FIFO's) legitimately come back
      * many times in a row. */
     for (guard = 0; guard < 65536; guard++) {
-        NitroPort_GxRefresh();   /* GXSTAT, and the GXFIFO level interrupt */
+        if (refresh) {
+            NitroPort_GxRefresh();   /* GXSTAT, and the GXFIFO level interrupt */
+        }
         if (OSi_PortCpsr & HW_PSR_IRQ_DISABLE) {
             return;
         }
@@ -57,14 +88,35 @@ void NitroPort_RaiseIrq(u32 mask)
          * switched back to. */
         saved = OSi_PortCpsr;
         OSi_PortCpsr = (saved & ~HW_PSR_CPU_MODE_MASK) | HW_PSR_IRQ_MODE | HW_PSR_IRQ_DISABLE;
-        OS_IrqHandler();
+        if (sHBlankWalking) {
+            /* The bit OS_IrqHandler will run: the lowest pending, enabled one. */
+            u32 pending = reg_OS_IE & reg_OS_IF;
+            int bit = (pending != 0) ? __builtin_ctz(pending) : -1;
+            u64 t = PORT_NOW();
+
+            OS_IrqHandler();
+            if (bit >= 0 && bit < NITRO_PORT_IRQ_BITS) {
+                sHBlankIrqBitTicks[bit] += PORT_NOW() - t;
+                sHBlankIrqBitCalls[bit]++;
+            }
+        } else {
+            OS_IrqHandler();
+        }
         OSi_PortCpsr = saved;
     }
+}
+
+void NitroPort_RaiseIrq(u32 mask)
+{
+    raise_irq(mask, 1);
 }
 
 /* --------------------------------------------------- H-blank, line by line */
 
 NitroLineRegs NitroPort_LineRegs;
+
+/* The last walk's three parts, in ARM11 ticks (NitroPort_HBlankSplit). */
+static u64 sHBlankKeepTicks, sHBlankDmaTicks, sHBlankIrqTicks;
 
 /* A line's registers; not DISPSTAT and VCOUNT (0x04-0x07: they draw
  * nothing, and the V-count is each line's own: every frame with the
@@ -86,10 +138,16 @@ static void HBlank(int line, BOOL irq, BOOL dma)
     reg_GX_VCOUNT = (u16)line;
     reg_GX_DISPSTAT |= REG_GX_DISPSTAT_HBLK_MASK;
     if (dma && line < NITRO_PORT_SCREEN_H) {
+        u64 t = PORT_NOW();
+
         NitroPort_DmaHBlank();
+        sHBlankDmaTicks += PORT_NOW() - t;
     }
     if (irq) {
-        NitroPort_RaiseIrq(OS_IE_H_BLANK);
+        u64 t = PORT_NOW();
+
+        raise_irq(OS_IE_H_BLANK, 0);
+        sHBlankIrqTicks += PORT_NOW() - t;
     }
 }
 
@@ -106,6 +164,7 @@ void NitroPort_HBlankLines(void)
     BOOL irq = HBlankIrq();
     BOOL dma = NitroPort_DmaHBlankArmed();
     u16 vcount = reg_GX_VCOUNT;
+    u64 t0, t1;
     int y;
 
     NitroPort_LineRegs.serial++;
@@ -113,21 +172,64 @@ void NitroPort_HBlankLines(void)
         NitroPort_LineRegs.active = 0;
         return;
     }
+    /* Where the 9.5-13.8 ms an Old 3DS spends in the hand-off goes. The three
+     * candidates are the DMA copies, the interrupt handlers (192 of them,
+     * through the SDK's dispatcher) and the per-line register copy; guessing
+     * between them has already been wrong once. */
+    sHBlankKeepTicks = sHBlankDmaTicks = sHBlankIrqTicks = 0;
+    memset(sHBlankIrqBitTicks, 0, sizeof(sHBlankIrqBitTicks));
+    memset(sHBlankIrqBitCalls, 0, sizeof(sHBlankIrqBitCalls));
+    /* (GXSTAT and the GXFIFO level interrupt once, not once a scanline: see
+     * raise_irq) */
+    NitroPort_GxRefresh();
+    /* One scheduler switch for the whole walk, not 192: see
+     * NitroPort_IrqThreadSwitch. */
+    NitroPort_IrqSwitchWanted = 0;
+    NitroPort_IrqSwitchDeferred = 1;
     /* Line 0 has what the last H-blank before it left (the frame's last
      * line's, in the V-blank: its interrupt only), then each line what
      * the H-blank of the line before did. */
+    sHBlankWalking = 1;
     HBlank(262, irq, FALSE);
     for (y = 0; y < NITRO_PORT_SCREEN_H; y++) {
+        t0 = PORT_NOW();
         KeepLine(y);
+        t1 = PORT_NOW();
+        sHBlankKeepTicks += t1 - t0;
         HBlank(y, irq, dma);   /* (the last one's: for the DMAs' source, as on the DS) */
     }
+    sHBlankWalking = 0;
     reg_OS_IF &= ~OS_IE_H_BLANK;   /* (not left pending for later) */
+    NitroPort_IrqSwitchDeferred = 0;
+    if (NitroPort_IrqSwitchWanted) {
+        NitroPort_IrqSwitchWanted = 0;
+        NitroPort_IrqThreadSwitch();
+    }
     reg_GX_DISPSTAT &= (u16)~REG_GX_DISPSTAT_HBLK_MASK;
     reg_GX_VCOUNT = vcount;
     NitroPort_LineRegs.active = 0;
     for (y = 1; y < NITRO_PORT_SCREEN_H && !NitroPort_LineRegs.active; y++) {
         NitroPort_LineRegs.active = memcmp(NitroPort_LineRegs.regs[0][y], NitroPort_LineRegs.regs[0][0], NITRO_LINE_REGS) != 0 ||
                                     memcmp(NitroPort_LineRegs.regs[1][y], NitroPort_LineRegs.regs[1][0], NITRO_LINE_REGS) != 0;
+    }
+}
+
+/* The last walk's three parts, in ARM11 ticks (NitroPort_HBlankLines). */
+void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq)
+{
+    *keep = sHBlankKeepTicks;
+    *dma = sHBlankDmaTicks;
+    *irq = sHBlankIrqTicks;
+}
+
+/* The last walk's interrupt handlers, by IRQ bit (NitroPort_HBlankLines). */
+void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out)
+{
+    int bit;
+
+    for (bit = 0; bit < NITRO_PORT_IRQ_BITS; bit++) {
+        out[bit].ticks = sHBlankIrqBitTicks[bit];
+        out[bit].calls = sHBlankIrqBitCalls[bit];
     }
 }
 

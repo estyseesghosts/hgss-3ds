@@ -12,7 +12,11 @@ done, how it was verified, what is still open, and what to run next.
    Code complete; the DS gate is the last exit criterion.
 4. **[phase-2.md](phase-2.md)** — the game build: source list, overlays, generated headers, `.s`
    conversion, stubs, the build harness and the 34-symbol work queue. This is the phase in progress.
-5. **`agent-notes/`** — one note per work slice, written by the agent that did it. They are raw: the
+5. **`agent-notes/`** — one note per work slice, written by the agent that did it.
+   For the performance work start with
+   [agent-notes/s20-performance-session.md](agent-notes/s20-performance-session.md)
+   (what was measured, what landed, and every wrong turn); the plan it came from
+   is [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md). They are raw: the
    commands it ran, the measurements it took, and what it handed to the lead. The lead folds the
    results into `STATE.md` and the phase record.
 

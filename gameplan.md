@@ -18,7 +18,7 @@ First milestone: **the headless PC build reaches Oak's speech** (Phase 4). Then 
 | Save format | Unchanged 512 KB DS flash image; raw `.sav` on SD and in the CIA save archive | 2026-10-30 |
 | Infrared | Implemented with the 3DS `ir:USER` service (Phase 9) | 2026-10-30 |
 | Wireless and online | Stubbed; 3DS↔3DS over UDS is Phase 10; DS↔3DS judged not feasible | 2026-10-30 |
-| Display at first | DS screens centered 1:1; wide-screen and remaster layouts come later, if at all | 2026-10-30 |
+| Display at first | ~~DS screens centered 1:1; wide-screen and remaster layouts come later, if at all~~ **Superseded 2026-11-02: the Phase A remaster is the only display (400x240/320x240, no 1:1 fallback, Old 3DS included).** | 2026-10-30 |
 
 ### Ground rules
 
@@ -270,7 +270,7 @@ pokeheartgold-3ds/
     game_sources.py        # read HGSS Makefile/main.lsf for the file and overlay lists
     game_overlays.py       # per-overlay sections + overlay table
     make_game_wifi_stubs.py
-    savetool.py            # normalize, validate, diff .sav files
+    savetool.py            # normalize, validate, repair, diff .sav files
     golden/                # melonDS capture scripts, diff runner
   tests/
     inputs/*.txt           # frame-indexed input scripts (no game data)
@@ -613,11 +613,15 @@ The goal: on a New 3DS, the `.3dsx` boots from the Homebrew Launcher and plays t
    - Crash handler: writes registers, a stack dump and the last log lines to `log.txt`.
    - Start NDSP only if `dspfirm.cdc` loaded; otherwise run silent and say so on screen.
    - Hook APT: HOME menu and sleep pause the game thread and audio.
-2. **Display mode.** Start with the centered 1:1 layout:
-   - Top: 256×192 inside 400×240.
-   - Bottom: 256×192 inside 320×240, with touch offset by (32, 24).
+2. **Display mode (Phase A, 2026-11-02).** The Platinum remaster is the only
+   display path, on Old and New 3DS:
+   - Top: 320×192 canvas at 1.25× → 400×240, wide 3D view.
+   - Bottom: 256×192 at 1.25× → 320×240; touch maps `px * 4/5`, `py * 4/5`.
+   - 3D at native resolution; `smooth3d = 2` on New 3DS, `0` on Old 3DS.
+   - No classic 1:1 fallback: a failed GPU display shows `DisplayErrorScreen()`.
 
-   Turn off the Platinum remaster, wide and lower-menu paths for HGSS until their game-side patches exist.
+   The original 1:1 plan is superseded; the remaining wide/lower-menu work is
+   Phases B-E in [docs/wiki/3DS-Remaster-Audit.md](docs/wiki/3DS-Remaster-Audit.md).
 3. **Screen routing.** HGSS swaps which engine is on the top screen (e.g. 3D on top in battle, on the bottom in some apps). Confirm the compositor follows `POWCNT`/`GX_SetDispSelect` every frame.
 4. **Input.**
    - D-pad and circle pad → DS D-pad.
@@ -1197,6 +1201,7 @@ The ARM9 SDK handles paging, verification and callbacks. The port's `port_card.c
 - **Emulator → port.** melonDS and BizHawk saves are raw. DeSmuME `.dsv` has a footer; `tools/savetool.py normalize` strips it.
 - **Port → cart.** Copy the file and write it to the cart with a cart save tool, e.g. GodMode9 or Checkpoint's DS-cart restore.
 - `tools/savetool.py validate` checks size and both slots' checksums using HGSS's footer format, and reports which slot is newer.
+- `tools/savetool.py repair IN -o OUT` recomputes the CRC of every structurally valid slot footer. It repairs saves written by the early 3DS builds, whose outer CRCs used the wrong table; the port itself migrates those saves' per-substruct CRCs on first read (patches 1906/1907).
 
 ### Tests
 

@@ -21,6 +21,25 @@
 #define REG_LOOP    10u
 #define REG_LENGTH  12u
 
+#ifdef NITRO_SOUND_STATS
+/* Test-only frame hook (sdat_render): the mixer runs one frame per block, so
+ * each event lands on its frame. Blocks give what frame-by-frame mixing gives
+ * (see mix_block); sdat_render's release build checks that on real output. */
+#define MIX_BLOCK 1
+static NitroSoundFrameFn sFrameFn;
+static void *sFrameArg;
+static NitroSoundFrame sFrame;
+static uint32_t sFrameIndex;
+#define STATS_EVENT(channel, bit) do { if (sFrameFn) sFrame.event[(channel)] |= (uint8_t)(bit); } while (0)
+#define STATS_CHANNEL_OF(base) (((base) - 0x400u) / 16u)
+#define STATS_TAP(c, i, v) do { if ((c)->tap) (c)->tap[(i)] = (v); } while (0)
+#else
+#define MIX_BLOCK 128
+#define STATS_EVENT(channel, bit) ((void)0)
+#define STATS_CHANNEL_OF(base) 0u
+#define STATS_TAP(c, i, v) ((void)0)
+#endif
+
 volatile uint8_t NitroPort_SoundRegisters[NITRO_SOUND_REG_SIZE];
 
 static unsigned char reg8(unsigned offset)
@@ -126,6 +145,7 @@ static uint32_t loop_sample(unsigned format, uint32_t loopBytes)
 
 static void disable_channel(unsigned base, NitroSoundVoice *voice)
 {
+    STATS_EVENT(STATS_CHANNEL_OF(base), NITRO_SOUND_EV_END);
     put32(base + REG_CNT, reg32(base + REG_CNT) & 0x7fffffffu);
     voice->running = 0;
     voice->previousCtrl &= 0x7fffffffu;
@@ -136,6 +156,7 @@ static void restart_channel(NitroSoundVoice *voice, uint32_t ctrl,
 {
     const uint8_t *source = (const uint8_t *)(uintptr_t)reg32(base + REG_SAD);
     unsigned format = (ctrl >> 29) & 3u;
+    STATS_EVENT(STATS_CHANNEL_OF(base), NITRO_SOUND_EV_START);
     voice->running = 1;
     voice->sampleIndex = 0;
     voice->phase = 0;
@@ -177,6 +198,9 @@ typedef struct Channel {
     uint32_t endByte;      /* the channel reads [sourceAddr, sourceAddr + endByte) */
     int dependent;         /* reads memory a capture writes: mixed frame by frame */
     int interpolate;       /* NitroSoundChip.interpolate, for a sampled sound */
+#ifdef NITRO_SOUND_STATS
+    int32_t *tap;          /* the frame hook's samples for this channel, if set */
+#endif
 } Channel;
 
 /* Between the sample before (a) and the sample now (b), as far along as
@@ -256,6 +280,7 @@ static void advance_voice(const Channel *c)
             disable_channel(c->base, v);
             return;
         }
+        STATS_EVENT(c->channel, NITRO_SOUND_EV_LOOP);
         v->sampleIndex = c->loopAt;
         if (c->format == 2u) adpcm_to_loop(v, c);
     } else if (c->format == 2u) {
@@ -279,6 +304,7 @@ static int start_channel(NitroSoundChip *chip, unsigned channel, Channel *c)
     uint32_t period, startByte, endByte, shift;
 
     if (!(ctrl & 0x80000000u)) {
+        if (v->running) STATS_EVENT(channel, NITRO_SOUND_EV_KILL);
         v->running = 0;
         v->previousCtrl = ctrl;
         return 0;
@@ -348,6 +374,45 @@ static int32_t voice_mix(Channel *c, int32_t *left, int32_t *right)
 }
 
 /*
+ * One output frame's advance for PCM8/PCM16: the source index moves on by
+ * every whole step the phase crossed and, when interpolating, last becomes
+ * the sample it left behind. Returns 0 if the sound ended (advance_voice
+ * has written its state back already), 1 if the block goes on. This is the
+ * phase loop the PCM branch used to hold inline, split out so the silent
+ * and pan-specialised loops all move the cursor in exactly one way.
+ */
+static inline int pcm_advance(Channel *c, uint64_t *phase, uint32_t *index,
+                              int32_t *last, int pcm16bit, int interpolate,
+                              uint32_t nSamples)
+{
+    const uint8_t *source = c->source;
+    uint32_t advances = (uint32_t)(*phase >> 32);
+
+    /* As voice_mix's loop: one source sample per whole step, at most 2048
+     * per frame. */
+    if (advances > 2048u) advances = 2048u;
+    while (advances--) {
+        *phase -= PHASE_ONE;
+        if (*index + 1u < nSamples) {
+            if (interpolate)
+                *last = pcm16bit ? pcm16(source, *index * 2u)
+                                 : (int32_t)pcm8(source, *index) * 256;
+            ++*index;
+            continue;
+        }
+        /* The end: what advance_voice does, with the state written back
+         * first. */
+        c->v->sampleIndex = *index;
+        c->v->phase = *phase;
+        advance_voice(c);
+        if (!c->v->running) return 0;
+        *index = c->v->sampleIndex;
+        *last = c->v->lastSample;
+    }
+    return 1;
+}
+
+/*
  * A channel's samples for a run of frames, added to L and R: what
  * voice_mix gives frame by frame, with the channel's settings and its
  * decoder in local variables; values (if not NULL) gets each frame's
@@ -360,6 +425,10 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
     const int32_t volume = c->volume, panL = 127 - c->pan, panR = c->pan;
     const unsigned shift = c->shift;
     const uint64_t step = c->step;
+    /* step is a block constant. At the port's 32,768 Hz output rate no
+     * timer value makes it exactly PHASE_ONE (SOUND_CLOCK is not a
+     * multiple of 32,768), so the phase loop always has work to do; a
+     * single-sample-per-frame fast path would never be entered. */
     uint64_t phase = v->phase;
     size_t i;
 
@@ -368,18 +437,29 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
         const uint8_t *source = c->source;
         const uint32_t nSamples = c->nSamples, loopAt = c->loopAt;
         const int interpolate = c->interpolate;
+        const int silent = volume == 0;
         uint32_t index = v->sampleIndex;
         int32_t predictor = v->predictor, stepIndex = v->stepIndex;
         int32_t last = v->lastSample;
 
         for (i = 0; i < frames; ++i) {
-            int32_t scaled = ((interpolate ? lerp(last, predictor, phase) : predictor) * volume) / 127;
             uint32_t advances;
 
-            scaled >>= shift;
-            if (values) values[i] = scaled;
-            L[i] += (scaled * panL) / 127;
-            R[i] += (scaled * panR) / 127;
+            /* A silent channel adds nothing; the decoder still has to run,
+             * because its state is the sound's position when the volume
+             * comes back. */
+            if (silent) {
+                if (values) values[i] = 0;
+                STATS_TAP(c, i, 0);
+            } else {
+                int32_t scaled = ((interpolate ? lerp(last, predictor, phase) : predictor) * volume) / 127;
+
+                scaled >>= shift;
+                if (values) values[i] = scaled;
+                STATS_TAP(c, i, scaled);
+                L[i] += (scaled * panL) / 127;
+                R[i] += (scaled * panR) / 127;
+            }
             phase += step;
             /* As voice_mix's loop: one source sample per whole step, at
              * most 2048 per frame. */
@@ -438,45 +518,97 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
         return;
     }
     if (c->format <= 1u && c->source && c->nSamples) {
-        /* PCM8 / PCM16 */
+        /* PCM8 / PCM16. One loop per pan case, hoisted out of the frame
+         * loop; step and shift are already block constants. */
         const uint8_t *source = c->source;
         const uint32_t nSamples = c->nSamples;
         const int pcm16bit = c->format == 1u;
         const int interpolate = c->interpolate;
+        const int fullVolume = volume == 127;
         uint32_t index = v->sampleIndex;
         int32_t last = v->lastSample;
 
-        for (i = 0; i < frames; ++i) {
-            int32_t sample = pcm16bit ? pcm16(source, index * 2u)
-                                      : (int32_t)pcm8(source, index) * 256;
-            int32_t scaled;
-            uint32_t advances;
+        if (volume == 0) {
+            /* Silent: it adds nothing to either side, but its cursor must
+             * still move, or the sample it comes back on when the envelope
+             * lifts would be the wrong one. Only an interpolating channel
+             * reads the source here, to keep lastSample. */
+            for (i = 0; i < frames; ++i) {
+                if (values) values[i] = 0;
+                STATS_TAP(c, i, 0);
+                phase += step;
+                if (!pcm_advance(c, &phase, &index, &last, pcm16bit,
+                                 interpolate, nSamples))
+                    return;
+            }
+        } else if (panL == 127) {
+            /* Hard left: panR is 0, so the right side would add
+             * ((x * 0) / 127) = 0. */
+            for (i = 0; i < frames; ++i) {
+                int32_t sample = pcm16bit ? pcm16(source, index * 2u)
+                                          : (int32_t)pcm8(source, index) * 256;
+                int32_t scaled;
 
-            if (interpolate) sample = lerp(last, sample, phase);
-            scaled = (sample * volume) / 127;
-
-            scaled >>= shift;
-            if (values) values[i] = scaled;
-            L[i] += (scaled * panL) / 127;
-            R[i] += (scaled * panR) / 127;
-            phase += step;
-            advances = (uint32_t)(phase >> 32);
-            if (advances > 2048u) advances = 2048u;
-            while (advances--) {
-                phase -= PHASE_ONE;
-                if (index + 1u < nSamples) {
-                    if (interpolate)
-                        last = pcm16bit ? pcm16(source, index * 2u)
-                                        : (int32_t)pcm8(source, index) * 256;
-                    index++;
-                    continue;
+                if (interpolate) sample = lerp(last, sample, phase);
+                /* (sample * 127) / 127 is sample exactly, and a PCM sample
+                 * times 127 cannot overflow int32. */
+                if (fullVolume) {
+                    scaled = sample >> shift;
+                } else {
+                    scaled = (sample * volume) / 127;
+                    scaled >>= shift;
                 }
-                v->sampleIndex = index;
-                v->phase = phase;
-                advance_voice(c);
-                if (!v->running) return;
-                index = v->sampleIndex;
-                last = v->lastSample;
+                if (values) values[i] = scaled;
+                STATS_TAP(c, i, scaled);
+                L[i] += scaled;
+                phase += step;
+                if (!pcm_advance(c, &phase, &index, &last, pcm16bit,
+                                 interpolate, nSamples))
+                    return;
+            }
+        } else if (panL == 0) {
+            /* Hard right: panL is 0, so the left side would add 0. */
+            for (i = 0; i < frames; ++i) {
+                int32_t sample = pcm16bit ? pcm16(source, index * 2u)
+                                          : (int32_t)pcm8(source, index) * 256;
+                int32_t scaled;
+
+                if (interpolate) sample = lerp(last, sample, phase);
+                if (fullVolume) {
+                    scaled = sample >> shift;
+                } else {
+                    scaled = (sample * volume) / 127;
+                    scaled >>= shift;
+                }
+                if (values) values[i] = scaled;
+                STATS_TAP(c, i, scaled);
+                R[i] += scaled;
+                phase += step;
+                if (!pcm_advance(c, &phase, &index, &last, pcm16bit,
+                                 interpolate, nSamples))
+                    return;
+            }
+        } else {
+            for (i = 0; i < frames; ++i) {
+                int32_t sample = pcm16bit ? pcm16(source, index * 2u)
+                                          : (int32_t)pcm8(source, index) * 256;
+                int32_t scaled;
+
+                if (interpolate) sample = lerp(last, sample, phase);
+                if (fullVolume) {
+                    scaled = sample >> shift;
+                } else {
+                    scaled = (sample * volume) / 127;
+                    scaled >>= shift;
+                }
+                if (values) values[i] = scaled;
+                STATS_TAP(c, i, scaled);
+                L[i] += (scaled * panL) / 127;
+                R[i] += (scaled * panR) / 127;
+                phase += step;
+                if (!pcm_advance(c, &phase, &index, &last, pcm16bit,
+                                 interpolate, nSamples))
+                    return;
             }
         }
         v->sampleIndex = index;
@@ -488,6 +620,7 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
     for (i = 0; i < frames && v->running; ++i) {
         int32_t scaled = voice_mix(c, &L[i], &R[i]);
         if (values) values[i] = scaled;
+        STATS_TAP(c, i, scaled);
     }
 }
 
@@ -579,11 +712,17 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
     int capturing, bypass1, bypass3;
     unsigned leftFrom, rightFrom;
     size_t i;
+#ifdef NITRO_SOUND_STATS
+    int32_t tapBuf[NITRO_SOUND_CHANNEL_COUNT][MIX_BLOCK];
+#endif
 
     if (!chip || !stereo || !chip->outputRate || frames == 0) return;
     for (channel = 0; channel < NITRO_SOUND_CHANNEL_COUNT; ++channel) {
         if (start_channel(chip, channel, &channels[count])) ++count;
     }
+#ifdef NITRO_SOUND_STATS
+    for (k = 0; k < count; ++k) channels[k].tap = tapBuf[channels[k].channel];
+#endif
     /* SOUNDCNT (0x500): bits 0-6 master volume, 8-9 / 10-11 what the left /
      * right output plays (the mixer, channel 1, channel 3 or both), 12 / 13
      * channel 1 / 3 kept out of the mixer, 15 on. */
@@ -617,7 +756,7 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
     }
     {
         /* Channel by channel, a block of frames at a time. */
-        enum { BLOCK = 128 };
+        enum { BLOCK = MIX_BLOCK };
         size_t at;
 
         for (at = 0; at < frames; at += BLOCK) {
@@ -635,6 +774,10 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
                 memset(value0, 0, n * sizeof(int32_t));
                 memset(value2, 0, n * sizeof(int32_t));
             }
+#ifdef NITRO_SOUND_STATS
+            for (channel = 0; channel < NITRO_SOUND_CHANNEL_COUNT; ++channel)
+                for (i = 0; i < MIX_BLOCK; ++i) tapBuf[channel][i] = NITRO_SOUND_TAP_OFF;
+#endif
             for (k = 0; k < count; ++k) {
                 Channel *c = &channels[k];
 
@@ -647,6 +790,9 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
             }
             for (i = 0; i < n; ++i) {
                 int32_t outputL = 0, outputR = 0;
+#ifdef NITRO_SOUND_STATS
+                int32_t preL = 0, preR = 0;
+#endif
 
                 if (capturing) {
                     for (k = 0; k < count; ++k) {
@@ -655,11 +801,14 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
 
                         if (!c->dependent || !c->v->running) continue;
                         if (c->channel == 1) {
-                            (void)voice_mix(c, &ch1L[i], &ch1R[i]);
+                            value = voice_mix(c, &ch1L[i], &ch1R[i]);
+                            STATS_TAP(c, i, value);
                         } else if (c->channel == 3) {
-                            (void)voice_mix(c, &ch3L[i], &ch3R[i]);
+                            value = voice_mix(c, &ch3L[i], &ch3R[i]);
+                            STATS_TAP(c, i, value);
                         } else {
                             value = voice_mix(c, &mixL[i], &mixR[i]);
+                            STATS_TAP(c, i, value);
                             if (c->channel == 0) value0[i] = value;
                             if (c->channel == 2) value2[i] = value;
                         }
@@ -685,6 +834,10 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
 
                     outputL = (left * masterVolume) / 127;
                     outputR = (right * masterVolume) / 127;
+#ifdef NITRO_SOUND_STATS
+                    preL = outputL;
+                    preR = outputR;
+#endif
                     /* Headroom before the 16-bit saturation, not after it:
                      * attenuating a flat-topped sample just halves the flat
                      * top, leaving the clipping distortion in the waveform.
@@ -697,6 +850,27 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
                 }
                 stereo[2u * (at + i)] = saturate(outputL);
                 stereo[2u * (at + i) + 1u] = saturate(outputR);
+#ifdef NITRO_SOUND_STATS
+                if (sFrameFn) {
+                    unsigned ch;
+                    sFrame.index = sFrameIndex++;
+                    sFrame.preL = preL;
+                    sFrame.preR = preR;
+                    sFrame.postL = outputL;
+                    sFrame.postR = outputR;
+                    for (ch = 0; ch < NITRO_SOUND_CHANNEL_COUNT; ++ch)
+                        sFrame.tap[ch] = NITRO_SOUND_TAP_OFF;
+                    for (k = 0; k < count; ++k) {
+                        const Channel *c = &channels[k];
+                        sFrame.tap[c->channel] = c->tap[i];
+                        sFrame.format[c->channel] = (uint8_t)c->format;
+                        sFrame.volume[c->channel] = (uint8_t)c->volume;
+                        sFrame.shift[c->channel] = (uint8_t)c->shift;
+                    }
+                    sFrameFn(sFrameArg, &sFrame);
+                    memset(sFrame.event, 0, sizeof(sFrame.event));
+                }
+#endif
             }
         }
     }
@@ -707,3 +881,13 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
         }
     }
 }
+
+#ifdef NITRO_SOUND_STATS
+void NitroSound_SetFrameHook(NitroSoundFrameFn fn, void *arg)
+{
+    sFrameFn = fn;
+    sFrameArg = arg;
+    sFrameIndex = 0;
+    memset(&sFrame, 0, sizeof(sFrame));
+}
+#endif

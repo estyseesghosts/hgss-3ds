@@ -1,0 +1,128 @@
+From 1228b7d4f2706e2ef09ef3d0516a70413887b15b Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Tue, 3 Nov 2026 18:44:45 +0000
+Subject: [PATCH] pc-box: handle mode 4 and guard a non-enum state
+
+MOVE POKEMON can reach the PC box as mode 4 (the menu list item has no
+retail start case). PCBox_State_Start left nextState uninitialised, so the
+fade returned the previous frame's PCBoxWork pointer as the next state and
+PCBox_RunStateMachine indexed gPCBoxStateTable with it. The hardware log
+shows *state == work == 0x01243658 at the table load.
+
+Initialise the state, add a mode-4 default to the move layout, default the
+mode grid layout, and make the port dispatch recover instead of indexing out
+of bounds. Port-only; the DS #else text is unchanged.
+---
+ include/application/pc_box/pc_box_internal.h |  4 ++++
+ src/application/pc_box/pc_box_states.c       | 19 +++++++++++++++++++
+ src/application/pc_box/pc_box_text.c         |  9 +++++++++
+ src/application/pc_box/pc_box_ui.c           |  8 ++++++++
+ 4 files changed, 40 insertions(+)
+
+diff --git a/include/application/pc_box/pc_box_internal.h b/include/application/pc_box/pc_box_internal.h
+index c9da2c0..e20b01f 100644
+--- a/include/application/pc_box/pc_box_internal.h
++++ b/include/application/pc_box/pc_box_internal.h
+@@ -670,7 +670,11 @@ enum PCBoxState PCBox_State_HandleYesNo(PCBoxWork *work);
+ enum PCBoxState PCBox_State_WaitPaletteFlash(PCBoxWork *work);
+ enum PCBoxState PCBox_State_StartSubApp(PCBoxWork *work);
+ enum PCBoxState PCBox_State_RunSubApp(PCBoxWork *work);
++#ifdef SDK_PORT_3DS
++enum PCBoxState PCBox_State_Start(PCBoxWork *work);
++#else
+ void PCBox_State_Start(PCBoxWork *work);
++#endif
+ enum PCBoxState PCBox_State_MoveModeInput(PCBoxWork *work);
+ enum PCBoxState PCBox_State_ApplyMonMove(PCBoxWork *work);
+ void PCBox_State_ReturnToActionMenu(PCBoxWork *work);
+diff --git a/src/application/pc_box/pc_box_states.c b/src/application/pc_box/pc_box_states.c
+index 4e36e45..50d79c1 100644
+--- a/src/application/pc_box/pc_box_states.c
++++ b/src/application/pc_box/pc_box_states.c
+@@ -251,8 +251,13 @@ enum PCBoxState PCBox_State_RunSubApp(PCBoxWork *work) {
+     return PC_BOX_STATE_INIT;
+ }
+ 
++#ifdef SDK_PORT_3DS
++enum PCBoxState PCBox_State_Start(PCBoxWork *work) {
++    enum PCBoxState nextState = PC_BOX_STATE_MOVE_MODE_INPUT;
++#else
+ void PCBox_State_Start(PCBoxWork *work) {
+     enum PCBoxState nextState;
++#endif
+ 
+     PlaySE(SEQ_SE_DP_PC_LOGIN);
+     switch (work->args->mode) {
+@@ -278,8 +283,22 @@ void PCBox_State_Start(PCBoxWork *work) {
+         PCBox_ShowSlotMonInfo(work, 0);
+         nextState = PC_BOX_STATE_ITEM_MODE_INPUT;
+         break;
++#ifdef SDK_PORT_3DS
++    default:
++        /* Mode 4 is the PC menu's blank/list entry; it has no retail UI
++         * handler. Treat it as the move layout (InitPanels already does),
++         * instead of starting the fade with an uninitialised stack value
++         * that can be the previous frame's PCBoxWork pointer. */
++        PCBox_ShowSlotMonInfo(work, 0);
++        nextState = PC_BOX_STATE_MOVE_MODE_INPUT;
++        break;
++#endif
+     }
++#ifdef SDK_PORT_3DS
++    return PCBox_StartFadeIn(work, nextState);
++#else
+     PCBox_StartFadeIn(work, nextState);
++#endif
+ }
+ 
+ enum PCBoxState PCBox_State_MoveModeInput(PCBoxWork *work) {
+diff --git a/src/application/pc_box/pc_box_text.c b/src/application/pc_box/pc_box_text.c
+index 832a2d5..bfe3022 100644
+--- a/src/application/pc_box/pc_box_text.c
++++ b/src/application/pc_box/pc_box_text.c
+@@ -1150,7 +1150,11 @@ s32 PCBox_FindTouchedTrayPartySlot(void) {
+ }
+ 
+ void PCBox_CreateModeGridInput(PCBoxWork *work) {
++#ifdef SDK_PORT_3DS
++    int layout = 3;
++#else
+     int layout;
++#endif
+ 
+     switch (work->args->mode) {
+     case PC_BOX_MODE_DEPOSIT:
+@@ -1165,6 +1169,11 @@ void PCBox_CreateModeGridInput(PCBoxWork *work) {
+     case PC_BOX_MODE_MOVE_ITEMS:
+         layout = 6;
+         break;
++#ifdef SDK_PORT_3DS
++    default:
++        layout = 3;
++        break;
++#endif
+     }
+     PCBox_FreeGridInput(work);
+     work->view->gridInput = GridInputHandler_Create(gPCBoxGridLayouts[layout].hitboxes, gPCBoxGridLayouts[layout].dpadBoxes, gPCBoxGridLayouts[layout].callbacks, work, TRUE, work->returnCursorPos, HEAP_ID_10);
+diff --git a/src/application/pc_box/pc_box_ui.c b/src/application/pc_box/pc_box_ui.c
+index 6d92832..d42c071 100644
+--- a/src/application/pc_box/pc_box_ui.c
++++ b/src/application/pc_box/pc_box_ui.c
+@@ -2266,6 +2266,14 @@ BOOL PCBox_AnimatePartySwappedItemMove(PCBoxWork *work) {
+ }
+ 
+ BOOL PCBox_RunStateMachine(PCBoxWork *work, int *state) {
++#ifdef SDK_PORT_3DS
++    if ((unsigned)*state >= PC_BOX_STATE_EXIT) {
++        /* A handler's return value is the next state. A void handler (the
++         * decomp declares many PC-box entries void) leaves an arbitrary
++         * r0 on ARM; never index the table with it. */
++        *state = PC_BOX_STATE_START;
++    }
++#endif
+     *state = gPCBoxStateTable[*state](work);
+     if (*state == PC_BOX_STATE_EXIT) {
+         return FALSE;
+-- 
+2.43.0
+

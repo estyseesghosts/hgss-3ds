@@ -14,6 +14,10 @@
 /* ---------------------------------------------------- the polygon drawer */
 
 int NitroPort_PicaInit(void);
+/* Whether the display wants the sun shadows (their vertex room is allocated
+ * by NitroPort_PicaInit, before the compose config is read). Call it first;
+ * HGSS's shell passes its ComposeConfig.shadows, which is 0. */
+void NitroPort_PicaSetShadowRoom(int on);
 void NitroPort_PicaExit(void);
 /* The classic path: a 256x192 image of the scene, read back and handed to
  * the 2D renderer (NitroPort_Gx3dSubmitRGBA8). */
@@ -217,11 +221,20 @@ typedef struct ComposeConfig {
     int grade;               /* the colour grade on the 3D's textures */
     int sunFixed;            /* the sun where sunElevation, sunAzimuth say, not by the clock */
     float sunElevation, sunAzimuth;   /* (degrees; NitroPort_PicaLook) */
+    int texScale;            /* the 2D layer texels a DS pixel: 0 automatic (2 for SHARP/SCALE2X when
+                              * there is memory), or 1/2 to ask for it. An Old 3DS wants 1: the 2x
+                              * sets are 13,824 KB and cannot fit, and trying them first leaves the
+                              * memory ladder to drop the menu and the weather BG on the way down. */
 } ComposeConfig;
 
 int NitroPort_ComposeInit(const ComposeConfig *config);
 void NitroPort_ComposeExit(void);
 void NitroPort_ComposeSetSmooth3d(int smooth3d);
+/* The 2D filter (COMPOSE_FILTER_*) and the 3D texture filter (0-4, see
+ * ComposeConfig.filter3d) from the next frame. Any thread: the request is
+ * applied on the display thread at the next frame. Returns 0 if the
+ * compositor is not set up yet. */
+int NitroPort_ComposeSetFilter(int filter2d, int filter3d);
 
 /* The 2D layers of an engine's picture: the drawer's working buffers
  * (owned by the compositor; one set per engine), filled by the 2D renderer

@@ -1,0 +1,38 @@
+From b42abc3313d4c34c61df0a395d6e3b5c4b4c9e29 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 14:21:20 -0500
+Subject: [PATCH] math_util: build the CRC-16 table GF_CalcCRC16 actually uses
+
+GF_CRC16Init (src/math_util.c:171) called MATH_CRC16InitTable, and
+GF_CalcCRC16 (src/math_util.c:167) calls MATH_CalcCRC16CCITT. On the DS the
+name builds the CCITT table, which is the pair HGSS intended. The port's
+compatibility header remaps the name to ntrtwl's reflected table (the one that
+pairs with MATH_CalcCRC16), so the port built a reflected table and then
+updated it MSB-first: a deterministic CRC that is not CRC-16/CCITT and does
+not match any save the game or an emulator writes.
+
+Every save footer CRC was therefore wrong. A valid cartridge or emulator save
+failed ValidateSaveSectorFooter (all four slots), so Continue did not appear;
+a save the port wrote carried the wrong CRC and the original ROM would reject
+it. Load the escape hatch the compatibility header provides, under
+SDK_PORT_3DS only, so the DS build's inline stays untouched.
+---
+ src/math_util.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/math_util.c b/src/math_util.c
+index da97059..f8e3cbc 100644
+--- a/src/math_util.c
++++ b/src/math_util.c
+@@ -1,3 +1,11 @@
++#ifdef SDK_PORT_3DS
++/* GF_CRC16Init pairs this builder with GF_CalcCRC16's
++ * MATH_CalcCRC16CCITT. The port's nitro/math/crc.h otherwise maps
++ * MATH_CRC16InitTable to ntrtwl's reflected table (for MATH_CalcCRC16),
++ * which would make every save footer CRC wrong. Keep HGSS's meaning. */
++#define HGSS_MATH_KEEP_HGSS_CRC16_INIT
++#endif
++
+ #include "math_util.h"
+ 
+ #include "global.h"

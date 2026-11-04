@@ -182,6 +182,11 @@ game runs silent and says so in `log.txt`. This is not an error.
   `manifest.json` must be copied together into
   `/3ds/pokeheartgold/`. Re-run step 3 and copy both files again; do not
   rename them.
+- **A save from an emulator shows New Game.** A raw 512 KiB `.sav` now loads
+  (the 2026-11-02 CRC fix). A DeSmuME `.dsv` has a text footer: run
+  `python3 tools/savetool.py normalize old.dsv -o heartgold.sav` first. A save
+  written by an early 3DS build has legacy substruct CRCs; the current build
+  migrates them on first read.
 - **“The save data could not be accessed.”** The save is read/write; check the
   SD card is not locked and has free space. Remove a damaged `heartgold.sav`
   only if you do not need it (the game makes a new one).

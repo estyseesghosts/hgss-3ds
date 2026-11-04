@@ -98,6 +98,38 @@ class Validate(unittest.TestCase):
             st.validate(b"\0" * 100)
 
 
+class Repair(unittest.TestCase):
+    def test_repairs_every_wrong_crc(self):
+        img = bytearray(make_image())
+        # The early 3DS builds wrote all four footers with a non-CCITT CRC.
+        for m in (0, st.MIRROR_SIZE):
+            for size, off in ((SIZE0, 0), (SIZE1, (SIZE0 + 0xFF) & ~0xFF)):
+                img[m + off + size - 2] ^= 0xFF
+        self.assertEqual(st.validate(bytes(img))["status_name"], "NOT_EXIST")
+        fixed, repairs = st.repair(bytes(img))
+        self.assertEqual(len(repairs), 4)
+        self.assertEqual(st.validate(fixed)["status_name"], "IS_GOOD")
+
+    def test_leaves_a_footer_that_is_not_a_crc_problem(self):
+        img = bytearray(make_image())
+        struct.pack_into("<I", img, SIZE0 - 8, 0)  # footer magic
+        fixed, repairs = st.repair(bytes(img))
+        self.assertEqual(repairs, [])
+        self.assertEqual(fixed, bytes(img))
+
+    def test_cli_writes_a_separate_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = os.path.join(d, "bad.sav")
+            out = os.path.join(d, "fixed.sav")
+            img = bytearray(make_image())
+            img[SIZE0 - 2] ^= 0xFF
+            open(bad, "wb").write(img)
+            self.assertEqual(st.main(["repair", bad, "-o", out]), 0)
+            self.assertEqual(st.validate(open(out, "rb").read())["status_name"], "IS_GOOD")
+            # The input is untouched.
+            self.assertEqual(open(bad, "rb").read(), bytes(img))
+
+
 class Diff(unittest.TestCase):
     def test_block_runs(self):
         a = bytearray(0x5000)

@@ -44,6 +44,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **Co-Authored-By.** The commit trailer that [CONTRIBUTING.md](../../CONTRIBUTING.md) asks for on commits written with AI help. See [Contributing](Contributing.md).
 
+**CRC-16/CCITT.** The save checksum: polynomial `0x1021`, initial value `0xFFFF`, most significant bit first, no final XOR. The game's `GF_CalcCRC16` must use the table built for `MATH_CalcCRC16CCITT`; the port's compat header otherwise substitutes ntrtwl's reflected table, which was patch 1906's bug ([Save-Compatibility](Save-Compatibility.md), [3DS-Pitfalls](3DS-Pitfalls.md#the-crc-table-was-not-ccitt)).
+
 **Compat header.** A small header in `hgss/compat/include/` that gives the port layer the name HGSS uses (or lacks) for something the Platinum code includes, without editing the vendored file. The directory is on the `hgss_nitro.py` include path and holds 65 files: missing ntrtwl headers, SDK stand-ins/data, ARM7 sound tables and NNS tables ([Build-Reference](Build-Reference.md#7-how-the-vendored-port-build-is-wired)).
 
 ## D
@@ -140,7 +142,7 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **Noise channel.** Sound channels 14 and 15, driven by `SND_SetupChannelNoise`. After patch 1405 the port array is indexed by the DS low 16-bit address, so the control is at `0x400 + 16c`, not `16c`; patch 1407 fixes the two writes ([3DS-Pitfalls](3DS-Pitfalls.md#a-noise-note-writes-an-unused-hole)).
 
-**NNS volume table (`_0210D750`).** NitroSystem's 128-entry linear 0..127 volume-to-decibel table, used by `snd_player.c` before it pushes a player volume to the ARM7. On the DS it aliases NitroSDK's `SNDi_DecibelTable`; the port supplies it in `hgss/compat/src/nns_volume_table.c` because the decomp's empty alias section lands elsewhere under the port link ([3DS-Pitfalls](3DS-Pitfalls.md#the-nns-volume-table-is-an-empty-alias)).
+**NNS volume table (`_0210D750`).** NitroSystem's 256-entry (512-byte) volume-to-decibel table. Entries 0..127 are the linear 0..127 player volume; entries 128..255 are the DS's `.rodata.unified_01` tail, which the field fader reads at index 128 (0 dB). On the DS it aliases NitroSDK's `SNDi_DecibelTable`; the port supplies it in `hgss/compat/src/nns_volume_table.c` because the decomp's empty alias section lands elsewhere under the port link ([3DS-Pitfalls](3DS-Pitfalls.md#the-nns-volume-table-is-an-empty-alias); [decisions 2026-11-02](../decisions.md)).
 **NARC.** The DS's archive format for game data files. Its generated index headers have the extension `.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4).
 
 **NAIX.** The extension of the generated NARC index headers, such as `msgdata/msg.naix` ([gameplan.md](../../gameplan.md), Phase 2, step 4; [tools/layout_probe/run_probe.py](../../tools/layout_probe/run_probe.py)).
@@ -177,6 +179,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **Patch-guard check.** A planned CI check that every game patch is either guarded by `SDK_PORT_3DS` or listed as a GCC-only fix. It is not in the repo yet ([gameplan.md](../../gameplan.md), "CI workflows").
 
+**Pixel perfect (field).** The remaster option that draws the field's upper screen as 400x240 DS pixels 1:1, showing more world instead of scaling the 256x192 picture. It is the only integer-scaled, pixel-sharp option for the upper screen ([3DS-Remaster-Audit](3DS-Remaster-Audit.md)).
+
 **PICA200.** The 3DS GPU. The port's 3D path and the planned 2D renderer both target it ([gameplan.md](../../gameplan.md), Phase 11).
 
 **Platinum.** The pokeplatinum-3ds port (GabeSud0), whose `3ds_port/` is vendored here. Its decomp is pret/pokeplatinum ([gameplan.md](../../gameplan.md), "What we reuse"; [platinum.lock](../../platinum.lock)).
@@ -199,6 +203,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 
 **savetool.** `tools/savetool.py`, which normalizes, validates and compares save images ([Save-Compatibility](Save-Compatibility.md)).
 
+**Remaster (display).** Platinum's native-resolution display path: GPU-composited 2D and 3D at 400x240/320x240, with wide-screen, pixel-perfect field, smooth 3D and lower-menu options. The machinery is vendored in `3ds_port`; HGSS uses it as its only display path since Phase A ([3DS-Remaster-Audit](3DS-Remaster-Audit.md)).
+
 **SDK_PORT_3DS.** The macro that selects port-only code in the SDK patches and the game patches. The DS build never defines it, so the MWCC build compiles the original text ([Patch-Stack](Patch-Stack.md)).
 
 **SDK_CW and __MWERKS__.** The macros Platinum's patches use to detect MWCC. The HGSS patches use `SDK_PORT_3DS` instead ([patches/NitroSDK/0101](../../patches/NitroSDK/) message).
@@ -208,6 +214,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **Survey.** A progress measure that counts how many files parse or compile, not a gate: `tools/sdk_compile_survey.py` (SDK) and `tools/port_compile_survey.py` (port layer) ([Tools-Reference](Tools-Reference.md)).
 
 **Save mirror.** One of the two `0x40000` halves of the 524,288-byte save image. The game writes each chunk into both mirrors ([Save-Compatibility](Save-Compatibility.md)).
+
+**Substruct CRC.** A 16-bit CRC stored inside each save substruct, checked by `SaveSubstruct_AssertCRC`. The slot footer is a separate CRC. Early 3DS builds wrote both with the wrong table; patch 1907 migrates a substruct CRC on first read ([Save-Compatibility](Save-Compatibility.md), [3DS-Pitfalls](3DS-Pitfalls.md#the-communication-error-screen-can-be-an-assert)).
 
 **Save slot.** One of the two save regions inside a mirror. Slot 0 starts at offset 0, and slot 1 starts at the next `0x100` boundary ([Save-Compatibility](Save-Compatibility.md)).
 
@@ -222,6 +230,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **TEV.** The texture environment stages of the PICA200 GPU, which combine colours. The plan uses them for some 2D and 3D effects ([gameplan.md](../../gameplan.md), Phase 6e and Phase 11).
 
 **TP.** The touch screen, read through the ARM7 ([docs/port-wiring.md](../port-wiring.md), "PXI protocols differ").
+
+**Touch mapping.** Converting the 3DS lower-screen coordinates (0..319, 0..239) to the DS's (0..255, 0..191) or to the remaster's lower-menu panel. The HGSS shell currently passes raw 3DS coordinates; see [3DS-Remaster-Audit](3DS-Remaster-Audit.md).
 
 **Thread (SDK thread).** A thread that NitroSDK schedules. On the port, each one runs on a real 3DS or PC thread, and only one runs game code at a time ([3ds_port/nitro/src/port_thread.c](../../3ds_port/nitro/src/port_thread.c) header).
 
@@ -246,6 +256,8 @@ Terms are listed alphabetically. Each one is used in this project's docs, and th
 **WM.** The DS wireless manager: about 40 `WM_*` functions in the game. The plan stubs them until Phase 10, then replaces them with UDS ([gameplan.md](../../gameplan.md), Phase 2, step 7 and Phase 10b).
 
 **Wine.** A compatibility layer that runs Windows programs on Linux. The project uses WineHQ 10.0 to run MWCC and the Nitro SDK tools in the dev container ([docs/decisions.md](../decisions.md)).
+
+**Wide art.** Hand-drawn pictures for the bands beside the DS's 320-pixel canvas in the remaster's upper screen, keyed by the layer's art. The editor and sharing tools are vendored; HGSS needs its own captures ([3DS-Remaster-Audit](3DS-Remaster-Audit.md)).
 
 **Write-through.** The save rule that each completed write reaches the file, and then is flushed, before the SDK is told it finished ([gameplan.md](../../gameplan.md), save rule 3).
 

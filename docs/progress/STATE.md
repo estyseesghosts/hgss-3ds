@@ -1,8 +1,9 @@
 # Current state
 
-Last verified: **2026-11-02 (session 14: the SoulSilver program)**, inside the dev container
-(`/workspaces/pokeheartgold-3ds`), with the tree at **82 patches** (`NitroSDK` 16, `NitroSystem` 4,
-`pokeheartgold` 62). Everything below that says "verified" was run on that tree on that date, and the
+Last verified: **2026-11-03 (session 19: Old 3DS performance waves W0-W2)**, natively on macOS
+(`DEVKITPRO=/opt/devkitpro`, venv `/Users/terezi/hgss/bin/python`), with the tree at **86 patches**
+(`NitroSDK` 16, `NitroSystem` 4, `pokeheartgold` 64). The last container run was 2026-11-02
+(session 18). Everything below that says "verified" was run on the tree on the date given, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
 this page; do not trust it blindly.
 
@@ -12,19 +13,21 @@ program compiles 1092/1092, builds both archives and packages `pokeheartgold.3ds
 SoulSilver, `pokesoulsilver.3dsx`). Phase 3's data
 pipeline is complete: verify/extract/pack, the boot-time pak check and its tests, and the SD layout doc.
 **Both halves of the Phase 1 DS gate pass at 78 patches**; both matching builds reproduce the retail
-ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 1904, 1905, 0304 and 0605 are
+ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`). Patches 1407, 1904-1907, 0304 and 0605 are
 `SDK_PORT_3DS`-only (`#else` text unchanged), and the gate is the evidence.
+
+Session 15 fixed the save CRC table (1906) and migrates legacy substruct CRCs (1907); a legacy field save now reaches the wild battle on the PC. Session 18 implements **Phase A** of [3DS-Remaster-Audit](../wiki/3DS-Remaster-Audit.md): the HGSS shell now compiles `port_compose_pica.c`, presents both screens at 400x240/320x240 through the Platinum compositor, draws the 3D at native resolution, maps touch 1.25x, and has no classic 1:1 fallback on either console. Hardware validation on a real Old 3DS/New 3DS is the remaining check.
 
 ## Phases
 
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 82 patches apply from scratch (the DS gate last ran at 78; 1904/1905 are port-only); `make test` 355 Python tests + 20 SDK suites; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 86 patches in the stack (the DS gate last ran at 78; 1904-1909 are port-only); the last full `make test` was 355 Python tests + 20 SDK suites, plus session 15's save tests; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS, for HeartGold and SoulSilver; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold` and `pokesoulsilver` programs exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; both retail dumps verified, extracted and packed; the HG pack opens in the PC program and the SS program boots to its main menu. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **In progress; runs on hardware** | GPU worker, 60 Hz cap, the NNS volume table, pre-saturation 6 dB headroom, NDSP cache flush/native rate, the camera-plane drop, the battle Poképics (0304/0605) and the close-hang fix are in the latest artifacts; both games have their own program and folder; hardware re-run pending. |
+| 5 3DS shell | **Phase A remaster in progress; hardware run pending** | The shell now uses Platinum's compositor, drawer threads and V-blank presentation at 400x240/320x240; 3D at native resolution; touch maps 1.25x; no classic fallback. Old 3DS uses `smooth3d = 0`. Builds and tests pass; the real-hardware run (Old and New 3DS) is the next owner check. Earlier shell work (60 Hz cap, NNS volume table, NDSP cache flush/native rate, camera-plane drop, battle Poképics 0304/0605, close-hang fix) remains. **Old 3DS performance plan (2026-11-03, plan only):** [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md). |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -34,8 +37,8 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | `Done: build/upstream (82 patches applied)` |
-| Host tests | `make test` | **exit 0**; **355 Python tests** + **20 SDK suites** |
+| Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | last clean run: 82; 1906/1907 were applied and built this session, clean bootstrap not re-run |
+| Host tests | `make test` | last full run **exit 0**; **355 Python tests** + **20 SDK suites**; session 15 targeted: 4 save-CRC + 18 savetool + gcc_fixes |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |
@@ -44,10 +47,11 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Symbol cross-check | `python3 tools/symbol_crosscheck.py --pc build/pokeheartgold-pc --reference /work/pokeheartgold.ref/build/heartgold.us/main.elf` | matched 21,407 · allowlisted 3,328 · **missing 0** |
 | Settings open/close (PC) | scripted new game → bedroom → mother → X → OPTIONS → QUIT | **returns to the field at frame 35032**; two further cycles pass. Before patch 1904 it aborted at 35028 in `LoadBgVramScr` (`src=0x02C002C0`) |
 | Raw DS addresses | `python3 -m unittest tests.test_hw_addresses` | **7 tests, OK**; 0 raw `0x02000000`-`0x07FFFFFF` pointer literals in `src/` (20 before patch 1905, including the battle read and the background copy) |
-| Game compile (3DS) | `python3 tools/hgss_game.py --target 3ds --keep-going --out /work/hg-3ds2 -j8` | **1092/1092, 0 failed**; 150/150 `.s`; **linked, 0 unresolved**; `pokeheartgold.3dsx` **9,279,628 B** (`sha256 92381334…5285`); `3dsxdump` rc 0 (CODE 2126, RODATA 112, DATA 13, BSS 4446 pages) |
-| Game compile (3DS, SS) | `python3 tools/hgss_game.py --game soulsilver --target 3ds --keep-going --out /work/ss-3ds -j8` | **1092/1092, 0 failed**; **linked, 0 unresolved**; `pokesoulsilver.3dsx` **9,279,668 B** (`sha256 c2e9a50e…e4cf`); `3dsxdump` rc 0 (same page counts) |
+| Game compile (3DS) | `tools/hgss_game.py --target 3ds --keep-going -j 10 --out build/game-3ds` (native macOS) | **1092/1092, 0 failed**; **linked, 0 unresolved**; `pokeheartgold.3dsx` **5,775,356 B** (`sha256 7751bd1a…bfa5`); `validate_3dsx` **[]**; image **29.77 MiB** |
+| Game compile (3DS, SS) | `tools/hgss_game.py --game soulsilver --target 3ds --keep-going -j 10 --out build/game-3ds-ss` (native macOS) | **1092/1092, 0 failed**; **linked, 0 unresolved**; `pokesoulsilver.3dsx` **5,775,412 B** (`sha256 fbed84ee…e998`); `validate_3dsx` **[]** |
 | Battle Poképics (PC) | owner's `heartgold.sav` + the zig-zag input, `--frames 14000` | both Pokémon render; each battle scene is **720 tris (720 opaque), lost: 0 clipped**; before 0304/0605, `0 vtx` and then `360 clipped` |
 | Close from HOME (3DS) | HOME menu → Close | fixed in the shell (`[quit]` steps); the console run is the owner's check |
+| Patch stack complete | `python3 tools/check_patches.py` | **86/86 applied, 0 missing**; fails the build if any patch's `git am` subject is absent from `build/upstream` |
 | 3DS archives | same command | `libnitro.a` + `libnitrosystem.a`, 0 errors |
 | 3DS PICA/symbols | `arm-none-eabi-nm /work/slice-3d/pokeheartgold-3ds.elf \| grep -E 'NitroPort_Pica\|Gx3dThread'` | `T` for `NitroPort_PicaInit/Render/Exit`, `NitroPort_Gx3dThreadMain/Flush/ConvertPending`, and a strong `T NitroPort_Gx3dScenePublished`; the HGSS drop symbol is gone |
 | Data pipeline (real HG dump) | `builder/{verify_rom,extract_rom,pack}.py` | 513 files / 125,549,829 B extracted; 125,556,080 B pack; opens in `pokeheartgold-pc`; wrong build ID/version/corrupt/SHA-1 give the mapped messages and exit 2 |
@@ -145,16 +149,25 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
 
 ## Next actions, in order
 
-1. **Phase 4:** finish the exit items — a scripted save and its `savetool.py` check, the sanitizer
-   replay, the golden comparison once the user's captures exist, and the upstream drafts. The boot
-   itself now reaches Oak's speech and the first field (see [phase-4.md](phase-4.md)).
-2. **Phase 5:** confirm the GPU pipeline, the camera-plane 3D fix, the 60 Hz frame cap and the
-   NNS-table/6 dB-trim audio fixes on hardware (room, player sprite and intro 3D with no gap/fan;
-   rising `3D images:`; mean `total_us` near 16,700; no clipped/hung notes; `audio: N dropped
-   frames` near zero), then the remaining shell items (input, SMDH and a hardware run).
-3. Re-run the SDK survey (`tools/sdk_compile_survey.py`); the port survey is 46/46 at 78 patches.
-4. SoulSilver: the builder accepts the retail SHA-1 and the tests are image-driven, but no SS ROM was
-   available for an end-to-end pack/open; record it when a dump is available.
+1. **Old 3DS 2D renderer (the remaining wall).** Slices A (counters +
+   empty-line cut), B (scroll-shifted text-row cache), S2a (unified per-frame
+   keys), S3 (T_LAYER merge, SnapshotOver/finish plain paths, OBJ art-line
+   skip) and S4 (H-blank/audio/DMA attribution) are implemented, tested (141
+   tests) and staged (`57ed38d6`/`8f58b099`); hardware verdict pending
+   (`rows hit/total`, `text %`, `setup %`, `hbirq`). S2b/S2c (band cache,
+   VRAM generations) held for that data per instrument-first. Everything
+   measured this session is in
+   [agent-notes/s20-performance-session.md](agent-notes/s20-performance-session.md).
+2. **Audio to core 1 — tried, reverted.** Log 9 proved core 1 oversubscribed
+   (display down to 0.0 composes/s); default is back to core 0 with
+   `audiocore=` kept for A/B. The `[perf] audio:` drop counter stays.
+3. **Goldenrod outdoors** — still 5–6 composes/s: ~10,700 vertices and ~2,784
+   clipped vertices per scene keep geometry at 19–29 ms/scene, and the display
+   thread shares core 1 with it.
+4. **Phase 4 exit items** — scripted save + `savetool.py`, sanitizer replay,
+   goldens once captures exist, upstream drafts.
+5. **Phase 5 hardware re-run** — 3D rate and title, audio by ear, frame times,
+   Settings open/close, a wild encounter, the `.cia` decision.
 
 ## Open decisions
 
@@ -167,6 +180,15 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
   `pokesoulsilver.3dsx`, `soulsilver-nitrofs-1`) are implemented: `heartgold.h` selects the names and
   `tools/hgss_game.py --game soulsilver` compiles the matching program. The two games stay fully
   separate so a save can never cross over.
+- **Display remaster:** Phase A is implemented and mandatory. The HGSS shell compiles `port_compose_pica.c`, runs the drawer/display/V-blank threads, presents 400x240/320x240, draws the 3D at native resolution and maps touch 1.25x. There is no classic 1:1 path; a failed display shows `DisplayErrorScreen()`. An Old 3DS uses `smooth3d = 0`. Hardware validation (frame rate, memory, touch, stereo, audio, close) is pending on both models; Phases B-E (window hooks, pixel field, per-screen layouts, optional lower menu) are still in `docs/wiki/3DS-Remaster-Audit.md`.
+- **Old 3DS vs New 3DS display profiles:** the two consoles get **separate
+  fixed launch profiles**. Old 3DS: launch-time filtering only (1× texels, the
+  runtime X+R cycle removed), widescreen kept as a launch option and on by
+  default, the **lower screen's 2D at 30 Hz** while game logic stays 60 Hz, and
+  `smooth3d = 0`. New 3DS keeps the runtime presets, the smoother filters and
+  `smooth3d = 2`. Sharp 2× on Old 3DS is arithmetically impossible (its layer
+  sets alone are 13,824 KB against a 15,732 KB linear heap). Plan and evidence:
+  [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md).
 - Port-side fixes that are generic go to the Platinum maintainer as upstream PRs (assert/math
   force-includes, NNS table weak refs). HGSS-only shape changes stay in `hgss/`.
 - Commit trailer is `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
@@ -179,7 +201,7 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 # inside the container:
 cd /workspaces/pokeheartgold-3ds
-python3 tools/bootstrap.py            # "already at ... with 82 patches" if in sync
+python3 tools/bootstrap.py            # "already at ... with 86 patches" if in sync
 make test                            # exit 0 (355 tests + 20 SDK suites)
 make port-tests                      # exit 0 (pak + nitro + nitrosystem)
 python3 tools/hgss_game.py --target host32 --keep-going --out /work/pc -j5
@@ -215,6 +237,441 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 ### Log
 
 Newest first. Each entry: what changed, what was run, what it proved.
+
+### 2026-11-04 — wave 0 freeze (benchmark declaration; hardware runs pending owner)
+
+- **Frozen:** `~/hgss-private/benchmark/goldenrod-bench.txt` (`sha256
+  906d80bb…8925f8`, 471 entries) + `port.ini` (`sha256 c6b4a85a…cddf8`):
+  A-mash 0–600 through boot/title/menu/continue, UP/RIGHT zigzag every 8
+  frames to 4200; benchmark intervals are game frames 2400–4200. Config is
+  shipped defaults made explicit (`filter=sharp stereo=on wide=on fps=60`
+  + the script); per-console defaults (texScale, lower-30, cores) stay
+  automatic. Owner procedure: copy both files into
+  `sdmc:/3ds/pokeheartgold-ss/` (SS) alongside the current Goldenrod save,
+  boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
+  with setup % and rows hit/miss, `hb_*`, texture/settle counts,
+  `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
+- **Baseline artifacts for the benchmark runs:** HG `5,783,924 B` `sha256
+  57ed38d6…a13ec2b`, SS `5,783,980 B` `sha256 8f58b099…560df4`
+  (`validate_3dsx` `[]`). Supersedes all earlier pairs — do not run those.
+  Runs the same Wave 0 benchmark (`script.txt` + `port.ini` + save);
+  report `[perf] display/2d` with `rows hit/total`, `setup %`, `hbirq`,
+  `hb_*`, texture/settle counts, `linear_free`, `[gpu] clears`.
+- **Staged (current):** same pair, in `dist/sd-card/3ds/`,
+  `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`.
+- **Pending (owner-gated, not marked done):** the two 600-frame hardware
+  logs. Owner procedure: copy `benchmark/goldenrod-bench.txt` (as
+  `script.txt`) + `benchmark/port.ini` into `sdmc:/3ds/pokeheartgold-ss/`
+  (SS; HG folder/save for N3DS), boot, play nothing (the script drives),
+  and send back `log.txt` (needs ≥4200 frames).
+- **Save bytes (closed):** `~/hgss-private/soulsilver.sav` (`sha256
+  ecd65e77…91e74`, 524288 B, `savetool validate` IS_GOOD, newer mirror 0)
+  is the frozen benchmark save — the owner's current Goldenrod file. The
+  freeze is byte-complete.
+- **Native gate status (no container):** runnable per slice are
+  `test_hgss_game.py` (130), full `unittest discover -s tests` (416; 11
+  pre-existing container-only errors), both 3DS builds + `validate_3dsx`,
+  `check_patches.py`. NOT runnable natively and therefore pending with
+  procedure: host32 links (game-pc, port-tests, sdk-tests need `-m32`,
+  which cannot link on macOS), PC Goldenrod replay/goldens
+  (`tools/golden/run.py` needs the host32 binary), `--check-overlays`,
+  `symbol_crosscheck`, DS gate (`/work` absent). No patch-stack changes in
+  Waves 0–1, so no DS-gate rerun is owed.
+
+### 2026-11-04 — slice B: scroll-shifted text-BG row cache (all Old 3DS; New 3DS unchanged)
+
+- **What.** Text pixels are a pure function of map coordinate, so a rendered
+  map row serves every screen line showing it at any scroll offset. Per
+  (engine, BG) direct-mapped cache of 256 rendered rows (`TextBgPixel`
+  values), keyed by scroll-invariant `BgKey` + the wide-clear palette variant
+  `BgKey` misses, tagged by map row. The plain tile loop becomes a span copy
+  (`PUT` keeps front-layer/window semantics); all other paths and the
+  malloc-failure fallback are byte-identical. Per-frame keys computed once per
+  BG; captures set their own fresh keys.
+- **Memory.** Lazy 134 KB tables from the game heap (12 MB, ~6 MB free), only
+  for BGs actually drawn as text; linear/texture room untouched. The `[perf]
+  mem:` line will show it.
+- **Verdict lines.** `[perf] 2d:` gains `setup %` and `rows hit/total` — the
+  hit rate judges the design on hardware.
+- **Verified:** `tools/check_patches.py` 86/86; `validate_3dsx` `[]` on both;
+  `tests/test_hgss_game.py` 130 tests, 126 pass (the 4 `ObjectAliasTests` need
+  `gcc-10 -m32`, container-only) including 6 new `PerformanceSliceBTests`.
+  Two build failures on the way, both mine: a `now[2]` array shadowing
+  PerfLog's timestamp, and cache declarations used above their definition
+  (fixed with forward declarations after `Engine`).
+- **Staged:** HG `5,781,092 B` `sha256 606a4b4e…3106c65`, SS `5,781,084 B`
+  `sha256 d97a214f…4f66fe` (in `dist/sd-card/3ds/`,
+  `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`).
+- **Hardware run should report:** `rows hit/total` near 100% in the field and
+  the `text %` line down proportionally. If hits are low, the scroll pattern
+  defeats direct mapping and the design needs revisiting before any tuning.
+
+### 2026-11-04 — wave 1 in flight: S2a + S3 + S4 staged; hbirq fixed, o3dsched + no-div experiment added
+
+- **S2a** (unify 3 BgKey walks/BG/frame into one shared `frameKey`, reused by
+  LookUpArt, the gpuBg path and the row cache; provably identical keys):
+  implemented + tested, no behavior change by construction.
+- **S4** (scoped implementer, disjoint files `port_os/thread/timer/dma` +
+  additive `nitro_port.h` decls): per-IRQ-bit walk timing, SyncTimers
+  count/cost, sound-pump tick source, H-blank DMA transfer count. Lead
+  reviewed the diff + an independent scoped-explorer review: additions are
+  host-safe, paired, non-dispatch-changing; the only behavior deltas in the
+  diff are pre-existing session work (GxRefresh cadence, switch deferral),
+  not S4. Integrated: `[perf] hbirq:` per-bit line (attribution, explicitly
+  not a partition) + sound-pump timing split from game frame.
+- **S3** (merge/finish/OBJ, lead-implemented): opaque-pair merge extended to
+  exactly `T_LAYER` (proved flag-independent — no window bit, no prio filter,
+  `layerOf` written exactly where PUT would; revives the wide path on all
+  3D-screen lines); SnapshotOver alpha fill → memset when effect<2 or no
+  first-target bits; finalize falls back to the plain resolve under the same
+  guard (the brighten loop darkens even at effect 0/1 with target bits set,
+  so the bldcnt guard — not effect — is the correct condition); OBJ art-line
+  fast path (same ay/rows test the loop starts with). All provably
+  pixel-identical; 4 new `PerformanceSliceS3Tests`.
+- **Verified and staged (owner-requested test build):** both games build clean
+  (`validate_3dsx` `[]`; HG 5,783,924 B `sha256 57ed38d6…a13ec2b`, SS
+  5,783,980 B `sha256 8f58b099…560df4`); 141 tests, 137 pass (4
+  container-only errors). Supersedes all earlier pairs.
+- **This round's additions on top of Slice B:** hbirq last-walk fix (the
+  per-bit table resets every walk — diffing it underflowed, log-11's garbage
+  line), `o3dsched=display-first` experiment (opt-in, Old 3DS only: demote
+  the always-ready geometry worker below the event-driven display on core 1;
+  same-core threads don't preempt, so the lowest-priority ready thread
+  starves — log-9's 0.0 composes/s), integer divide/modulo removal in hot
+  2D paths (mask/shift, power-of-two only, provably identical).
+- Next: owner's benchmark run (scripted), then S2b/S2c granularity decision
+  from `rows hit/total` + `setup %`.
+
+### 2026-11-04 — slice A: 2D per-phase counters + empty-line cut (all Old 3DS; New 3DS unchanged)
+
+- **Counters.** `DrawEngineT` now accumulates per-engine ticks for text BGs,
+  other BG kinds (`LayerLine`), OBJs (sort + per-line), `Merge`, `BlendLine`,
+  windows, and finalize (backdrop/brighten/split fixups), plus line/draw
+  counts — via `NitroPort_Render2DProfile`, declared in
+  `nitro_port_render2d.h`. Ticks use `svcGetSystemTick` behind `#ifdef __3DS__`
+  (port_os.c's pattern; host builds read 0, counts stay exact). `PerfLog`
+  prints `[perf] 2d:` per interval (both engines combined, % of a core).
+  Overhead is ~14–26 tick reads/line (~0.5 ms/frame worst case); the hardware
+  numbers include it, so Slice B must beat them by more than that.
+- **Cut.** Backdrop-only lines (`t.filled == 0`, provably all zero: the line is
+  memset above and no `Merge`/`PUT` wrote into it) fill with the backdrop in
+  one pass instead of zero + resolve. Plain path only; brighten/blend paths
+  untouched.
+- **Verified:** `tools/check_patches.py` 86/86; `validate_3dsx` `[]` on both;
+  `tests/test_hgss_game.py` 124 tests, 120 pass (the 4 `ObjectAliasTests` need
+  `gcc-10 -m32`, container-only) including 5 new `PerformanceSliceATests`.
+  One build failure on the way: a `now[2]` array shadowed PerfLog's `now`
+  timestamp — renamed to `cur`.
+- **Staged:** HG `5,778,848 B` `sha256 d15ed488…ed4ead`, SS `5,778,904 B`
+  `sha256 330a8e84…84fde2` (in `dist/sd-card/3ds/`,
+  `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`).
+- **Hardware run should report:** the first `[perf] 2d:` lines from the field —
+  which phase owns the 22–33 ms render. That decides the Slice B cache design
+  (row cache vs per-BG band cache, and the key granularity).
+- **Follow-up (`log-o3ds-soulsilver-10.txt`):** attribution is unambiguous.
+  Field intervals read `text 21–25%, affine 0.0%, obj 2–5%, merge ~1%, blend
+  1–3%, window 0.0%, finish 9–15%` of core 0 — i.e. text BGs are ~60% of the
+  attributed 2D time, finish (backdrop/split fixups) second, everything else
+  noise. Affine BGs don't occur in the field; windows cost nothing. ~1/3 of
+  render is unattributed (per-frame setup: keys, art lookups, palettes — Slice
+  B should profile that too). `emptyLines` 0–8% of lines. Also seen again:
+  GPU `clears` at 20–30 ms in-field (the 167 ms Goldenrod line is the same
+  cost scaled by scene — a later target, not this round).
+
+### 2026-11-04 — wave 3: float in-between matching, audio to core 1, launch-only filter, lower 30 Hz (all Old 3DS; New 3DS unchanged)
+
+- **In-between-scene matching is now float.** `ndc_of` and `make_mid_scene`'s
+  `hx/hy/fx/fy` in `3ds_port/nitro/src/port_gx3d.c` were the last `double`
+  (soft-float) hot path; they are `float` with `fabsf`/`floorf`, mirroring the
+  landed clipping/projection conversion (screen coords to ~1/256 px, depth to
+  ~1–2 of 24 bits). The quarter-screen cut-off needs ~1e-7, not double.
+- **Audio moved to core 1 on Old 3DS** (`main_3ds.c` `AudioStart`: core 1,
+  priority still `0x2e` above game and geometry; New 3DS keeps `-2`).
+  `audiocore=0|1` in `port.ini` overrides either console. The per-interval
+  `[perf] audio:` line now names the core it measured and counts NDSP dropped
+  frames per interval (`%u dropped of %u`), not just at quit — that is the
+  underrun counter the move is judged by.
+- **X+R filter cycle is launch-only on Old 3DS.** The combo detection and
+  masking are untouched, but on an Old 3DS it never fires (`if (!sNew3ds)
+  filterCombo = false`): three of the five presets are identical at 1 texel a
+  pixel, and the `filter3d` presets would 2–4x texture memory mid-run with under
+  a megabyte free. New 3DS keeps the runtime presets and toast.
+- **Lower screen's 2D at 30 Hz on Old 3DS** (`lower30=on/off`, default on for
+  Old, off for New). `DrawerMain` skips engine B on odd stamps unless a redraw
+  is forced (`sMustDraw`, pending toast); a skipped frame publishes nothing so
+  the display reuses the last set. Only engine B ever skips (it cannot carry
+  the 3D); game logic and the upper screen stay 60 Hz. Fades still publish
+  through the brightness-only path when the picture is unchanged.
+- **Verified:** `tools/check_patches.py` 86/86; `validate_3dsx` `[]` on both;
+  `tests/test_hgss_game.py` 119 tests, 115 pass (the 4 `ObjectAliasTests` need
+  `gcc-10 -m32`, container-only) including 4 new `PerformanceWaveThreeTests`.
+- **Staged (revised twice):** HG `5,776,012 B` `sha256 31228ded…86725c`, SS
+  `5,776,068 B` `sha256 97d17359…6d199` — reverts the audio move to the core-0
+  default (see log-9 finding below). Supersedes both earlier wave-3 pairs
+  (`7d3986fc`/`9967fe33` and `9b0bcb26`/`58f556c3`); run this one.
+- **Follow-up from the owner's runs.** `log-o3ds-soulsilver-8.txt` (first wave-3
+  pair) printed audio `on core 0`: `AudioStart()` ran before
+  `RequestCore1Share()`, so the core-1 `threadCreate` failed into the fallback.
+  Fixed by requesting the share first (a test pins the call order in `main`).
+  `log-o3ds-souldilver-9.txt` (second pair, audio confirmed `on core 1`) then
+  ran **slower**: in the same field (same OAM, same verts, same scenes/s),
+  core 1 went geometry 61–79% → 84–100% busy for identical throughput, audio
+  9–28% → 24–40% (wall-clock inflation under preemption), and the display
+  starved as far as 0.0 composes/s. Core 1's 80% share fits geometry + display
+  but not audio on top — priority cannot create time on an oversubscribed
+  core. Default is back to core 0 on Old 3DS (`audiocore=` kept for A/B).
+  Also confirmed: `3D images: 0` matches logs 6/7 (not a regression), 0
+  dropped audio frames in all runs, and past frame ~4200 the heavy area still
+  saturates geometry at 99–100% (the known Goldenrod wall).
+  Still open: row-level 2D dirty tracking + per-BG band caching (the 39–59 ms
+  wall), the 167 ms Goldenrod `clears` line, publish beyond band-diff.
+
+### 2026-11-03 — the H-blank walk's scheduler switch (Old 3DS: 0.3 → 12–14 composes/s)
+
+- **Symptom and measurement.** `FRAMETIME` on an Old 3DS reported `hblank_us` of
+  9.5–18.7 ms whenever the game armed H-blank, and the split showed `hb_irq_us`
+  11.8–12.8 ms of it (`hb_keep_us` 0.45–0.7 ms, `hb_dma_us` 0). The H-blank
+  callback itself is `HBlankSystem_Callback` with idle tasks, and hoisting
+  `NitroPort_GxRefresh` out of the per-line raise changed nothing, so the cost
+  was neither the game's effect nor the FIFO refresh.
+- **Cause.** `NitroPort_IrqThreadSwitch` ran once per scanline — 192 scheduler
+  entries a frame — because the synthetic walk raises the interrupt 192 times.
+- **Fix.** The switch is deferred while the walk runs
+  (`NitroPort_IrqSwitchDeferred`): each raise still dispatches its handler and
+  does its bookkeeping, the switch request is noted, and **one** switch runs
+  when the walk ends, at the same point in the frame the game sees it.
+- **Result (Old 3DS, `log-o3ds-soulsilver-6.txt`):** `hb_irq_us` 12,751 → **411**;
+  `hblank_us` 18,737 → 2,234; game frame (`total_us`) 41,218 → **2,300–8,100 µs**;
+  drawer 1.1 fps / 721 ms → **12.1 fps / 54.8 ms** (38.7 render, 16.0 publish);
+  composes 1–2 → **9.9–13.7/s**. That single change took the port from a
+  slideshow to roughly 10–14 fps on an Old 3DS.
+- **Also in this build:** the two safe parts of the 3D command-build slice
+  (per-batch C3D state caching and alpha-31 texture hoisting) and the two
+  memory wins the revert had cost (lazy classic readbacks, opt-in shadow room:
+  `linear_free` back to 7.6–7.8 MB). Opaque batch merging and the stencil
+  change are permanently dropped — they caused duplicated geometry and
+  rectangular halos on hardware.
+- **Where the Old 3DS stands.** Field: game 2–8 ms, drawer 55 ms (39 render,
+  16 publish), composes 10–14/s. Goldenrod outdoors is the outlier: ~10,700
+  vertices and ~2,784 clipped vertices per scene, geometry busy 97% of core 1
+  (32.8 ms/scene), display build 490–768 ms — the display thread now shares
+  core 1 with geometry, so it starves there. The clipping/projection path is
+  written in `double` (soft-float on this CPU); converting it to `float` is the
+  next slice.
+
+### 2026-11-03 — the five-slice performance wave (core 1, publish, 2D, 3D, audio)
+
+Ran as five parallel slices on disjoint files, then integrated in one build.
+
+- **Core layout (`main_3ds.c`).** The display/compose thread runs on **core 1**
+  at `0x32` on an Old 3DS (New 3DS byte-identical); `displaycore=0|1` in
+  `port.ini` overrides it. The APT core-1 share is now requested **before any
+  core-1 thread exists** (`RequestCore1Share`), because the display thread is
+  created before the geometry start-up used to ask.
+- **Publish (`port_compose_pica.c`).** A 1x band-diff (`publish_bands`) against
+  the same per-target generations the 2x publisher uses, so unchanged rows are
+  not re-converted, re-tiled or re-flushed; a brightness-only publish that
+  reuses a certified set's textures with no conversion at all; arithmetic
+  RGB565 (verified identical over all 32,768 table inputs) with the table left
+  only for the 2x path.
+- **2D renderer (`port_render2d.c`).** Empty-row skips (one full-row memcpy,
+  alpha fill and memset per upper line when the 3D is at priority 0),
+  span-limited OBJ clears, wide fills, and the per-line window memcpy removed.
+  The agent also corrected the brief: with `split.snapshot = 1` the windows were
+  already fetched once a frame, so the per-line cost was the copy, not the lock.
+- **3D command build (`port_gx3d_pica.c`).** C3D state cached across batches,
+  alpha-31 textures hoisted out of the second loop, safe opaque-batch merging
+  (LEQUAL and translucent excluded), and the stencil test dropped when edges and
+  shadows are both off.
+- **Audio (`port_sound_chip.c`).** Silent-channel skip, hard-pan hoisting and a
+  full-volume shortcut, all bit-exact. The requested `step == PHASE_ONE` path
+  was **proved unreachable** at 32,768 Hz (`SOUND_CLOCK / 32768` is not
+  integral) and deliberately not added.
+- **H-blank (this session's own slice).** The walk is split into
+  `hb_keep_us` / `hb_dma_us` / `hb_irq_us`. It is 8 us when the game does not
+  arm H-blank and **9.5-13.8 ms when it does**, which is what collapses
+  `log-o3ds-soulsilver-3.txt` from 17 fps to 0.3 composes/s.
+- **Build hazard found:** an edited port source (`port_os.c`) did not trigger a
+  rebuild of `libnitro.a` in an incremental run, so the link failed on the new
+  symbol. Removing `build/<out>/sdk` forced a correct rebuild. Worth knowing:
+  the app objects are compiled by the Python tool and always fresh, the vendored
+  archives are not guaranteed to be.
+- **Verified:** both games compile 1092/1092, link clean and package
+  (`validate_3dsx` `[]`); 115 tests, 111 pass (the 4 `ObjectAliasTests` need
+  `gcc-10 -m32`).
+- **Staged:** HG `5,774,652 B` `sha256 9e642cad…b7bb`, SS `5,774,708 B`
+  `sha256 d51e463a…bd45`.
+
+### 2026-11-03 — native tree short five patches; W0 phases and explicit texScale
+
+- **Missing patches:** `build/upstream` was not a complete application of the
+  patch stack. Five had never been applied: **1904** (Settings close),
+  **1905** (hardware addresses use the port's macros), **1909** (PC-box mode 4),
+  **NitroSDK 0605** (ortho projection/rotations) and **NitroSystem 0304**
+  (software-sprite commands, the battle Poképics fix). The symptom on hardware
+  was a data abort in `WirelessStatusIcon_LoadChar`, which still read the raw
+  `0x04000000` that 1905 replaces. All five are applied now (86/86; 87 commits,
+  byte-identical subject set to the container's tree), and
+  `tools/check_patches.py` fails the build if any patch's `git am` subject is
+  missing from the tree's history -- wired into `make check-bootstrap` and into
+  `tools/hgss_game.py`, since the native workflow invokes it directly.
+- **W0 phases:** `FRAMETIME` now carries `hblank_us` and `handoff_us`, the two
+  phases of `DrawFrame`, because the audits attributed its 13.5 ms on an Old
+  3DS to three different things. The accepted core-1 APT share is logged
+  (`APT_GetAppCpuTimeLimit`) -- every core-1 placement decision depends on it
+  and it had never been read back.
+- **W2 `texScale`:** `ComposeConfig.texScale` (and a `texscale=` launch key)
+  lets an Old 3DS ask for 1 texel a pixel outright. The Old 3DS was walking the
+  2x attempt (13,824 KB of layer sets), failing, and dropping the lower menu
+  and the weather BG on the way down; it now allocates 1x directly. The banner
+  prints the effective scale, not the requested filter.
+- **Verified:** both games compile and link; `validate_3dsx` `[]`; 115 tests,
+  111 pass (the 4 `ObjectAliasTests` need `gcc-10 -m32`).
+- **Staged:** HG `5,764,600 B` `sha256 fb95ace2…3f99`, SS `5,764,656 B`
+  `sha256 e2d2e16d…52d0`.
+
+### 2026-11-03 — dead on both consoles: a live thread was freed at teardown
+
+- **Symptom:** the first W0-W2 build (`sha256 2fefabad…c75d`) died on both an
+  Old and a New 3DS. `log-luma-crash.txt` shows the path:
+  `[0] the game's thread ended at frame 0`, then the game keeps running
+  (overlays load, SoulSilver starts), then `[110] [quit] closing` — exactly
+  2 s later.
+- **Cause:** a pre-existing race, exposed by the timing change rather than
+  introduced by it. `WaitForGame` loops on `sGameThreadAlive`, which the game
+  thread sets as its **first instruction**. A newly created thread has not
+  necessarily run yet when `threadCreate` returns, so the loop saw `false`,
+  reported "the game's thread ended at frame 0", and fell through to
+  `threadJoin(thread, 2000 ms)` — which blocked for its full 2 s while the
+  game reached frame ~110 — then `threadFree`d a thread that was still
+  running. The teardown then unhooked APT and exited NDSP/gfx underneath live
+  game code, and the process faulted.
+- **Fix:** `sGameThreadAlive = true` is set **before** `threadCreate` (and back
+  to false if creation fails), so "not started" is no longer read as "ended";
+  and `threadFree` now runs only when the join succeeded. A timed-out join
+  sets `sThreadsStuck`, which makes the caller `svcExitProcess` instead of
+  tearing the runtime down around a live thread.
+- **Tests:** `ThreadLifecycleTests` (2 tests) pin both halves; 110 tests, 106
+  pass, the 4 `ObjectAliasTests` still need `gcc-10 -m32`.
+- **Staged:** HG `5,763,136 B` `sha256 728d16c2…4462`, SS `5,763,128 B`
+  `sha256 ab2e23ff…2211`; `validate_3dsx` `[]`.
+
+### 2026-11-03 — Old 3DS performance waves W0-W2 (compiler, memory, instruments)
+
+- **W1 compiler:** `tools/hgss_game.py:port_cflags()` now adds `-O2` for the
+  1,092 game objects (they were at GCC's default `-O0`; only the app and the
+  vendored port libraries had `-O`). The sanitizer build keeps its own level.
+  Measured: game `.text` 8,146,868 → 4,512,808 B (−44.6%); image
+  **33.26 → 29.84 MiB**; artifact **9,403,452 → 5,763,136 B**. On a 64 MiB Old
+  3DS process that returns **3.42 MiB** to the heaps.
+- **W2 memory (partial):** `__system_allocateHeaps` now takes an explicit
+  small-process split (`remaining <= HEAP_SMALL_TOTAL` → game 12 MB, display the
+  rest) instead of the old `remaining > 16 MB * 2` guard that a 30.73 MiB Old
+  3DS failed, silently half-splitting. With W1 the linear heap is
+  **15.73 → 22.16 MB**. Two dead allocations are gone: the classic readback
+  images (1,152 KB) are made by `classic_images_ready()` on the first
+  `NitroPort_PicaRender`, and the sun-shadow vertex room (1,438 KB) is opt-in
+  through `NitroPort_PicaSetShadowRoom`, which the shell calls with
+  `sCompose.shadows` = 0.
+- **W0 instruments:** `LOG_LINE` 220 → 512 (every `[perf] display` line in the
+  Old 3DS log was truncated mid-field), a 32 KB stdio buffer flushed once a
+  second plus explicit flushes at the `[perf]` block and on terminate/reset, and
+  `total_us`/`state_us` now measured from one anchor (frame 1800 reported
+  `total_us` 10,810 < `state_us` 14,118, which is impossible). New line:
+  `[perf] mem: linear_free=… KB game_heap_used=… KB`.
+- **Verified:** both games compile 1092/1092 and link clean natively;
+  `validate_3dsx` `[]`; `tests/test_hgss_game.py` 108 tests, 104 pass and the 4
+  `ObjectAliasTests` errors are the `gcc-10 -m32` object tests that cannot run
+  on macOS.
+- **Staged:** `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/` and
+  `~/hgss-private/sd-card/3ds/`.
+  HG `5,763,136 B` `sha256 728d16c2…4462`;
+  SS `5,763,128 B` `sha256 ab2e23ff…2211`.
+- **Not yet done:** W3-W6 (game-thread frame cost, 2D renderer, publish,
+  threading) and the rest of W2 (command-list sizing, lower menu, texture
+  floor, explicit `texScale`). Hardware runs pending.
+
+### 2026-11-03 — Old 3DS performance investigation (plan only, no code changed)
+
+- **Trigger:** the owner reports the New 3DS does not hold 60 fps and drains
+  the battery; the Old 3DS does not reach 30 fps and plays "incredibly slow".
+- **Evidence:** `log-o3ds-soulsilver.txt` (149 lines) and
+  `log-soulsilver-normal-playthrough.txt` (5,229 lines), plus five read-only
+  audits (compiler, CPU, GPU/compositor, memory/VRAM, threading) and source
+  reads by the lead.
+- **Three measured facts the plan rests on:**
+  - the Old 3DS process is exactly 64 MiB — image 33.26 MiB (code 8.41,
+    rodata 0.44, bss 24.40) plus heaps 30.73 MiB — so there is no larger
+    memory mode to request; the `.3dsx` header was parsed to prove it;
+  - `__system_allocateHeaps` never takes its small-process branch on Old 3DS
+    (`remaining` 30.73 MiB < the `16 MB * 2` lower bound), so it half-splits
+    15.7 MB game / 15.7 MB linear although the game heap used 798 KB;
+  - the 3D texture cache ends with **408 KB**, which is why a 512×512 texture
+    can never be resident and why `[hitch] ... 20 textures converted: 8907.4 ms`
+    happened at frame 1204.
+- **Compiler finding:** all 1,092 game objects are at **`-O0`**
+  (`port_cflags()` has no `-O`; only the app objects add `-O2`). Measured
+  out of tree: `-O2` shrinks game `.text` 8,146,868 → 4,512,808 B (−44.6%) and
+  the packaged artifact 9,403,804 → 5,762,900 B. Unvalidated artifacts exist at
+  `build/game-3ds-o2/` and `build/game-3ds-o2-ss/`.
+- **Not settled:** the average DS clock is 39-46 Hz by the audio counters, but
+  sampled frame bodies cost 14.0-14.7 ms (~70 Hz) and frame 1800 reports
+  `total_us` 10,810 < `state_us` 14,118 — so the existing counters cannot
+  attribute the deficit. W0 fixes the instruments before anything else.
+- **Output:** the wave plan is
+  [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md).
+  **No source was changed and no artifact was restaged.**
+
+### 2026-11-03 — black screens after HOME/sleep (shell suspend handshake)
+
+- **Symptom:** closing the lid or opening HOME and resuming SoulSilver left
+  both screens black; HOME/exit became unresponsive. `log-black-screen.txt`
+  ends at `paused (APT hook 0)` with no `resumed (APT hook 1)`.
+- **Cause:** `GpuComposeLoop` could pass its one `sSuspended` check and then
+  spend 5-90 ms building a frame. `NitroPort_ComposeGpuBusy()` only sees
+  submitted GPU work, so `AptHook` returned while a frame was about to
+  submit. APT took the GPU and the GX queue never completed.
+- **Fix:** shell-only suspend handshake:
+  - `sComposing` bracketed around both compose calls (busy-first, check
+    `sSuspended` after; Dekker ordering);
+  - `AptHook` waits for `sComposing` before `NitroPort_ComposeHold(1)`, then
+    for drawers/GPU;
+  - `ONRESTORE` only sets `sResumePending`; the real resume happens in
+    `NitroPort_OnFrame` after `aptMainLoop` returns, so citro3d's own
+    `ONRESTORE` hook has restored PICA state;
+  - `sAptHome`/`sAptAsleep` guards from Platinum.
+- **Tests:** 102 shell tests; full `make test` green. Both `.3dsx` rebuilt.
+
+### 2026-11-03 — PC box MOVE POKEMON crash (patch 1909)
+
+- **Symptom:** choosing MOVE POKEMON in the PC box crashed immediately on
+  entering OVY_14. Deposit/withdraw worked.
+- **Cause:** the box can launch as mode 4; `PCBox_State_Start` had cases only
+  for modes 0-3 and left `nextState` uninitialised. The fade returned the
+  previous frame's `PCBoxWork *` as the state index, and
+  `PCBox_RunStateMachine` faulted on `gPCBoxStateTable[heap pointer]`
+  (`*state == work == 0x01243658`).
+- **Fix:** patch 1909 initialises/defaults the start state (mode 4 -> move
+  layout), defaults the mode-grid layout, and bounds-checks the dispatch
+  under `SDK_PORT_3DS`. Tests 102/102, full `make test` green; both `.3dsx`
+  rebuilt.
+- **Trace:** [agent-notes/s18-3ds-remaster-phase-a.md](agent-notes/s18-3ds-remaster-phase-a.md),
+  `log-move-pc-crash.txt`.
+
+### 2026-11-02 (session 18) — Phase A: the 3DS remaster display
+
+- **The display is Platinum's compositor, and the only one.** `main_3ds.c`
+  links `port_compose_pica.c`, runs display/drawer/V-blank threads, presents
+  400x240/320x240, draws the 3D at native resolution, maps touch 1.25x and
+  keeps H-blank/weather handling. There is no 1:1 path; a failed GPU setup
+  shows `DisplayErrorScreen()`.
+- **Old 3DS is the same layout** with `smooth3d = 0`; the New 3DS averages a
+  2x render. Platinum's `__system_allocateHeaps` reserves linear memory.
+- **Tests:** `test_hgss_game.py` updated away from the classic display; 85/85
+  pass in the container. Both `.3dsx` files build with the remaster objects.
+- **Pending:** the real Old/New 3DS run (frame rate, memory, touch, stereo,
+  audio, HOME-menu close). Full record:
+  [agent-notes/s18-3ds-remaster-phase-a.md](agent-notes/s18-3ds-remaster-phase-a.md).
 
 ### 2026-11-01 (session 9, 3D) — the camera-point vertex and the title gap
 
@@ -256,6 +713,37 @@ Newest first. Each entry: what changed, what was run, what it proved.
   [agent-notes/s11-3d-camera-point.md](agent-notes/s11-3d-camera-point.md)
 - **DS gate at 78 passed** for both games (HG `4fcded0e…b5a37`, SS
   `f8dc38ea…e582`), so patch 1407's `#else` text is unchanged.
+
+### 2026-11-02 (session 15) — the save CRC table, and the tall-grass "communication error"
+
+- **The port did not build the CRC-16 table it used.** `GF_CRC16Init` called
+  `MATH_CRC16InitTable`, and `GF_CalcCRC16` used `MATH_CalcCRC16CCITT`. The
+  DS's name builds the CCITT table; the port's `nitro/math/crc.h` remaps it to
+  ntrtwl's reflected table, so the port built a reflected table and updated it
+  MSB-first. Every real save failed all four footer checks; port-written saves
+  still loaded because writer and reader shared the mistake. The retail
+  save's slot 0 stores `0xa9ab`; the old pair computes `0x2b01`, exactly what
+  `Downloads/heartgold-1.sav` stores. Patch **1906** keeps HGSS's CCITT
+  builder for `math_util.c` under `SDK_PORT_3DS`.
+- **Tall grass showed the communication-error screen because of a save
+  assert.** The old builds also wrote each substruct's CRC with the wrong
+  table. The loader only checked the slot footer, so the save loaded; the
+  first `Save_*_Get` on a substruct asserted. `PrintErrorMessageAndReset`
+  uses `msg_0041_00003`, the same text as the communication-error screen, and
+  the main menu's beacon watch leaves a `CommState` alive, so the assert drew
+  it. Patch **1907** detects the old deterministic substruct CRC, replaces it
+  with the CCITT value and continues; anything else still asserts. PC
+  verification: the legacy field save now reaches the wild battle with
+  `720 tris (720 opaque, 0 translucent)`, `lost: 0 clipped`.
+- **Save tooling.** `tools/savetool.py` gained `repair IN -o OUT`, which
+  recomputes structurally valid slot-footer CRCs and repairs saves from the
+  early 3DS builds. It cannot know substruct boundaries; the port migrates
+  those on first read.
+- **Tests.** `tests/test_save_crc.py` (4), `tests/test_savetool.py` (18),
+  `tests/sdk/gcc_fixes/run.sh` group (l), and the PC encounter above.
+- **Artifacts.** HG `9,280,164 B`, `sha256 c87eaeb8…1103fa40`; SS
+  `9,280,204 B`, `sha256 32b5f3f7…c42565`.
+  [agent-notes/s17-save-crc-and-tall-grass.md](agent-notes/s17-save-crc-and-tall-grass.md)
 
 ### 2026-11-02 (session 14) — the SoulSilver program
 
@@ -424,9 +912,10 @@ Newest first. Each entry: what changed, what was run, what it proved.
   window, and real quiet gaps.
 - **Fix:** `hgss/compat/src/nns_volume_table.c` supplies the real table;
   `tools/hgss_game.py` drops `.rodata.alias_d750` from the SDK data object and
-  checks the linked symbol (`[sound] _0210D750 -> nns_volume_table.c
-  (256 bytes)`). `tests/test_hgss_game.py` keeps it equal to `SNDi_DecibelTable`
-  and the build. The DS gate is untouched.
+  checks the linked symbol (512 bytes, entry 128 = 0 dB; see
+  [decisions 2026-11-02](../decisions.md)). `tests/test_hgss_game.py` keeps
+  entries 0..127 equal to `SNDi_DecibelTable`, 128..255 equal to the DS tail,
+  and checks the build. The DS gate is untouched.
 - **Still clipped at low volume.** The notes were right, but the user heard
   clipping that survived turning the console down, so it was in the samples.
   A retail title captured from melonDS and calibrated with a full-scale tone
@@ -590,10 +1079,11 @@ Newest first. Each entry: what changed, what was run, what it proved.
   1902) and the ASan link needed the MSL `std::__new_handler`. The overlay loader's bulk `.data`
   restore is a known ASan global-redzone artifact; the full replay runs with `report_globals=0` while
   heap/stack stay on.
-- **3DS shell**: centered 1:1 display, D-pad/circle-pad input, APT pause, crash log, optional NDSP,
-  scripted-input replay and a generic SMDH. `.3dsx` packages; `.cia` is blocked on makerom/bannertool
-  (absent; user decision). Frame-time lines and `tools/frametime_report.py` exist; the hardware
-  budget table is pending.
+- **3DS shell**: Phase A remaster display (400x240/320x240 compositor, native-resolution 3D,
+  1.25x touch mapping, no 1:1 fallback), D-pad/circle-pad input, APT pause, crash log, optional
+  NDSP, scripted-input replay and a generic SMDH. `.3dsx` packages; `.cia` is blocked on
+  makerom/bannertool (absent; user decision). Frame-time lines and `tools/frametime_report.py`
+  exist; the Old/New 3DS hardware budget table is pending.
 - **End-to-end:** real HG pack, no save, 20,000 frames: logo, full movie, title, main menu, Oak's
   speech (portrait/text/touch buttons), gender, naming keyboard, confirmation, first bedroom. No
   crash or stall. Calibrated `tests/inputs/{boot-title,main-menu-nosave,newgame-buttons}.txt`.

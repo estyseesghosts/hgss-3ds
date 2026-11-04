@@ -51,6 +51,7 @@
 #include <nitro.h>
 #include <nitro_port.h>
 #include <nitro_port_gx3d.h>
+#include <nitro_port_render2d.h>
 #include <nitro_port_wide.h>
 #include <nitro_port_wideart.h>
 #include <stddef.h>
@@ -73,6 +74,22 @@ extern unsigned char NitroPort_IoReg[];
  * or 32 bits is at an aligned offset in them (the masks keep it so). */
 typedef u16 __attribute__((may_alias)) u16a;
 typedef u32 __attribute__((may_alias)) u32a;
+
+/* Slice-A profile ticks: the 3DS's tick counter (port_os.c's pattern: the
+ * port never includes libctru's headers, so the one prototype it needs is
+ * declared here). Host builds have no counter: phases measure 0 there and
+ * only the counts are exact. */
+#ifdef __3DS__
+extern u64 svcGetSystemTick(void);
+#define R2D_NOW() svcGetSystemTick()
+#else
+#define R2D_NOW() 0
+#endif
+
+/* Slice-A profile accumulators, per engine. An engine is drawn by one
+ * thread at a time (as sWork assumes), so no lock; the getter's copy can
+ * tear mid-draw, which is fine for a diagnostic read once per interval. */
+static NitroRender2DProfile sProfile[2];
 
 static inline u16 Rd16(const u8 *p, u32 off)
 {
@@ -288,6 +305,19 @@ typedef struct Engine {
 
 static void ShiftDown(const struct Engine *e, u8 *regs);
 
+/* Slice B row cache (defined below, used by DrawTextBgT above its
+ * definition): a rendered map row per (engine, BG), keyed scroll-invariant. */
+typedef struct {
+    u64 key;          /* BgKey without scroll + clear variant (0: empty) */
+    u16 ty;           /* map row */
+    u16 px[512];      /* the row's pixels (colour | OPAQUE, or 0) */
+} TextRowEntry;
+static TextRowEntry *sTextRows[2][4];
+static u64 sTextKey[2][4];
+static u64 TextRowKey(const Engine *e, int bg, u16 bgcnt, u32 dispcnt);
+static const u16 *TextRowCached(const Engine *e, int pe, int bg, u64 key, int ty, u16 bgcnt,
+                                u32 dispcnt);
+
 /* The windows moved or widened on a BG (NitroPort_WideWindows): as they
  * were when the display state was taken, when drawn from that (as the
  * VRAM's tiles were then too), else as they are. How many. */
@@ -298,6 +328,22 @@ static int EngineWindows(const Engine *e, int bg, NitroWideWindow *out)
         return e->taken->nwins[bg];
     }
     return NitroPort_WideWindows(e->isA ? 0 : 1, bg, out, NITRO_WIDE_MAX_WINDOWS);
+}
+
+/* The windows to read, not copy, on a line. The taken state already holds
+ * the frame's copy (NitroPort_Render2DTakeState), so the line path reads
+ * that instead of copying it per BG per line; a live draw has no such
+ * copy and asks each time (its windows can change between lines unseen by
+ * a serial: NitroPort_WideWindows also drops a window whose struct the
+ * game reused). */
+static const NitroWideWindow *EngineWindowsRef(const Engine *e, int bg, int *n, NitroWideWindow *live)
+{
+    if (e->taken != NULL) {
+        *n = e->taken->nwins[bg];
+        return e->taken->wins[bg];
+    }
+    *n = NitroPort_WideWindows(e->isA ? 0 : 1, bg, live, NITRO_WIDE_MAX_WINDOWS);
+    return live;
 }
 
 /* The OBJ layer's pixels on the current line. */
@@ -1228,7 +1274,8 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
                           Segment *segs, int ownOnly)
 {
     int origin = e->origin, width = e->width, n = 0, i, k;
-    NitroWideWindow wins[NITRO_WIDE_MAX_WINDOWS];
+    NitroWideWindow winsLive[NITRO_WIDE_MAX_WINDOWS];
+    const NitroWideWindow *wins = NULL;
     int nwins = 0;
     struct { int x0, x1, shift, off; } moved[NITRO_WIDE_MAX_WINDOWS];
     int nmoved = 0;
@@ -1304,7 +1351,7 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
         return 3;
     }
     if (e->anchorWindows) {
-        nwins = EngineWindows(e, bg, wins);
+        wins = EngineWindowsRef(e, bg, &nwins, winsLive);
     }
     for (i = 0; i < nwins; i++) {
         int top = wins[i].top * 8, bottom = (wins[i].top + wins[i].height) * 8;
@@ -1375,8 +1422,10 @@ static int TextBgSegments(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int y
             n++;
             return n;
         }
-        /* Where it is on the DS's screen (left of its first column). */
-        a = ((wins[i].left * 8 - hofs) % mapW + mapW) % mapW;
+        /* Where it is on the DS's screen (left of its first column). Text maps
+         * are 256 or 512 wide (sTextSizes), so the wraparound is a mask, not
+         * a divide: ARMv6 has no integer divider (a libcall per line). */
+        a = (wins[i].left * 8 - hofs) & (mapW - 1);
         if (a >= 256) {
             a -= mapW;   /* (partly left of the screen) */
         }
@@ -1553,7 +1602,11 @@ typedef struct ArtRun {
 static inline void ArtRunStart(ArtRun *r, int a, int size, int period)
 {
     r->a = a;
-    r->m = a % period;
+    /* Power-of-two periods (text maps, 256-pixel runs) wrap with a mask, not
+     * a divide: ARMv6 has no integer divider (a libcall per segment). Other
+     * periods (the 320-wide art) keep the divide. Either way r->m ends in
+     * [0, period), as the old modulo-plus-fixup did. */
+    r->m = (period > 1 && (period & (period - 1)) == 0) ? a & (period - 1) : a % period;
     if (r->m < 0) {
         r->m += period;
     }
@@ -1659,14 +1712,39 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         continue;
     }
     if (segs[seg].fixed == SEG_CLEAR) {
-        for (; x < xe; x++) {
-            PUT(x, 0, flags);
-        }
+        /* Nothing to put: PUT with 0 writes nothing unless the layer's own
+         * line is being drawn (T_PLAIN), and that line was zeroed above. */
         continue;
     }
     if (segs[seg].fixed == SEG_COLOR) {
         u16 c = segs[seg].color;
 
+        if (c == 0 && !(flags & T_PLAIN)) {
+            continue;   /* (as SEG_CLEAR: nothing written, nothing counted) */
+        }
+        if (flags == 0 && (((uintptr_t)row | (uintptr_t)(row + x)) & 3) == 0) {
+            /* (a plain merge: the same colour over the pixels not yet
+             * drawn, two at a time, as MergeT does) */
+            u32 c2 = (u32)c * 0x10001u;
+
+            for (; x + 1 < xe; x += 2) {
+                u32 have = *(u32a *)(row + x);
+
+                if (!(have & 0x80008000u)) {
+                    *(u32a *)(row + x) = c2;
+                    filled += 2;
+                } else {
+                    if (!(have & OPAQUE)) {
+                        row[x] = c;
+                        filled++;
+                    }
+                    if (!(have & 0x80000000u)) {
+                        row[x + 1] = c;
+                        filled++;
+                    }
+                }
+            }
+        }
         for (; x < xe; x++) {
             PUT(x, c, flags);
         }
@@ -1749,7 +1827,31 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
         }
         continue;
     }
-    while (x < xe) {
+    /* Slice B: scroll-shifted row reuse. The tile loop below computed
+     * exactly TextBgPixel per pixel (same map entry, flip, palette and
+     * transparency in every path), so a cached map row holds those values;
+     * indexing by map coordinate makes any scroll offset, window shift or
+     * segment layout hit. PUT still applies the front-layer and window
+     * rules, so merging is unchanged. A NULL row (malloc failed) draws
+     * direct, as before. */
+    {
+        const u16 *cachedRow =
+            TextRowCached(e, e->isA ? 0 : 1, bg, sTextKey[e->isA ? 0 : 1][bg], ty, bgcnt, dispcnt);
+
+        if (cachedRow != NULL) {
+            while (x < xe) {
+                int tx = (x + off) & (mapW - 1);
+                int n = mapW - tx;
+
+                if (n > xe - x) {
+                    n = xe - x;
+                }
+                for (int i = 0; i < n; i++) {
+                    PUT(x + i, cachedRow[tx + i], flags);
+                }
+                x += n;
+            }
+        } else while (x < xe) {
         int tx = (x + off) & (mapW - 1);
         int px0 = tx & 7;
         int n = 8 - px0;
@@ -1838,6 +1940,7 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             }
         }
         x += n;
+    }
     }
     }
     t->filled = filled;
@@ -1993,6 +2096,64 @@ static inline __attribute__((always_inline)) void MergeT(Target *t, const u16 *l
     int x;
     TARGET_LOCALS(t);
 
+    /* (a plain merge, no windows or layers: the common BG row) Two opaque
+     * pixels of the layer over two of the screen can be copied as one
+     * word; where either pair isn't wholly opaque, the pixel path below
+     * decides each. The source and the screen must both be word-aligned
+     * for the wide loads and stores (a pixel-path x0 may not be).
+     * Slice S3: T_LAYER as well as 0. Proved flag-independent: with no
+     * T_WINDOW bit the general path below is PUT without the window or
+     * priority checks, i.e. exactly what the word and pixel paths do —
+     * plus layerOf, which the word path was missing (it only ran at
+     * flags == 0). T_PLAIN and T_WINDOW still take the general path. */
+    if ((flags == 0 || flags == T_LAYER) && prioOf == NULL &&
+        (((uintptr_t)(row + x0) | (uintptr_t)(line + x0)) & 3) == 0) {
+        int writeLayer = (flags & T_LAYER) != 0;
+
+        for (x = x0; x + 1 < x1; x += 2) {
+            u32 pair = *(const u32a *)(line + x);
+
+            if ((pair & 0x80008000u) == 0x80008000u) {
+                u32 have = *(u32a *)(row + x);
+
+                if (!(have & 0x80008000u)) {
+                    *(u32a *)(row + x) = pair;
+                    if (writeLayer) {
+                        layerOf[x] = layer;
+                        layerOf[x + 1] = layer;
+                    }
+                    filled += 2;
+                    continue;
+                }
+            }
+            /* (one or both of the pair needs the general path) */
+            if ((line[x] & OPAQUE) && !(row[x] & OPAQUE)) {
+                row[x] = line[x];
+                if (writeLayer) {
+                    layerOf[x] = layer;
+                }
+                filled++;
+            }
+            if ((line[x + 1] & OPAQUE) && !(row[x + 1] & OPAQUE)) {
+                row[x + 1] = line[x + 1];
+                if (writeLayer) {
+                    layerOf[x + 1] = layer;
+                }
+                filled++;
+            }
+        }
+        for (; x < x1; x++) {
+            if ((line[x] & OPAQUE) && !(row[x] & OPAQUE)) {
+                row[x] = line[x];
+                if (writeLayer) {
+                    layerOf[x] = layer;
+                }
+                filled++;
+            }
+        }
+        t->filled = filled;
+        return;
+    }
     for (x = x0; x < x1; x++) {
         /* (a 3D pixel of alpha 0 can have a colour, but no OPAQUE) */
         if ((line[x] & OPAQUE) && (prioOf == NULL || prioOf[x] == prio)) {
@@ -2397,12 +2558,84 @@ static u64 BgKeyCached(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt
     return key;
 }
 
+/* Slice B: scroll-shifted text-BG row reuse. A text BG's rendered pixel is
+ * a pure function of its map coordinate (TextBgPixel): the scroll only
+ * selects which map pixels show. So a map row rendered once can serve every
+ * screen line showing it, at any horizontal scroll, until the map, tiles
+ * or palettes change. Keyed by BgKey (which covers exactly those, and not
+ * the scroll) plus the wide-clear palette variant BgKey doesn't cover, and
+ * tagged by map row. Direct-mapped by row (256 slots cover any frame's
+ * window: e->height tops out at NITRO_RENDER2D_MAX_H): no within-frame
+ * collisions, no LRU bookkeeping, and a miss costs one row render.
+ * Per (engine, BG), malloc'd on first text draw (NULL: the cache is off and
+ * drawing is exactly as before). An engine is drawn by one thread at a time,
+ * as sWork assumes. */
+#define TEXTROW_SLOTS 256
+
+/* This BG's cache key: its map, tiles and colours, but not its scroll --
+ * plus the wide-clear palette variant, which BgKey doesn't cover (BgPal4
+ * reads bgPal4Clear for it instead of bgPal4). */
+static u64 FoldClearVariant(const Engine *e, int bg, u64 key)
+{
+    if (key != 0 && ((e->clearBgs >> bg) & 1)) {
+        u32 i;
+
+        for (i = 0; i < 16; i++) {
+            key = KeyAdd(key, e->clearMask[i]);
+        }
+    }
+    return key;
+}
+
+static u64 TextRowKey(const Engine *e, int bg, u16 bgcnt, u32 dispcnt)
+{
+    return FoldClearVariant(e, bg, BgKeyCached(e, bg, BG_TEXT, bgcnt, dispcnt));
+}
+
+/* The BG's map row ty rendered (colour | OPAQUE, or 0, per pixel), from the
+ * row cache, rendering and keeping it on a miss. NULL when the cache is off
+ * (its malloc failed): the caller then draws direct, as before. */
+static const u16 *TextRowCached(const Engine *e, int pe, int bg, u64 key, int ty, u16 bgcnt,
+                                u32 dispcnt)
+{
+    TextRowEntry *table;
+    TextRowEntry *slot;
+    int i;
+
+    /* No key (captures drawn without one): draw direct, as before. */
+    if (key == 0) {
+        return NULL;
+    }
+    table = sTextRows[pe][bg];
+    if (table == NULL) {
+        table = (TextRowEntry *)malloc(TEXTROW_SLOTS * sizeof(TextRowEntry));
+        if (table == NULL) {
+            return NULL;
+        }
+        memset(table, 0, TEXTROW_SLOTS * sizeof(TextRowEntry));
+        sTextRows[pe][bg] = table;
+    }
+    slot = &table[ty & (TEXTROW_SLOTS - 1)];
+    if (slot->key == key && slot->ty == (u16)ty) {
+        sProfile[pe].rowHits++;
+        return slot->px;
+    }
+    for (i = 0; i < 512; i++) {
+        slot->px[i] = TextBgPixel(e, bg, bgcnt, dispcnt, i, ty);
+    }
+    slot->key = key;
+    slot->ty = (u16)ty;
+    sProfile[pe].rowMisses++;
+    return slot->px;
+}
+
 /* (wider canvas) each BG's hand-drawn picture, if there's one made where
  * the BG is now: of a text BG's pictures, the one made at the scroll
  * nearest its scroll now, less than a screen away (a picture of what's on
  * screen, not of another part of the map). */
 #define ART_REST 8   /* pixels from where a picture was made that are still there */
-static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
+static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt,
+                        const u64 *frameKey)
 {
     int bg;
 
@@ -2418,7 +2651,9 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             ((e->noArtBgs >> bg) & 1)) {
             continue;   /* (a BG the screen's parts move: its own pixels; NO_ART: no picture) */
         }
-        key = BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
+        /* Slice S2a: the frame's key, computed once in DrawEngineT's setup
+         * (NULL: compute here, as before — captures). */
+        key = frameKey != NULL ? frameKey[bg] : BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
         if (key == 0) {
             continue;
         }
@@ -2453,11 +2688,14 @@ static void LookUpArt(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
             }
             e->artH[bg] = (short)hofs;
             e->artV[bg] = (short)vofs;
-            /* how far it has scrolled since, the shorter way round its map */
-            dx = ((curH - hofs) % mapW + mapW) % mapW;
-            dy = ((curV - vofs) % mapH + mapH) % mapH;
-            e->artDx[bg] = (short)(dx >= mapW / 2 ? dx - mapW : dx);
-            e->artDy[bg] = (short)(dy >= mapH / 2 ? dy - mapH : dy);
+            /* how far it has scrolled since, the shorter way round its map
+             * (masks, not divides: text maps are 256 or 512 wide). */
+            dx = ((curH - hofs) & (mapW - 1));
+            dx = dx >= mapW / 2 ? dx - mapW : dx;
+            dy = ((curV - vofs) & (mapH - 1));
+            dy = dy >= mapH / 2 ? dy - mapH : dy;
+            e->artDx[bg] = (short)dx;
+            e->artDy[bg] = (short)dy;
             /* Its bands while it's across where the picture was made (a
              * few pixels either way), or always for a strip that scrolls
              * round (_loop). Up and down doesn't matter (the running
@@ -3009,8 +3247,45 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
     if (!(dispcnt & 0x1000) || (f->lineCount[y] == 0 && f->artCount == 0)) {
         return FALSE;
     }
-    memset(out->color, 0, (size_t)e->width * sizeof(out->color[0]));
-    memset(out->window, 0, (size_t)e->width);
+    /* Only the span the line's OBJs can write is cleared: nothing outside
+     * it is read while they're drawn (the sprite pictures cover the whole
+     * row, and the squeeze maps a cluster's sprites round the cluster,
+     * so both keep the full clear). */
+    {
+        int lo = e->width, hi = 0;
+
+        if (f->artCount > 0 || e->squeeze) {
+            lo = 0;
+            hi = e->width;
+        } else {
+            for (k = 0; k < f->lineCount[y]; k++) {
+                const Obj *obj = &f->obj[f->onLine[y][k]];
+                int a = obj->ox, b = obj->ox + obj->boxW;
+
+                if (obj->stretch > 0) {
+                    a -= obj->stretch;
+                } else if (obj->stretch < 0) {
+                    b -= obj->stretch;
+                }
+                if (a < 0) {
+                    a = 0;
+                }
+                if (b > e->width) {
+                    b = e->width;
+                }
+                if (a < lo) {
+                    lo = a;
+                }
+                if (b > hi) {
+                    hi = b;
+                }
+            }
+        }
+        if (lo < hi) {
+            memset(out->color + lo, 0, (size_t)(hi - lo) * sizeof(out->color[0]));
+            memset(out->window + lo, 0, (size_t)(hi - lo));
+        }
+    }
     out->prios = 0;
     out->x0 = (short)e->width;
     out->x1 = 0;
@@ -3221,6 +3496,23 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
         }
     }
     if (f->artCount > 0) {
+        /* Slice S3 art-line fast path: the sprite-row copy below feeds
+         * only the WideArtIsGame lookups in the loop, which all start with
+         * this same ay/rows test. When no art group covers the line the
+         * loop writes nothing, so skip both the copy and the walk. */
+        int artHere = 0, ak;
+
+        for (ak = 0; ak < f->artCount; ak++) {
+            int aay = ArtWrap(y - f->art[ak].dy, H, 256);
+
+            if (aay >= 0 && (f->art[ak].rows == NULL || f->art[ak].rows[aay])) {
+                artHere = 1;
+                break;
+            }
+        }
+        if (!artHere) {
+            return out->x0 < out->x1 || f->lineCount[y] > 0;
+        }
         /* (the sprites' own pixels, before any picture goes on: a picture's
          * pixel that's a sprite's moved along is drawn from them) */
         memcpy(sprites, out->color, (size_t)e->width * sizeof(u16));
@@ -3739,19 +4031,44 @@ static void BlendLineOver(const BlendLineState *b, u16 *row, const u8 *enableLin
  * 3D (BlendLineOver), or brightened or darkened. */
 static void SnapshotOver(NitroRender2DSplit *split, BlendLineState *blendState, const u16 *row,
                          int y, int nlist, BOOL blend2, int flags, int effect, int evy,
-                         u16 bldcnt, const u8 *enableLine, const u8 *layer1)
+                         u16 bldcnt, const u8 *enableLine, const u8 *layer1, int drawn)
 {
     int w = blendState->width;
     u16 *over = split->over + y * w;
     u8 *alpha = split->overAlpha + y * w;
     int x;
 
+    /* Nothing of the line is in front of the 3D: the whole over row is
+     * empty, so it needn't be copied (nor its alpha filled in: a pixel's
+     * alpha is only read where its over pixel is OPAQUE). nlist alone
+     * doesn't say this, as the layers aren't noted when they don't
+     * blend 2. */
+    if (drawn == 0) {
+        memset(over, 0, (size_t)w * sizeof(u16));
+        return;
+    }
     memcpy(over, row, (size_t)w * sizeof(u16));
     if (blend2) {
         blendState->y = y;
         blendState->nlist = nlist;
         blendState->alphaOut = alpha;
         BlendLineOver(blendState, over, enableLine, layer1, (flags & T_WINDOW) != 0);
+        return;
+    }
+    /* Slice S3: without an effect that can fire on this row there is
+     * nothing to blend or brighten — the alpha is uniformly 16. The loop
+     * below needs effect >= 2 AND a first-target bit set; the two spellings
+     * agree exactly, so this is provably the same pixels. */
+    if (effect < 2 || (bldcnt & 0x1Fu) == 0) {
+        memset(alpha, 16, (size_t)w);
+        return;
+    }
+    /* Slice S3: without an effect that can fire on this row there is
+     * nothing to blend or brighten — the alpha is uniformly 16. The loop
+     * below is kept for effect >= 2 with first-target bits set; both spell
+     * it `effect >= 2`, so the two agree exactly. */
+    if (effect < 2 || (bldcnt & 0x1Fu) == 0) {
+        memset(alpha, 16, (size_t)w);
         return;
     }
     for (x = 0; x < w; x++) {
@@ -3810,6 +4127,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     const int width = fixedWidth ? fixedWidth : e->width;
     BOOL snapped;  /* (split) this line's layers in front of the 3D are noted */
     int y, x, bg, p;
+    /* Slice A: this engine's profile accumulators. */
+    int pe = e->isA ? 0 : 1;
+    NitroRender2DProfile *prof = &sProfile[pe];
+    u64 frameKey[4];
+    u64 tSetup = R2D_NOW();
 
     if (eva > 16) {
         eva = 16;
@@ -3828,7 +4150,17 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         if (kind[bg] == BG_LARGE) {
             kind[bg] = BG_NONE;   /* large-bitmap mode still unsupported */
         }
+        /* Slice S2a: this frame's scroll-invariant key per BG, computed
+         * once and shared by LookUpArt, the gpuBg path and the row cache
+         * (one BgKey walk instead of three). */
+        frameKey[bg] = (kind[bg] == BG_NONE || kind[bg] == BG_3D)
+                           ? 0
+                           : BgKeyCached(e, bg, kind[bg], bgcnt[bg], dispcnt);
+        /* Slice B: this frame's row key per text BG (the frame key plus
+         * the wide-clear palette variant). */
+        sTextKey[pe][bg] = kind[bg] == BG_TEXT ? FoldClearVariant(e, bg, frameKey[bg]) : 0;
     }
+    prof->setupTicks += R2D_NOW() - tSetup;
     if (e->isA && kind[0] == BG_3D && split == NULL) {
         e->height = H;   /* (a tall picture with the 3D: only in two layers, the 3D on the DS's lines) */
     }
@@ -3837,7 +4169,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             /* (a tall field: no pictures split, no hand-drawn ones: those
              * are the DS's lines' at the wider screen's 320) */
             DecideSplits(e, kind, bgcnt, dispcnt);
-            LookUpArt(e, kind, bgcnt, dispcnt);
+            LookUpArt(e, kind, bgcnt, dispcnt, frameKey);
         }
         DecideBandFills(e, kind, bgcnt, dispcnt);
         DecideTallEdges(e, kind, bgcnt, dispcnt);
@@ -3864,7 +4196,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             int gb = GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs);
 
             if (gb >= 0 && kind[gb] == BG_TEXT) {
-                u64 key = BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);
+                /* Slice S2a: the frame's key (computed once in setup). */
+                u64 key = frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);
                 u32 i;
 
                 for (i = 0; i < 0x200; i += 4) {
@@ -3887,7 +4220,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     objFrame->blends = 0;
     objFrame->artCount = 0;
     if (dispcnt & 0x1000) {
+        u64 t0 = R2D_NOW();
+
         SortObjs(e, objFrame);
+        prof->objTicks += R2D_NOW() - t0;
         if (fixedWidth == 0) {
             LookUpObjArt(e, objFrame, dispcnt, -1);
         }
@@ -3997,11 +4333,20 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 split->scroll3dLines |= scroll != split->scroll3d;
             }
         }
-        objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
+        objs = FALSE;
+        {
+            /* Slice A: the OBJ layer's per-line cost. */
+            u64 t0 = R2D_NOW();
+
+            objs = DrawObjs(e, objFrame, dispcnt, y, objLine);
+            prof->objTicks += R2D_NOW() - t0;
+        }
+        prof->lines++;
 
         /* Which layers and effects each pixel shows (the windows): window
          * 0 over window 1 over the OBJ window over the outside. */
         if (anyWindow) {
+            u64 t0 = R2D_NOW();
             memset(enableLine, winout & 0x3F, (size_t)width);
             if ((dispcnt & 0x8000) && objs) {
                 for (x = objLine->x0; x < objLine->x1; x++) {
@@ -4020,6 +4365,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             } else if ((dispcnt & 0x2000) && InRange(y, win0v >> 8, win0v & 0xFF)) {
                 FillRange(enableLine, win0h >> 8, win0h & 0xFF, winin & 0x3F, e->origin, width, split != NULL && split->windowsToEdge);
             }
+            prof->windowTicks += R2D_NOW() - t0;
         }
 
         t.row = row;
@@ -4045,11 +4391,20 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 if (slot == 0 && split != NULL && split->has3d && p == split->prio3d && y < e->h3d) {
                     /* The 3D's place among the layers: what's drawn so far
                      * is in front of it. */
-                    SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect,
-                                 evy, bldcnt, enableLine, layer1);
+                    {
+                        u64 t0 = R2D_NOW();
+
+                        SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect,
+                                     evy, bldcnt, enableLine, layer1, t.filled);
+                        prof->finishTicks += R2D_NOW() - t0;
+                    }
                     snapped = TRUE;
-                    /* What's behind the 3D is drawn without them. */
-                    memset(row, 0, (size_t)width * sizeof(u16));
+                    /* What's behind the 3D is drawn without them (nothing
+                     * was drawn when t.filled is 0: the line is already
+                     * zeroed). */
+                    if (t.filled != 0) {
+                        memset(row, 0, (size_t)width * sizeof(u16));
+                    }
                     t.filled = 0;
                     nlist = 0;
                 }
@@ -4097,18 +4452,36 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
 
                     if (((e->picBgs >> bg) & 1) &&
                         PicturesOnLine(e, bg, y, work->picLine, TRUE, &px0, &px1)) {
+                        u64 t0 = R2D_NOW();
+
                         Merge(&t, work->picLine, NULL, p, px0, px1, blend2 ? flags | T_LAYER : flags);
+                        prof->mergeTicks += R2D_NOW() - t0;
                     }
-                    DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, blend2 ? flags | T_LAYER : flags);
+                    {
+                        u64 t0 = R2D_NOW();
+
+                        DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t, blend2 ? flags | T_LAYER : flags);
+                        prof->textTicks += R2D_NOW() - t0;
+                        prof->textDraws++;
+                    }
                     continue;
                 } else {
+                    u64 t0 = R2D_NOW();
+
                     px = LayerLine(e, work, bg, kind[bg], bgcnt[bg], dispcnt, y,
                                    gx3dPixels, gx3dAlpha, &alpha3d);
+                    prof->layerTicks += R2D_NOW() - t0;
+                    prof->layerDraws++;
                     if (blend2) {
                         list[nlist - 1].px = px;
                     }
                 }
-                Merge(&t, px, prioOf, p, x0, x1, blend2 ? flags | T_LAYER : flags);
+                {
+                    u64 t0 = R2D_NOW();
+
+                    Merge(&t, px, prioOf, p, x0, x1, blend2 ? flags | T_LAYER : flags);
+                    prof->mergeTicks += R2D_NOW() - t0;
+                }
             }
         }
 
@@ -4117,13 +4490,47 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
              * is in front of it, and nothing behind it was drawn; a tall
              * picture's lines past the DS's have no 3D: all of it behind) */
             SnapshotOver(split, &blendState, row, y, nlist, blend2, flags, effect, evy, bldcnt,
-                         enableLine, layer1);
-            memset(row, 0, (size_t)width * sizeof(u16));
+                         enableLine, layer1, t.filled);
+            if (t.filled != 0) {
+                memset(row, 0, (size_t)width * sizeof(u16));
+            }
             nlist = 0;
         }
         if (!blend2) {
-            if (!(flags & T_LAYER)) {
-                if (((uintptr_t)row & 3) == 0) {
+            u64 t1 = R2D_NOW();
+
+            /* Slice S3: the brighten loop below darkens even with effect 0/1
+             * when a first-target bit is set (existing behavior, kept), so
+             * the plain resolve is only identical when no first-target bit
+             * can match: bldcnt bits 0-5 clear (layer1 holds 0-4, backdrop
+             * is 5). Then every pixel resolves to drawn-or-backdrop exactly
+             * as the pair loop writes it. */
+            if (!(flags & T_LAYER) || (bldcnt & 0x3Fu) == 0) {
+                if (t.filled == 0) {
+                    /* Slice A cut: nothing drawn on the line, so the loop
+                     * below would write the backdrop into every pixel. One
+                     * fill instead of a resolve pass (the line is already
+                     * zeroed above, and filled == 0 means no Merge or PUT
+                     * wrote into it: provably the same pixels). Counted for
+                     * the Slice B cache design. */
+                    prof->emptyLines++;
+                    u32 back2 = (u32)backdrop * 0x10001u;
+
+                    if ((((uintptr_t)row) & 3) == 0) {
+                        u32a *pair = (u32a *)row;
+
+                        for (x = 0; x < width / 2; x++) {
+                            pair[x] = back2;
+                        }
+                    } else {
+                        for (x = 0; x < width; x++) {
+                            row[x] = backdrop;
+                        }
+                    }
+                    if (width & 1) {
+                        row[width - 1] = backdrop;
+                    }
+                } else if (((uintptr_t)row & 3) == 0) {
                     /* Two pixels at a time: a pixel keeps its colour if
                      * drawn, else takes the backdrop. */
                     u32a *pair = (u32a *)row;
@@ -4155,16 +4562,24 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                     row[x] = c;
                 }
             }
+            prof->finishTicks += R2D_NOW() - t1;
         } else {
             /* Each pixel has its front layer; some blend with the one behind. */
             blendState.y = y;
             blendState.nlist = nlist;
-            BlendLine(&blendState, row, enableLine, layer1, anyWindow);
+            {
+                u64 t1 = R2D_NOW();
+
+                BlendLine(&blendState, row, enableLine, layer1, anyWindow);
+                prof->blendTicks += R2D_NOW() - t1;
+                prof->blendLines++;
+            }
         }
         if (split != NULL && split->has3d && anyWindow && y < e->h3d) {
             /* Where a window hides the 3D, what's behind it shows. */
             u16 *over = split->over + y * width;
             u8 *alpha = split->overAlpha + y * width;
+            u64 t1 = R2D_NOW();
 
             for (x = 0; x < width; x++) {
                 if (enableLine[x] & 1) {
@@ -4179,6 +4594,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 }
                 alpha[x] = 16;
             }
+            prof->finishTicks += R2D_NOW() - t1;
         }
     }
     /* Release only after every scanline has been composited. */
@@ -4471,7 +4887,8 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
 
         Fill(out, 0, e.width * e.height);
         for (i = 0; i < W * H; i++) {
-            out[(i / W) * e.width + e.origin + i % W] = Rd16(bank, (u32)i * 2) & 0x7FFF;
+            /* W is 256: shifts, not a divide and modulo per pixel. */
+            out[(i >> 8) * e.width + e.origin + (i & 255)] = Rd16(bank, (u32)i * 2) & 0x7FFF;
         }
         break;
     }
@@ -4581,13 +4998,16 @@ int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout
     }
     if (e.width > W) {
         DecideSplits(&e, kind, bgcnt, dispcnt);
-        LookUpArt(&e, kind, bgcnt, dispcnt);
+        LookUpArt(&e, kind, bgcnt, dispcnt, NULL);
         DecideBandFills(&e, kind, bgcnt, dispcnt);
     }
     *key = BgKey(&e, bg, kind[bg], bgcnt[bg], dispcnt);
     *hofs = kind[bg] == BG_TEXT ? Rd16(e.io, 0x10 + bg * 4) & 0x1FF : 0;
     *vofs = kind[bg] == BG_TEXT ? Rd16(e.io, 0x12 + bg * 4) & 0x1FF : 0;
     *prio = bgcnt[bg] & 3;
+    /* Slice B: this capture's own row key (captures run outside any
+     * DrawEngineT, whose per-frame keys they must not reuse). */
+    sTextKey[engine ? 1 : 0][bg] = kind[bg] == BG_TEXT ? TextRowKey(&e, bg, bgcnt[bg], dispcnt) : 0;
     for (y = 0; y < H; y++) {
         if (kind[bg] == BG_TEXT) {
             Target t;
@@ -5173,6 +5593,10 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
     if (isA) {
         regs[0x60 / 4] &= ~0x3000u;
     }
+    /* MASTER_BRIGHT (0x6C) does not change the split picture: with a split
+     * the compositor applies it on the GPU. Hashing it made every fade
+     * redraw and republish the whole 320x192 screen for nothing. */
+    regs[0x6C / 4] = 0;
     /* (a BG the compositor draws itself: its scroll isn't in the picture,
      * which needn't be drawn again as it scrolls) */
     if (isA && gpuBg >= 0) {
@@ -5194,6 +5618,7 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
             if (isA) {
                 regs[0x60 / 4] &= ~0x3000u;
             }
+            regs[0x6C / 4] = 0;   /* (MASTER_BRIGHT: the compositor's) */
             h = HashWords((const u8 *)regs, 0x70, h);
         }
     }
@@ -5223,6 +5648,16 @@ static u32 EngineSignature(int engine)
 {
     return (EngineSmallSignature(engine, 0, -1) * 31u) ^
            EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0));
+}
+
+/* Slice A: a copy of the per-engine draw profile (which keeps running).
+ * The copy can tear mid-draw on a 32-bit CPU; a diagnostic read once per
+ * interval doesn't need it exact. */
+void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out)
+{
+    int e = engine ? 1 : 0;
+
+    *out = sProfile[e];
 }
 
 /* NitroPort_Render2D, unless nothing it draws from changed since the last

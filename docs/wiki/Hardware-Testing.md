@@ -174,11 +174,13 @@ a failure used to be ambiguous:
 | `the HOME menu asked to close (frame N)` | APT delivered a close; the shell stops in order. |
 | `the game's thread is returning (frame N)` | `NitroMain` returned by itself. |
 | `threadJoin says the game's thread ended, but it is still running` | libctru's join lied; the shell's own flag keeps the run alive (expected on this port). |
-| `[gx3d] PICA ready (classic path)` | The GPU worker initialised; the 3D path is live. |
-| `[gx3d] display on core 2` | The GPU/display worker has the New 3DS's free core, so its render overlaps the software 2D composite. |
-| `[gx3d] geometry on its own thread` | The geometry thread started; scenes are built off the game's thread. |
-| `3D images: N (scenes drawn: M)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate) now the worker has a core, not 10. If it stays low, the 3D is updating slowly whatever the screen shows. There is no `camera-plane drops` field any more: the port drops the zero-area camera-plane triangles itself. |
-| `[gx3d] 3D setup failed …` / `couldn't start the 3D thread` / `no geometry thread` | The safe fallback: the game still runs 2D-only. Send the line; it names the failing step. |
+| `[compose] GPU display ready (remaster, no classic fallback)` | The compositor initialised; every frame is presented through it. |
+| `[compose] display thread ready` | The display thread started before the game. |
+| `[compose] drawing: engine A on core N, engine B on core M` | The drawer threads started. On an Old 3DS both engines share one drawer on core 0. |
+| `[gx3d] geometry on its own thread (core N)` | The geometry thread started; scenes are built off the game's thread. |
+| `3D images: N (scenes drawn: M)` (every 600 frames) | `N` must **advance**: about 300 per 600 frames (30 a second, the scene rate). If it stays low, the 3D is updating slowly whatever the screen shows. |
+| `[gx3d] citro3d init failed; there is no display` / `[compose] the GPU display could not be set up; there is no display` / `[compose] the display did not start` | Fatal by design: `DisplayErrorScreen()` is shown and the game does not run. Send the line and the `log.txt`; there is **no 1:1 fallback** to diagnose around. |
+| `[compose] couldn't start a drawing thread` / `the V-blank thread` | The display did not start; same error screen. Send the line (core and priority are in the message). |
 | `=== exception (type N) pc …` | A real fault in game code; map the pc with `addr2line`. |
 | `audio: N dropped frames of M` (at exit) | `N` large relative to `M` means the DSP was starved. |
 | `Can't start: …` | The pack or manifest is missing, damaged or from another build. |
@@ -247,7 +249,12 @@ through `0x04000000`, which is unmapped on the port (log-10: exception,
 `r3 04000000`, pc in that function). With that fixed it aborted a little
 later, in `BattleSystem_SetBackground`'s 64 KB copy from BG VRAM
 `0x06010000` (log-11; the opponent sprite appeared, the player's did not).
-Both sites now use the port's arrays. Trainer and link battles take the same
+Both sites now use the port's arrays. If tall grass instead shows "A
+communication error has occurred. You will be returned to the title screen",
+that is `PrintErrorMessageAndReset` from a save-substruct assert, not the
+wireless stack: the save was written by an early port build with the wrong
+substruct CRCs. Patch **1907** migrates them on first read; a clean cartridge
+save does not need it. Trainer and link battles take the same
 `Battle_CreateWirelessStatusIcon` and battle-background paths, so a trainer
 battle is a second check. If it still faults, send `log.txt` and the Luma
 dump; the pc maps with `arm-none-eabi-addr2line -e pokeheartgold-3ds.elf`.
@@ -290,16 +297,50 @@ near 33,400 means `fps=30` is set. `fps=30` reports as missing the 60 Hz
 target by design. Record the New 3DS numbers and, separately, the Old 3DS
 numbers.
 
-## Old 3DS measurement (decision pending)
+## Reading the `[perf]` lines
 
-Run the same scripted scene on an Old 3DS (or 2DS). Record:
+Every 600 game frames the shell writes one block. The fields that matter, in
+the order they answer questions:
 
-- whether it boots and reaches Oak's speech at all;
-- the average frame time in the menu, the intro movie and the title;
-- any visible slowdown or audio dropouts.
+| Line | Fields | What they mean |
+| --- | --- | --- |
+| `FRAMETIME` | `game_us` | the game's own logic for the interval |
+| | `state_us` | the whole hand-off (`DrawFrame`) for the *previous* frame |
+| | `total_us` | interval between frame starts; 16,700 = 60 Hz |
+| | `hblank_us` | the H-blank phase of the hand-off |
+| | `hb_keep_us` / `hb_dma_us` / `hb_irq_us` | that phase split: per-line register copy, DMA, interrupt dispatch |
+| `[perf] display` | `composes/s`, `build`, `GPU/waited`, `publishes/s`, `publish` | the display thread; `scene build` is its 3D CPU work |
+| `[perf] geometry` | `scenes/s`, `busy %`, `ms/scene` | the geometry thread |
+| `[perf] audio` | `% of core 0`, mixing ms | the mixer's real time |
+| `[perf] drawer` | `frames/s`, `ms/frame`, `render`, `publish` | the 2D drawer |
+| `[perf] mem` | `linear_free`, `game_heap_used` | the two numbers the heap split is chosen from |
+| `[perf] oam` | `top=A\|B`, `shown`, `identical`, `most-repeated tile TxM` | whether duplicated sprites are in the sprite table or only in the picture |
+| `[perf] core 1 share` | `asked N%`, `allows M%` | the APT share actually granted (80% on an Old 3DS, not 30%) |
 
-The support decision (supported / menus only / not supported) is the user's;
-it is recorded in `docs/decisions.md` only after this measurement.
+Rules learned the hard way (see
+[3DS-Pitfalls](3DS-Pitfalls.md#diagnose-the-diagnostic-first)):
+
+- These are **wall clock**. On a saturated core every number is inflated by
+  preemption, so a large `ms/frame` does not by itself mean that thread is
+  slow — compare against what else was running.
+- `FRAMETIME`'s `state_us` describes the previous frame, deliberately: an
+  interval and a phase from the same instant once produced `total_us` <
+  `state_us`, which is impossible.
+- `hb_*` are the **last walk's** split. A frame that did not arm H-blank prints
+  stale values beside an 8 us `hblank_us`; don’t read them as this frame's.
+
+Before believing a run, confirm the build is the one you think: the startup
+banner prints `2D … (N texels a pixel)`, `the display on core N`, and the
+`texscale`/`filter`/`stereo`/`wide` options.
+
+## Old 3DS measurement
+
+Measured across sessions 19–20; the numbers and the work are in
+[agent-notes/s20-performance-session.md](../progress/agent-notes/s20-performance-session.md).
+Short version: the field runs at 10–14 composes/s (was 0.3), drawer 55–81
+ms/frame (was 2,000–4,500), game frame 2.3–9.2 ms (was 13.7–41). Goldenrod
+outdoors is the outlier at 5–6 composes/s because it clips ~2,784 vertices per
+scene. The remaining wall is the software 2D renderer.
 
 ## Save round-trip
 
@@ -317,7 +358,11 @@ Both directions are required by the Phase 5 exit.
 
 1. Copy a real cartridge save to `sdmc:/3ds/pokeheartgold/heartgold.sav`.
 2. Start the port build and choose Continue.
-3. **Passing:** the trainer, party and location match the cartridge.
+3. **Passing:** the trainer, party and location match the cartridge. Raw
+cartridge/emulator saves are read as-is after patch **1906** (the CRC table
+fix). A DeSmuME `.dsv` still needs `tools/savetool.py normalize` first. A save
+written by an early port build has legacy substruct CRCs; the port migrates
+them on first read (1907), and the next in-game save writes a clean file.
 
 Record both results (with the save's SHA-1 and the trainer name) in
 `docs/progress/phase-5.md`. Do not mark either direction done without the run.

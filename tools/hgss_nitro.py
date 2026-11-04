@@ -10,6 +10,9 @@ Usage (inside the dev container, after tools/bootstrap.py):
   hgss_nitro.py make --target host32 --out /work/out/p1 test --subproject nitro
                                      run `test` for one subproject only
   hgss_nitro.py list                 print the HGSS source lists that are compiled, and the excluded files
+  hgss_nitro.py sdat-render --out /work/audio-probe/build
+                                     build tests/sdat_render (the offline sequence renderer, host32) and
+                                     its two archives: libnitro.a, libnitrosystem.a, then the renderers
 
 How it works (docs/port-wiring.md): the vendored nitro Makefile compiles `$(SDK)/libraries/<x>.c`
 for each entry of SDK_SRCS. `build/hgss-sdk/libraries/hgss` is a symlink to
@@ -340,6 +343,30 @@ def run_make(subdir, target, variables, goals):
     return subprocess.call(cmd)
 
 
+def run_sdat_render(root, target, out):
+    """Build the offline sequence renderer (3ds_port/nitro/tests/sdat_render.c).
+
+    The renderer links the same two archives as the game's sound path: libnitro.a (HGSS's SDK,
+    its genuine ARM7 sound driver, port_snd.c) and libnitrosystem.a (HGSS's NitroSystem sound
+    archive and player), then compiles port_sound_chip.c itself with NITRO_SOUND_STATS for the
+    mixer diagnostics, plus a release-path binary with the archive's own mixer for timing.
+    Writes sdat_render and sdat_render_release into --out; nothing is written into the repository.
+    """
+    if out is None:
+        sys.exit("sdat-render needs --out (a private build directory)")
+    out = Path(out).resolve()
+    nitro_dir = REPO / "3ds_port" / "nitro"
+    rc = run_make(nitro_dir, target, nitro_overrides(root, target, str(out)), ["lib"])
+    if rc:
+        return rc
+    rc = run_make(REPO / "3ds_port" / "nitrosystem", target,
+                  nitrosystem_overrides(root, target, str(out)), ["lib"])
+    if rc:
+        return rc
+    variables = nitro_overrides(root, target, str(out)) + [f"SDAT_NNS_LIB={out / 'libnitrosystem.a'}"]
+    return run_make(nitro_dir, target, variables, ["sdat_render", "sdat_render_release"])
+
+
 def run_nitrosystem_test(root, target, out):
     ov = nitrosystem_overrides(root, target, out)
     # The binary path doubled as a make goal must use the same OUT spelling the overrides pass
@@ -357,7 +384,7 @@ def run_nitrosystem_test(root, target, out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["shim", "make", "list"])
+    ap.add_argument("cmd", choices=["shim", "make", "list", "sdat-render"])
     ap.add_argument("--root", default=str(BUILD / "upstream"))
     ap.add_argument("--target", default="host32")
     ap.add_argument("--out", help="private output dir (absolute) so parallel builds do not share build/<target>")
@@ -378,6 +405,8 @@ def main(argv=None):
     if a.cmd == "shim":
         print("\n".join(nitro_overrides(root, a.target, a.out)))
         return 0
+    if a.cmd == "sdat-render":
+        return run_sdat_render(root, a.target, a.out)
     sub = a.subproject
     if sub is None:
         sub = "all" if a.args == ["test"] else "nitro"

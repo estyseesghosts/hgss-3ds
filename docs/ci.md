@@ -29,7 +29,7 @@ then runs `python3 tools/bootstrap.py && make test` (tool tests + the `tests/sdk
 `tools/check_repo_content.py` before the image build. The first public push at
 `main` passed all of it (run 41353964864, 3m3s). The layout probe needs MWCC
 and is not part of it. The DS gate (`matching.yml`) was run locally at **78 patches** and passed for both
-games (patches `1904` and `1905`, added later, are `SDK_PORT_3DS`-only and their `#else` text is unchanged); the workflow remains disabled until the private runner and variable exist.
+games (patches `1904`-`1907`, added later, are `SDK_PORT_3DS`-only and their `#else` text is unchanged); the workflow remains disabled until the private runner and variable exist.
 
 The image step fetches the devkitPro pacman databases from `pkg.devkitpro.org`.
 A transient `403` there fails the run before checkout's tests start (seen on

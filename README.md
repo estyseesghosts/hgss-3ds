@@ -2,14 +2,22 @@
 
 A native 3DS port of Pokémon HeartGold and SoulSilver, built from the [ctrl-cheeb-del/pokeheartgold](https://github.com/ctrl-cheeb-del/pokeheartgold) decompilation. The hardware layer comes from [GabeSud0/pokeplatinum-3ds](https://github.com/GabeSud0/pokeplatinum-3ds): a virtual ARM7, DS memory and I/O registers as RAM, software 2D, G3 to PICA200 3D, a sound chip model, and a raw `.sav` save service. The project is licensed under GPL-3.0.
 
-**It runs on a New 3DS.** The build boots HeartGold, plays the intro, reaches
-Oak's speech and the player's bedroom, draws both screens with the PICA 3D
-layer, and plays audio. The latest artifact fixes the **invisible battle
-Pokémon** (NitroSystem 0304 / NitroSDK 0605) and the **close hang** (the
-geometry ring is drained before its worker is stopped); it is staged for a
-hardware re-run, and its visual/timing results are still pending. This is not
-a finished port: the save round-trip, Old 3DS and `.cia` decisions are open.
-The living status is [docs/progress/STATE.md](docs/progress/STATE.md).
+**It is built for both 3DS models, with no classic 1:1 fallback.** The build boots
+HeartGold, plays the intro, reaches Oak's speech and the player's bedroom,
+draws both screens with the PICA 3D layer, and plays audio. The current
+artifact is the **Phase A remaster display**: Platinum's compositor presents
+the upper screen at 400x240 (320x192 canvas at 1.25x) and the lower screen at
+320x240 (256x192 at 1.25x), with the 3D drawn at native resolution; touch is
+mapped back to the DS's 256x192. An Old 3DS uses `smooth3d = 0` (native 3D)
+and the same layout; a failed GPU/display start shows an error screen rather
+than switching to 1:1. Earlier fixes remain: **invisible battle Pokémon**
+(NitroSystem 0304 / NitroSDK 0605), the **close hang** (the geometry ring is
+drained before its worker is stopped), and the **save CRC / tall-grass
+error** (patches 1906/1907). The build and automated tests pass; the Old/New
+3DS hardware runs (frame rate, memory, touch, stereo, audio and close) are
+still pending. This is not a finished port: the save round-trip and `.cia`
+decisions are open. The living status is
+[docs/progress/STATE.md](docs/progress/STATE.md).
 
 **Both games build.** HeartGold and SoulSilver each get their own `.3dsx`,
 data pack, folder and save (`pokesoulsilver.3dsx` reads
@@ -25,11 +33,11 @@ The wiki is the place to start: [docs/wiki/Home.md](docs/wiki/Home.md).
 ## Current status
 
 - **Phase 0 (baseline): complete, with open items.** Both US versions of the decomp build byte-identically inside the dev container, checked against their SHA1s and (for HeartGold) against a retail dump. In the container this needs `tools/matching-build.sh`, not plain `make`: the linker there strips five sections the original keeps, and the script restores them in the generated linker file. Still open: the golden reference captures (never run), the fixture saves, and the CI matching job, which is disabled. Details: [docs/progress/phase-0.md](docs/progress/phase-0.md).
-- **Phase 1 (SDK patch stack): done.** **82 patches** apply cleanly from scratch (NitroSDK 16, NitroSystem 4, pokeheartgold 62; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). `make test` is green (**355 Python tests + 20 SDK suites**), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate last ran at 78, reproducing both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`; patches 1904, 1905, 0304 and 0605, added after that run, are `SDK_PORT_3DS`-only with their `#else` text unchanged). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
+- **Phase 1 (SDK patch stack): done.** **86 patches** in the stack (NitroSDK 16, NitroSystem 4, pokeheartgold 66; the catalog is [docs/wiki/Patch-Stack.md](docs/wiki/Patch-Stack.md)). the last full `make test` was green (**355 Python tests + 20 SDK suites**; session 15 adds four save-CRC tests), `make port-tests` exits 0 (nitrosystem **17,122 checks, 0 failed**), and the DS gate last ran at 78, reproducing both retail ROMs byte for byte (HG `4fcded0e…b5a37`, SS `f8dc38ea…e582`; patches 1904-1909, 0304 and 0605, added after that run, are `SDK_PORT_3DS`-only with their `#else` text unchanged). The save-struct layout matches MWCC for 804 values (0 differences). Details: [docs/progress/STATE.md](docs/progress/STATE.md).
 - **Phase 2 (game under GCC): done for the exit criterion.** 1092/1092 game files compile on host32 and 3DS, 150/150 ARM9 `.s` assemble, both port archives build, and both programs link with **0 unresolved**.
 - **Phase 3 (data pipeline): done.** `builder/{verify_rom,extract_rom,pack}.py` make the HG/SS pack from your own cartridge; the real HG pack opens in the PC program and the boot errors are mapped.
 - **Phase 4 (boot to Oak): in progress.** The PC build reaches the logo, movie, title, main menu, Oak's speech, naming and the first bedroom; boot smoke tests and scripted inputs exist. Golden captures and the save round-trip are open.
-- **Phase 5 (3DS): in progress, runs on hardware.** Platinum's classic PICA backend is compiled into the HGSS shell (geometry thread + GPU worker), 2D/3D composite on the two screens, NDSP audio, scripted input and APT close. The latest tree adds the **battle Poképics** (the G2D software-sprite and ortho paths reach the port's 3D scene: both Pokémon render, `720 tris/scene`, 0 clipped), a **close that no longer hangs** (the geometry ring is drained before its worker is joined; every shutdown step is logged), and the **SoulSilver program** (`pokesoulsilver.3dsx`, its own folder and pack). Its artifacts are staged; a hardware re-run is pending.
+- **Phase 5 (3DS): Phase A remaster built; hardware run pending.** The HGSS shell now runs Platinum's **remaster** display: `port_compose_pica.c` is compiled into the program, drawer threads render the 2D layers, the display thread composes each scene at 400x240/320x240, and the V-blank thread presents it. The 3D is drawn at native resolution (New 3DS also averages a 2x render), touch maps 1.25x, and there is **no classic 1:1 fallback**; a failed display shows `DisplayErrorScreen()`. An Old 3DS uses `smooth3d = 0` and the same layout. Earlier shell work remains: NDSP audio, scripted input, APT close, the **battle Poképics** (both Pokémon render, `720 tris/scene`, 0 clipped), the **close hang fix**, and the **SoulSilver program** (`pokesoulsilver.3dsx`). The phased plan is [docs/wiki/3DS-Remaster-Audit.md](docs/wiki/3DS-Remaster-Audit.md); the next owner check is a real Old/New 3DS run.
 
 What you can run today: `make test`, `make port-tests`, `make content-check`, `make layout`, both surveys, `make game-pc`/`game-pc-ss`, `make game-3ds`/`game-3ds-ss` (packages `pokeheartgold.3dsx` and `pokesoulsilver.3dsx`), the data builder, and the DS matching builds for HeartGold and SoulSilver with the toolchain. Players use the three scripts in `scripts/` ([USER-GUIDE](docs/USER-GUIDE.md)).
 

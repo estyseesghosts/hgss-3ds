@@ -124,10 +124,12 @@ typedef struct LayerSet {
     int underColor;       /* the picture behind the 3D all this RGB565 colour, or -1 */
     int overTop, overBottom;   /* the DS's rows with anything in front of the 3D (a row more each side) */
     ComposeLayers info;   /* has3d etc., as published (no picture pointers) */
+    int filter2d;         /* (the 2D filter this set was made with: its sampling and resampling) */
     uint32_t seq;         /* publish order (0: none, or being written) */
     int writing, held;    /* (held: by frames being built, a count) */
     u32 flightSerial;     /* the last frame drawn with it (busy until sGpuDone reaches it) */
     NitroPublishTarget pub;   /* what its textures hold (publishing only what changed) */
+    int pubOverRows;          /* (the 1x publisher's over rows its over texture holds: OVER_ROWS when written) */
     /* (the upper screen's) A BG the compositor draws itself (the field's
      * weather: ComposeLayers.gpuBg): its whole map, 2x2 texels a pixel
      * (512 x 512 RGBA5551, tiled), and its key (bgValid: written). */
@@ -195,6 +197,11 @@ typedef struct Screen {
 
 static ComposeConfig sConfig;
 static int sLookRequest = -1;   /* (NitroPort_ComposeLook: 0 or 1, for the next frame) */
+/* (NitroPort_ComposeSetFilter: filter2d | filter3d << 4, or -1 for none; the
+ * display thread takes it at the next frame) */
+static volatile int sFilterRequest = -1;
+static volatile int sFilter2d;           /* (the 2D filter: applied by the drawers and the display) */
+#define FILTER3D_MAX 4
 
 void NitroPort_ComposeLook(int on)
 {
@@ -295,6 +302,12 @@ static uint16_t sConverted16[2][WORK_PIXELS];
  * ~10 ms a frame on the 3D's core, and with the 3D's geometry there too,
  * frames came late while a name slid in (2026-10-15). */
 static NitroPublishShadow sShadow[2];
+/* What each engine last published (the display state, no pointers): a
+ * publish whose layers compare with it but for the master brightness is a
+ * fade's republish of the same picture (main_3ds.c), and a set that
+ * already holds that picture needs only the new brightness. */
+static ComposeLayers sLastPublished[2];
+static int sLastPublishedValid[2];
 static NitroGx3dGpuVertex *sQuads;   /* this frame's quads (half of sQuadsAll: the frame before's other half) */
 static NitroGx3dGpuVertex *sQuadsAll;
 static int sQuadHalf;
@@ -779,6 +792,30 @@ void NitroPort_ComposeSetSmooth3d(int smooth3d)
     __atomic_store_n(&sSmooth3d, smooth3d, __ATOMIC_RELEASE);
 }
 
+/* The 2D filter and the 3D texture filter from the next frame (any thread:
+ * packed into one request, taken by the display thread in
+ * NitroPort_ComposeFrame). The 2D filter reaches the drawers through
+ * sFilter2d; the 3D one calls NitroPort_PicaTextureFilter on the display
+ * thread only, as that touches the GPU state. */
+int NitroPort_ComposeSetFilter(int filter2d, int filter3d)
+{
+    if (!sReady) {
+        return 0;
+    }
+    if (filter2d < 0) {
+        filter2d = 0;
+    } else if (filter2d > 3) {
+        filter2d = 3;
+    }
+    if (filter3d < 0) {
+        filter3d = 0;
+    } else if (filter3d > FILTER3D_MAX) {
+        filter3d = FILTER3D_MAX;
+    }
+    __atomic_store_n(&sFilterRequest, filter2d | (filter3d << 4), __ATOMIC_RELEASE);
+    return 1;
+}
+
 /* Linear memory the 3D's textures want left once the display is set up
  * (port_gx3d_pica.c's cache: up to 8 MB; the field's in a few MB). */
 #define COMPOSE_TEXTURE_ROOM (4u * 1024u * 1024u)
@@ -824,6 +861,8 @@ static int compose_init(const ComposeConfig *config, int small)
     int s, i, c, e;
 
     sConfig = *config;
+    __atomic_store_n(&sFilter2d, config->filter & 3, __ATOMIC_RELEASE);
+    __atomic_store_n(&sFilterRequest, -1, __ATOMIC_RELEASE);
     /* (GPU timings: the GSP's interrupts, recorded on profiled frames only) */
     gspSetEventCallback(GSPGPU_EVENT_P3D, prof_event, (void *)(uintptr_t)PROF_LIST, false);
     gspSetEventCallback(GSPGPU_EVENT_PSC0, prof_event, (void *)(uintptr_t)PROF_FILL, false);
@@ -836,6 +875,8 @@ static int compose_init(const ComposeConfig *config, int small)
     NitroPort_PicaLook(config->shadows, config->grade, config->sunFixed, config->sunElevation,
                        config->sunAzimuth);
     memset(sScreens, 0, sizeof(sScreens));
+    sLastPublishedValid[0] = 0;
+    sLastPublishedValid[1] = 0;
     LightLock_Init(&sSetLock);
     LightLock_Init(&sBgOfsLock);
     memset(sBgOfs, 0, sizeof(sBgOfs));
@@ -858,7 +899,13 @@ static int compose_init(const ComposeConfig *config, int small)
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
         int canvasW = s == 0 && config->wide ? CANVAS_MAX : DS_W;
-        int scale = !small && (config->filter == COMPOSE_FILTER_SHARP || config->filter == COMPOSE_FILTER_SCALE2X) ? 2 : 1;
+        /* (config->texScale 1 or 2 asks for it outright: an Old 3DS has
+         * 13,824 KB of 2x layer sets to fail to allocate, and the ladder down
+         * drops the menu and the weather BG before it settles.) */
+        int scale = config->texScale == 1 ? 1
+                  : config->texScale == 2 ? 2
+                  : (!small && (config->filter == COMPOSE_FILTER_SHARP ||
+                                config->filter == COMPOSE_FILTER_SCALE2X)) ? 2 : 1;
 
         scr->width = s == 0 ? TOP_W : BOTTOM_W;
         scr->onLcd = -1;
@@ -1034,9 +1081,10 @@ static int compose_init(const ComposeConfig *config, int small)
     NitroPort_PicaGpuWait(flight_wait);
     sGxReady = 1;
     sReady = 1;
-    NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s, 3D %s%s%s%s%s",
+    NitroPort_Log("[compose] screens drawn by the GPU: %s, 2D %s (%d texel%s a pixel), 3D %s%s%s%s%s",
                   config->wide ? "wide upper screen" : "the DS's width",
                   filters[config->filter & 3],
+                  sScreens[0].texScale, sScreens[0].texScale == 1 ? "" : "s",
                   config->stereo ? "with depth from the slider" : "flat",
                   !sConfig.edges        ? ", no outlines"
                   : sConfig.edges == 2  ? ", outlines on the GPU (each pass only the polygons it needs)"
@@ -1140,8 +1188,20 @@ static u32 widen5(u32 v)
     return (v << 3) | (v >> 2);
 }
 
-/* The picture into a set's textures whole: the filters other than sharp
- * (or a texel a pixel). */
+/* The DS's colour (bits 0-4 red, 5-9 green, 10-14 blue) as RGB565, as
+ * sToRgb565's table has it. The arithmetic rather than the table on the
+ * path a texel a pixel: the table's 64 KB don't stay in an Old 3DS's cache
+ * (which has no L2), so every lookup would be a miss. */
+static u16 rgb565(u32 c)
+{
+    u32 r = c & 31u, g = (c >> 5) & 31u, b = (c >> 10) & 31u;
+
+    return (u16)((r << 11) | (g << 6) | (g >> 4) | b);
+}
+
+/* The picture into a set's textures whole: the Scale2x filter at two
+ * texels a pixel (its result reads the rows around each one), and a
+ * picture the band publisher can't hold. */
 static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w, int h)
 {
     uint16_t *c16 = sConverted16[e];
@@ -1151,10 +1211,11 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
 
     set->pub.heldBy = NULL;   /* (not tracked this way) */
     set->pub.over16 = 0;      /* (RGBA8 here) */
+    set->pubOverRows = 0;
     for (i = 0; i < n; i++) {
-        c16[i] = sToRgb565[l->under[i] & 0x7FFF];
+        c16[i] = rgb565(l->under[i]);
     }
-    if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+    if (set->filter2d == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         NitroPort_Scale2xTiled16(c16, w, h, set->under, scr->texW);
     } else {
         NitroPort_Tile16(c16, w, h, set->under, scr->texW);
@@ -1166,7 +1227,7 @@ static void publish_whole(int e, const ComposeLayers *l, Screen *scr, LayerSet *
         uint32_t *c32 = sConverted[e];
 
         if (NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, c32, 0, w * OVER_ROWS(l))) {
-            if (sConfig.filter == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+            if (set->filter2d == COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
                 NitroPort_Scale2xTiled32(c32, w, OVER_ROWS(l), set->over, scr->texW);
             } else {
                 NitroPort_Tile32(c32, w, OVER_ROWS(l), set->over, scr->texW);
@@ -1196,7 +1257,7 @@ static int uniform_color(const uint16_t *px, int n)
             return -1;
         }
     }
-    return sToRgb565[px[0] & 0x7FFF];
+    return rgb565(px[0] & 0x7FFF);
 }
 
 /* That colour as the GPU samples it from the RGB565 texture (and writes it
@@ -1265,6 +1326,262 @@ static void flush_texture(void *data, uint32_t bytes)
     GSPGPU_FlushDataCache(data, bytes);
 }
 
+/* The picture into a set's textures a texel a pixel (the 1x display), only
+ * the bands of 4 rows changed since the set was last written: the same
+ * diff as the 2x publisher (NitroPort_PublishDoubledOver, port_upscale.c),
+ * so a picture that hasn't changed costs a comparison a band and nothing
+ * else, and only the rows written are flushed. A band is half a tile row,
+ * and the PICA's tiles are written whole vertically: a run of bands is
+ * tiled from the tile row it starts in to the one it ends in, the other
+ * halves from the same picture (exactly what a whole publish writes). */
+static void publish_bands(int e, const ComposeLayers *l, Screen *scr, LayerSet *set, int w, int h)
+{
+    NitroPublishShadow *sh = &sShadow[e];
+    uint16_t *c16 = sConverted16[e];
+    size_t band;
+    uint32_t gen, any;
+    int bands, b, from, known, hasOver, overH, overBands;
+
+    if (h <= 0 || h > NITRO_PUBLISH_MAX_H || (h & 7) || (w & 7) ||
+        (size_t)w * (size_t)h > NITRO_PUBLISH_MAX_PIXELS) {
+        publish_whole(e, l, scr, set, w, h);
+        return;
+    }
+    bands = h / 4;
+    band = (size_t)w * 4u;
+    gen = ++sh->gen;
+    known = set->pub.heldBy == sh && set->pub.heldWidth == w && set->pub.heldHeight == h;
+
+    /* What changed since the last picture. */
+    if (!sh->underValid || sh->width != w || sh->height != h) {
+        memcpy(sh->under, l->under, band * (size_t)bands * 2u);
+        for (b = 0; b < bands; b++) {
+            sh->underChanged[b] = gen;
+        }
+        sh->underValid = 1;
+        sh->overValid = 0;
+        sh->width = w;
+        sh->height = h;
+    } else {
+        for (b = 0; b < bands; b++) {
+            if (memcmp(l->under + band * b, sh->under + band * b, band * 2u) != 0) {
+                memcpy(sh->under + band * b, l->under + band * b, band * 2u);
+                sh->underChanged[b] = gen;
+            }
+        }
+    }
+    /* The under texture brought up to date: each run of bands changed
+     * since it was written, done again (and the tile row's other half
+     * with it). */
+    for (b = 0, from = -1; b <= bands; b++) {
+        int redo = b < bands && (!known || set->pub.underGen == 0 || sh->underChanged[b] > set->pub.underGen);
+
+        if (redo && from < 0) {
+            from = b;
+        } else if (!redo && from >= 0) {
+            int t0 = from / 2, n = (b + 1) / 2 - t0, rows = n * 8, y, x;
+
+            for (y = t0 * 8; y < t0 * 8 + rows; y++) {
+                uint16_t *row = c16 + (size_t)y * w;
+
+                for (x = 0; x < w; x++) {
+                    row[x] = rgb565(l->under[(size_t)y * w + x]);
+                }
+            }
+            NitroPort_Tile16(c16 + (size_t)t0 * 8u * w, w, rows, (uint16_t *)set->under + (size_t)t0 * 8u * scr->texW,
+                             scr->texW);
+            flush_texture((uint16_t *)set->under + (size_t)t0 * 8u * scr->texW, (u32)scr->texW * (u32)rows * 2u);
+            from = -1;
+        }
+    }
+    set->pub.heldBy = sh;
+    set->pub.heldWidth = w;
+    set->pub.heldHeight = h;
+    set->pub.underGen = gen;
+    set->pub.over16 = 0;   /* (RGBA8 here) */
+    hasOver = l->has3d && l->over != NULL;
+    if (!hasOver) {
+        /* (not drawn nor kept: all of it again when there is one) */
+        sh->overValid = 0;
+        set->pub.overGen = 0;
+        set->pubOverRows = 0;
+        set->overEmpty = 1;
+        return;
+    }
+    overH = OVER_ROWS(l);
+    overBands = overH / 4;
+    set->pubOverRows = overH;
+    if (!sh->overValid) {
+        memcpy(sh->over, l->over, band * (size_t)overBands * 2u);
+        memcpy(sh->alpha, l->overAlpha, band * (size_t)overBands);
+        for (b = 0; b < overBands; b++) {
+            sh->overChanged[b] = gen;
+        }
+        sh->overValid = 1;
+    } else {
+        for (b = 0; b < overBands; b++) {
+            if (memcmp(l->over + band * b, sh->over + band * b, band * 2u) != 0 ||
+                memcmp(l->overAlpha + band * b, sh->alpha + band * b, band) != 0) {
+                memcpy(sh->over + band * b, l->over + band * b, band * 2u);
+                memcpy(sh->alpha + band * b, l->overAlpha + band * b, band);
+                sh->overChanged[b] = gen;
+            }
+        }
+    }
+    /* The over texture brought up to date the same way, premultiplied into
+     * the shadow's working space a band at a time (whether a band has
+     * anything drawn in it is kept a band: nothing in front, the texture
+     * isn't drawn). */
+    for (b = 0, from = -1; b <= overBands; b++) {
+        int redo = b < overBands && (!known || set->pub.overGen == 0 || sh->overChanged[b] > set->pub.overGen);
+
+        if (redo && from < 0) {
+            from = b;
+        } else if (!redo && from >= 0) {
+            int t0 = from / 2, n = (b + 1) / 2 - t0, bb;
+
+            for (bb = t0 * 2; bb < t0 * 2 + n * 2 && bb < overBands; bb++) {
+                sh->overAny[bb] = NitroPort_PremultiplyOver(l->over, l->overAlpha, sAlpha16, sh->premultiplied,
+                                                            (int)(band * bb), (int)(band * (bb + 1))) != 0;
+            }
+            NitroPort_Tile32(sh->premultiplied + (size_t)t0 * 8u * w, w, n * 8,
+                             (uint32_t *)set->over + (size_t)t0 * 8u * scr->texW, scr->texW);
+            flush_texture((uint32_t *)set->over + (size_t)t0 * 8u * scr->texW,
+                          (u32)scr->texW * (u32)(n * 8) * 4u);
+            from = -1;
+        }
+    }
+    any = 0;
+    for (b = 0; b < overBands; b++) {
+        any |= sh->overAny[b];
+    }
+    set->overEmpty = !any;
+    set->pub.overGen = gen;
+}
+
+/* Whether the shadow's picture is the picture in l (the comparison the
+ * band diff makes band by band, once: a fade publishes the same picture
+ * over and over). */
+static int picture_holds(int e, const ComposeLayers *l, int w, int h)
+{
+    const NitroPublishShadow *sh = &sShadow[e];
+    int overH;
+
+    if (!sh->underValid || sh->width != w || sh->height != h) {
+        return 0;
+    }
+    if (memcmp(l->under, sh->under, (size_t)w * (size_t)h * 2u) != 0) {
+        return 0;
+    }
+    if (l->has3d && l->over != NULL) {
+        overH = OVER_ROWS(l);
+        if (!sh->overValid) {
+            return 0;
+        }
+        if (memcmp(l->over, sh->over, (size_t)w * (size_t)overH * 2u) != 0 ||
+            memcmp(l->overAlpha, sh->alpha, (size_t)w * (size_t)overH) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Whether a set's textures hold the shadow's picture now: it was written
+ * from that shadow, and no band has changed in a publish since (the band
+ * diff's own test, taken over all of them). */
+static int set_holds_picture(const LayerSet *set, const NitroPublishShadow *sh, int w, int h, int overH)
+{
+    int b;
+
+    if (set->pub.heldBy != sh || set->pub.heldWidth != w || set->pub.heldHeight != h ||
+        set->pub.underGen == 0 || set->pub.over16 || set->pubOverRows != overH) {
+        return 0;
+    }
+    for (b = 0; b < h / 4; b++) {
+        if (sh->underChanged[b] > set->pub.underGen) {
+            return 0;
+        }
+    }
+    if (overH > 0) {
+        if (set->pub.overGen == 0) {
+            return 0;
+        }
+        for (b = 0; b < overH / 4; b++) {
+            if (sh->overChanged[b] > set->pub.overGen) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* Whether a and b are the same display state but for when it was read and
+ * how bright it is: what a fade's publish changes (main_3ds.c publishes
+ * the untouched layers again for MASTER_BRIGHT alone). */
+static int same_display_state(const ComposeLayers *a, const ComposeLayers *b)
+{
+    return a->width == b->width && a->height == b->height && a->top == b->top &&
+           a->stretch == b->stretch && a->has3d == b->has3d && a->scroll3d == b->scroll3d &&
+           a->tint3d == b->tint3d && a->eva == b->eva && a->evb == b->evb && a->evy == b->evy &&
+           a->backdrop == b->backdrop && a->displayOff == b->displayOff &&
+           a->scroll3dLines == b->scroll3dLines &&
+           (!a->scroll3dLines || memcmp(a->scroll3dLine, b->scroll3dLine, sizeof(a->scroll3dLine)) == 0) &&
+           a->gpuBg == b->gpuBg && a->gpuBgEva == b->gpuBgEva && a->gpuBgEvb == b->gpuBgEvb &&
+           a->gpuBgHofs == b->gpuBgHofs && a->gpuBgVofs == b->gpuBgVofs && a->gpuBgKey == b->gpuBgKey;
+}
+
+/* A publish whose picture is already in one of the screen's textures: the
+ * set takes the new display state (its master brightness, a fade's, and
+ * the rest) and a new sequence, and nothing is converted, tiled or
+ * flushed. A fade changes only MASTER_BRIGHT (main_3ds.c publishes the
+ * untouched layers for it), so this is most of what a fade costs. Only a
+ * set no frame is drawing from is touched (held): the display reads a
+ * set's info outside the lock. */
+static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, int h, int filter2d)
+{
+    NitroPublishShadow *sh = &sShadow[e];
+    int withOver = l->has3d && l->over != NULL, overH = withOver ? OVER_ROWS(l) : 0;
+    int i, done = 0;
+
+    if (scr->texScale != 1 || l->under == NULL || !sLastPublishedValid[e] ||
+        !same_display_state(l, &sLastPublished[e]) || !picture_holds(e, l, w, h)) {
+        return 0;
+    }
+    LightLock_Lock(&sSetLock);
+    {
+        LayerSet *best = NULL;
+
+        for (i = 0; i < SETS; i++) {
+            LayerSet *c = &scr->set[i];
+
+            if (c->writing || c->held || c->seq == 0 ||
+                !set_holds_picture(c, sh, w, h, overH) ||
+                (l->gpuBg >= 0 && l->gpuBgPicture != NULL && c->bgTex != NULL &&
+                 (!c->bgValid || c->bgKey != l->gpuBgKey))) {
+                continue;
+            }
+            if (best == NULL || c->seq > best->seq) {
+                best = c;
+            }
+        }
+        if (best != NULL) {
+            best->info = *l;
+            best->info.under = NULL;
+            best->info.over = NULL;
+            best->info.overAlpha = NULL;
+            best->info.gpuBgPicture = NULL;
+            best->info.height = h;
+            best->filter2d = filter2d;
+            best->seq = ++sSeq;
+            sLastPublished[e] = best->info;
+            sLastPublishedValid[e] = 1;
+            done = 1;
+        }
+    }
+    LightLock_Unlock(&sSetLock);
+    return done;
+}
+
 int NitroPort_ComposePublish(int engine, int screen)
 {
     int e = engine ? 1 : 0, i, buf = -1;
@@ -1274,9 +1591,21 @@ int NitroPort_ComposePublish(int engine, int screen)
     u64 start = svcGetSystemTick();
     int w = l->width > 0 ? l->width : DS_W;
     int h = l->height > DS_H ? l->height : DS_H;
+    int filter2d;
 
     if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW || w * h > WORK_PIXELS ||
         h * scr->texScale + 8 > scr->texH) {
+        return 1;
+    }
+    /* (one read: the whole picture is made with this filter, and the frame
+     * that draws it uses the same one) */
+    filter2d = __atomic_load_n(&sFilter2d, __ATOMIC_ACQUIRE);
+    /* A picture already in one of the screen's textures (a fade publishes
+     * the same layers again for its MASTER_BRIGHT): the set needs only the
+     * new display state, no conversion, tiling or flush. */
+    if (!l->displayOff && publish_unchanged(e, l, scr, w, h, filter2d)) {
+        __atomic_fetch_add(&sPublished, 1u, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&sPublishTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
         return 1;
     }
     /* The oldest set not held by the compositor, not the newest, and not
@@ -1314,6 +1643,7 @@ int NitroPort_ComposePublish(int engine, int screen)
         return 0;
     }
     set = &scr->set[buf];
+    set->filter2d = filter2d;
     set->info = *l;
     set->info.under = NULL;
     set->info.over = NULL;
@@ -1327,12 +1657,22 @@ int NitroPort_ComposePublish(int engine, int screen)
     if (!l->displayOff && l->has3d && l->over) {
         over_rows(l->over, w, OVER_ROWS(l), &set->overTop, &set->overBottom);
     }
-    if (!l->displayOff && sConfig.filter != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+    if (!l->displayOff && filter2d != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
+        /* over_rows() has already emptied overBottom when the front layer
+         * has nothing in it: the texture is not rescaled or uploaded then
+         * (the `!hasOver` path invalidates it). */
+        int hasOver = l->has3d && set->overBottom > 0;
+
         set->overEmpty = !NitroPort_PublishDoubledOver(&sShadow[e], &set->pub, l->under, l->over, l->overAlpha,
-                                                       l->has3d, w, h, OVER_ROWS(l), set->under, set->over,
+                                                       hasOver, w, h, OVER_ROWS(l), set->under, set->over,
                                                        scr->texW, sToRgb565, sAlpha16, flush_texture);
     } else if (!l->displayOff) {
-        publish_whole(e, l, scr, set, w, h);
+        if (scr->texScale == 1) {
+            publish_bands(e, l, scr, set, w, h);
+        } else {
+            /* (Scale2x: each texel reads the rows around its pixel.) */
+            publish_whole(e, l, scr, set, w, h);
+        }
     }
     /* A BG drawn here (the field's weather): its picture, when the set
      * doesn't hold it yet (made by the drawer as it read the game's state:
@@ -1348,6 +1688,8 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->writing = 0;
     set->seq = ++sSeq;
     LightLock_Unlock(&sSetLock);
+    sLastPublished[e] = set->info;
+    sLastPublishedValid[e] = 1;
     __atomic_fetch_add(&sPublished, 1u, __ATOMIC_RELAXED);
     __atomic_fetch_add(&sPublishTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
     return 1;
@@ -2443,7 +2785,7 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
     int canvasW = info && info->width > 0 ? info->width : DS_W;
     PicaRect pic, rect3d;
     float u1, vTop, vBottom;
-    int linear = sConfig.filter != COMPOSE_FILTER_NEAREST;
+    int linear = (set ? set->filter2d : __atomic_load_n(&sFilter2d, __ATOMIC_ACQUIRE)) != COMPOSE_FILTER_NEAREST;
     int has3d = info != NULL && !info->displayOff && info->has3d && scene != NULL;
     /* (the field at the DS's pixel size: a pixel a pixel, its rows all
      * drawn from, the DS's line 0 at row top) */
@@ -3000,6 +3342,20 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             sConfig.grade = look;
             NitroPort_PicaLook(sConfig.shadows, sConfig.grade, sConfig.sunFixed, sConfig.sunElevation,
                                sConfig.sunAzimuth);
+        }
+    }
+    {
+        int req = __atomic_exchange_n(&sFilterRequest, -1, __ATOMIC_ACQ_REL);
+
+        if (req >= 0) {
+            int filter2d = req & 15, filter3d = (req >> 4) & 15;
+
+            __atomic_store_n(&sFilter2d, filter2d, __ATOMIC_RELEASE);
+            if (filter3d != sConfig.filter3d) {
+                sConfig.filter3d = filter3d;
+                /* (the GPU's state: the display thread only) */
+                NitroPort_PicaTextureFilter(filter3d);
+            }
         }
     }
     keptShown = NitroPort_LowerMenuKeptShown();

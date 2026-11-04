@@ -179,3 +179,19 @@ geometry and left the gap.
 - `3ds_port/nitro/src/port_gx3d.c`, `tests/test_gx3d.c` — the camera-plane
   drop.
 - `docs/wiki/3DS-Pitfalls.md` — the symptom/cause/rule for both.
+
+## Addendum (2026-11-02): the table is 256 entries, not 128
+
+The fix above was written when the table had 128 entries (256 bytes). That was
+incomplete. The field code parks the NNS fader at 128
+(`GF_SndHandleMoveVolume(..., 128, 15)`) and `snd_player.c` indexes the table
+with the fader's high byte, so entry 128 is read on every field BGM channel.
+The port table stopped at 127, and the read past it took unrelated rodata as
+decibels, pinning field BGM at full volume.
+
+The table is now 256 entries (512 bytes). Entries 0..127 are
+`SNDi_DecibelTable`; entries 128..255 are the first 256 bytes of the DS's
+`.rodata.unified_01` section in `lib/asm/nitro_sdk_data.s`, read as
+little-endian s16, with entry 128 = 0 dB. `check_nns_volume_table` requires
+512 bytes and entry 128 = 0. `tests/test_hgss_game.py` checks both halves
+against the SDK sources. See [decisions 2026-11-02](../../decisions.md).

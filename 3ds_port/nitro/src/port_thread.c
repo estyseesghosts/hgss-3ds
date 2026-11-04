@@ -279,15 +279,30 @@ void NitroPort_LoadContext(void *context)
  * assembly does it: every thread waiting in OS_WaitIrq becomes ready; then,
  * if that or anything during the interrupt asked for rescheduling, the
  * highest-priority ready thread runs. The interrupted thread continues from
- * here when it's switched back to. */
+ * here when it's switched back to.
+ *
+ * The synthetic H-blank walk (NitroPort_HBlankLines) raises this 192 times a
+ * frame. Switching once per scanline is what the DS did, but the port runs the
+ * whole walk at one point in the frame, and on an Old 3DS the switch path is
+ * part of a 12 ms per-frame cost. While the walk is running this defers the
+ * switch: the request is noted and one switch runs when the walk ends, which
+ * is the same point in the frame the game sees it. */
+volatile int NitroPort_IrqSwitchDeferred;
+int NitroPort_IrqSwitchWanted;
+
 void NitroPort_IrqThreadSwitch(void)
 {
     OSThreadInfo *info = &OSi_ThreadInfo;
     OSThread *t;
     OSThread *current;
 
+    if (NitroPort_IrqSwitchDeferred) {
+        NitroPort_IrqSwitchWanted = 1;
+        return;   /* (the state below is left for the switch after the walk) */
+    }
     if (OSi_IrqThreadQueue.head != NULL) {
         t = OSi_IrqThreadQueue.head;
+
         while (t != NULL) {
             OSThread *next = t->link.next;
 

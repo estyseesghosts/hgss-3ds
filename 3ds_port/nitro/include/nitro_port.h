@@ -91,6 +91,17 @@ void NitroPort_SetClockSource(u64 (*source)(void));
  * the SDK reads the tick. */
 void NitroPort_SyncTimers(void);
 
+/* How many times NitroPort_SyncTimers has run and how long it took, in
+ * ARM11 ticks (0 on a host build): the division work behind OS_GetTick.
+ * OS_GetTick is the hot caller; the V-blank and timer writes sync too. */
+void NitroPort_SyncTimersStats(u64 *calls, u64 *ticks);
+
+/* The main program reports how long a NitroPort_SoundPumpReplies call took,
+ * in ARM11 ticks (cumulative); NitroPort_SoundPumpTickStats reads it back
+ * with the call count. (src/port_timer.c) */
+void NitroPort_NoteSoundPumpTicks(u64 ticks);
+void NitroPort_SoundPumpTickStats(u64 *ticks, u32 *calls);
+
 /* V-blank starts now (V-count 192). Called by NitroPort_Halt. */
 void NitroPort_VBlankStarts(void);
 
@@ -136,6 +147,9 @@ void NitroPort_DmaVBlank(void);
  * goes through a frame's lines); whether any is armed. */
 void NitroPort_DmaHBlank(void);
 int NitroPort_DmaHBlankArmed(void);
+/* H-blank DMA channel transfers run so far (NitroPort_DmaHBlank): one per
+ * armed channel per line, so hb_dma_us can be read per transfer. */
+u32 NitroPort_DmaHBlankTransfers(void);
 
 /* ------------------------------------------------- H-blank (line by line) */
 
@@ -170,6 +184,27 @@ BOOL NitroPort_HBlankLinesOnce(void);
 BOOL NitroPort_HBlankLinesDue(void);
 /* NitroPort_LineRegs.active (for those that can't include this header). */
 BOOL NitroPort_LineRegsActive(void);
+/* The interrupt scheduler's switch, deferred while the synthetic H-blank walk
+ * raises 192 interrupts (src/port_thread.c). Nothing else sets these. */
+extern volatile int NitroPort_IrqSwitchDeferred;
+extern int NitroPort_IrqSwitchWanted;
+/* The last NitroPort_HBlankLines walk split into its three parts, in ARM11
+ * ticks: the per-line register copy, the H-blank DMAs, and the interrupt
+ * handlers. On an Old 3DS the walk is 9.5-13.8 ms whenever the game arms it
+ * and 8 us when it does not, and the three parts have very different fixes.
+ * (src/port_os.c) */
+void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq);
+
+/* The last NitroPort_HBlankLines walk's interrupt handlers, one entry per
+ * IRQ bit (the DS's 8 low interrupt bits: 0 V-blank, 1 H-blank, 2 V-count,
+ * 3-6 the timers), in ARM11 ticks and call count. Only dispatches inside the
+ * walk are counted; bit 1 is the game's H-blank callback. (src/port_os.c) */
+#define NITRO_PORT_IRQ_BITS 8
+typedef struct NitroPortIrqTime {
+    u64 ticks;
+    u32 calls;
+} NitroPortIrqTime;
+void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out);
 
 /* ---------------------------------------------------------------- threads */
 

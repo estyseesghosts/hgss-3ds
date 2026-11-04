@@ -266,6 +266,23 @@ static int WritePng(const char *path, const uint16_t *pixels, int w, int h)
     return WritePngRows(path, rows, w, h);
 }
 
+/* --render-3ds: draw every frame the way the 3DS shell does, so a local run
+ * can reproduce what the console shows. The screenshots then come from these
+ * buffers instead of a fresh render at capture time. */
+static int sRenderLike3ds;
+static uint16_t sBoth[256 * 384];
+
+static void DrawLike3ds(void)
+{
+    static uint16_t top[256 * 192], bottom[256 * 192];
+    int aOnTop = NitroPort_EngineAOnTop();
+
+    NitroPort_Render2D(0, aOnTop ? top : bottom);
+    (void)NitroPort_Render2DIfChanged(1, aOnTop ? bottom : top);
+    memcpy(sBoth, top, sizeof top);
+    memcpy(sBoth + 256 * 192, bottom, sizeof bottom);
+}
+
 static void Screenshot(void)
 {
     static uint16_t both[256 * 384];
@@ -274,7 +291,11 @@ static void Screenshot(void)
     if (sScreenshotDir == NULL) {
         return;
     }
-    NitroPort_RenderScreens(both, both + 256 * 192);
+    if (sRenderLike3ds) {
+        memcpy(both, sBoth, sizeof both);
+    } else {
+        NitroPort_RenderScreens(both, both + 256 * 192);
+    }
     snprintf(path, sizeof(path), "%s/frame_%07d.png", sScreenshotDir, sFrame);
     if (WritePng(path, both, 256, 384) != 0) {
         NitroPort_Log("[pc] can't write %s", path);
@@ -575,6 +596,9 @@ void NitroPort_OnFrame(void)
     NitroPort_SoundPumpReplies(); /* deliver ARM7 alarms on the ARM9's thread */
     PaceGameForWav();
     sFrame++;
+    if (sRenderLike3ds) {
+        DrawLike3ds();
+    }
 
     if (sDump3DFrame == sFrame) {
         char path[128];
@@ -973,6 +997,8 @@ int main(int argc, char **argv)
             traceIrq = 1;
         } else if (strcmp(arg, "--frametime") == 0) {
             sFrametime = 1;
+        } else if (strcmp(arg, "--render-3ds") == 0) {
+            sRenderLike3ds = 1;
         } else if (strcmp(arg, "--events") == 0 && i + 1 < argc) {
             sEventsPath = argv[++i];
         } else if (arg[0] == '-' && arg[1] != '\0') {

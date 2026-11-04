@@ -20,6 +20,7 @@ Format reference (pokeheartgold at upstream.lock):
 Usage:
   savetool.py normalize IN [-o OUT]
   savetool.py validate  FILE [--layout SIZE0,SIZE1]
+  savetool.py repair    IN -o OUT [--layout SIZE0,SIZE1]
   savetool.py diff      A B [--block 4096]
 """
 import argparse
@@ -191,6 +192,37 @@ def validate(img, layout=None):
             "status_name": STATUS_NAMES[status], "newer_mirror": used}
 
 
+def repair(img, layout=None):
+    """Recompute every slot footer's CRC into a copy of `img`.
+
+    Returns (image, repairs), repairs being (mirror, slot, old, new).
+    Footers whose size, magic or slot do not match the geometry are left
+    alone: they are not a CRC problem and silently rewriting them could
+    turn corrupt data into something the game accepts. This also repairs the
+    saves the early 3DS builds wrote with the wrong CRC-16 table.
+    """
+    if len(img) != SAVE_SIZE:
+        raise SaveError(f"size {len(img)} is not {SAVE_SIZE}")
+    if layout is None:
+        layout = discover_layout(img)
+    out = bytearray(img)
+    repairs = []
+    for mirror_no, mirror in enumerate((0, MIRROR_SIZE)):
+        for idx, (off, size) in enumerate(slot_spec(layout)):
+            if off + size > MIRROR_SIZE:
+                continue
+            base = mirror + off
+            pos = base + size - FOOTER_SIZE
+            count, fsize, magic, fslot, fcrc = _footer_at(img, pos)
+            if fsize != size or magic != SAVE_CHUNK_MAGIC or fslot != idx:
+                continue
+            calc = crc16_ccitt(img[base:pos])
+            if calc != fcrc:
+                struct.pack_into("<H", out, pos + 14, calc)
+                repairs.append((mirror_no, idx, fcrc, calc))
+    return bytes(out), repairs
+
+
 def diff_blocks(a, b, block):
     """Yield (offset, length) runs of differing blocks."""
     n = max(len(a), len(b))
@@ -217,6 +249,10 @@ def main(argv=None):
     v = sub.add_parser("validate")
     v.add_argument("file")
     v.add_argument("--layout", help="SIZE0,SIZE1 (hex or decimal) instead of discovery")
+    r = sub.add_parser("repair")
+    r.add_argument("file")
+    r.add_argument("-o", "--output", required=True)
+    r.add_argument("--layout", help="SIZE0,SIZE1 (hex or decimal) instead of discovery")
     d = sub.add_parser("diff")
     d.add_argument("a")
     d.add_argument("b")
@@ -240,6 +276,14 @@ def main(argv=None):
             nm = rep["newer_mirror"]
             print(f"status: {rep['status_name']}; newer mirror: {'none' if nm is None else nm}")
             return 0 if rep["status"] == 1 else 1
+        if args.cmd == "repair":
+            layout = tuple(int(x, 0) for x in args.layout.split(",")) if args.layout else None
+            raw, repairs = repair(open(args.file, "rb").read(), layout)
+            open(args.output, "wb").write(raw)
+            for mirror, idx, old, new in repairs:
+                print(f"mirror {mirror} slot {idx}: crc {old:#06x} -> {new:#06x}")
+            print(f"ok: {len(raw)} bytes, {len(repairs)} footer(s) repaired")
+            return 0
         a = open(args.a, "rb").read()
         b = open(args.b, "rb").read()
         runs = list(diff_blocks(a, b, args.block))

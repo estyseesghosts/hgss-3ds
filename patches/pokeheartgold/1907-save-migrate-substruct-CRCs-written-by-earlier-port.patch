@@ -1,0 +1,70 @@
+From 4a2c69723f028adbd18e3c8bbf48eece4dc48aff Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 16:10:17 -0500
+Subject: [PATCH] save: migrate substruct CRCs written by earlier port builds
+
+SaveSubstruct_AssertCRC (src/save.c:1209) checks each substruct's stored CRC
+with GF_CalcCRC16, which is now CRC-16/CCITT (patch 1906). Saves the earlier
+3DS builds wrote have a different CRC in every substruct: the old code built a
+reflected table and updated it MSB-first. They still load (the slot footers
+were the only CRCs the save loader checked), but the first Save_*_Get() of such
+a substruct asserts, and that assert calls PrintErrorMessageAndReset because
+the main menu's beacon watch leaves a CommState alive. On hardware it looks
+like the game's communication-error screen when a wild encounter first reads
+the Mystery Gift/WiFi History chunks.
+
+Accept and repair those values on first read: if the stored CRC is exactly the
+old table's CRC, store the CCITT value and continue. A value that matches
+neither still asserts, so real corruption is not hidden. The next save writes
+the corrected substructs and their footer.
+
+Port-only (#ifdef SDK_PORT_3DS); the DS build's CRC table and behavior are
+unchanged.
+---
+ src/save.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/src/save.c b/src/save.c
+index 7ee5391..997ded3 100644
+--- a/src/save.c
++++ b/src/save.c
+@@ -1186,6 +1186,26 @@ static void SaveErrorHandling(s32 lockId, int code) {
+     ShowSaveDataWriteError(HEAP_ID_1, code);
+ }
+ 
++#ifdef SDK_PORT_3DS
++/* Saves written by early 3DS builds stored each substruct CRC from a reflected
++ * table updated MSB-first (the old MATH_CRC16InitTable remap), not the CCITT
++ * table the cartridge and this code use. The slot footer CRC repair cannot see
++ * these, so migrate a substruct the first time it is read: if the stored CRC is
++ * exactly the old value, replace it with the CCITT one this build writes.
++ * Only a match to that deterministic value is accepted; anything else still
++ * asserts. */
++static MATHCRC16Table sLegacyCRC16Table;
++static BOOL sLegacyCRC16TableReady;
++
++static u16 SaveSubstruct_LegacyCRC(const void *data, u32 size) {
++    if (!sLegacyCRC16TableReady) {
++        MATHi_CRC16InitTableRev(&sLegacyCRC16Table, 0xA001);
++        sLegacyCRC16TableReady = TRUE;
++    }
++    return MATH_CalcCRC16CCITT(&sLegacyCRC16Table, data, size);
++}
++#endif
++
+ BOOL SaveSubstruct_AssertCRC(int idx) {
+     u8 *data;
+     int size;
+@@ -1199,6 +1219,12 @@ BOOL SaveSubstruct_AssertCRC(int idx) {
+     if (crc == data_u16[size / 2]) {
+         return TRUE;
+     }
++#ifdef SDK_PORT_3DS
++    if (SaveSubstruct_LegacyCRC(data, size) == data_u16[size / 2]) {
++        data_u16[size / 2] = crc;
++        return TRUE;
++    }
++#endif
+ 
+     GF_ASSERT(FALSE);
+     return FALSE;

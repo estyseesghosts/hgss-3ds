@@ -127,6 +127,30 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * brightness still counts (the menu fades with it). */
 unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 
+/* Slice-A instruments: where a drawn frame's 2D time goes, per engine.
+ * Ticks are ARM11 ticks on a 3DS (0 in host builds, where there is no tick
+ * counter). Cumulative since startup; the caller diffs per interval. Counts
+ * are exact on both. */
+typedef struct NitroRender2DProfile {
+    uint64_t textTicks;   /* text BGs (DrawTextBg, incl. its own merges) */
+    uint64_t layerTicks;  /* other BG kinds (LayerLine: affine, bitmap, 3D fetch) */
+    uint64_t objTicks;    /* OBJ sort + per-line draw */
+    uint64_t mergeTicks;  /* Merge/MergeT of drawn lines into the row */
+    uint64_t blendTicks;  /* BlendLine (blend2 lines) */
+    uint64_t windowTicks; /* enableLine window work */
+    uint64_t finishTicks; /* backdrop resolve / brighten / split fixups */
+    uint32_t lines;       /* lines drawn */
+    uint32_t textDraws;   /* per-line text BG draws */
+    uint32_t layerDraws;  /* per-line non-text BG draws */
+    uint32_t blendLines;  /* lines finished by BlendLine */
+    uint32_t emptyLines;  /* plain-path lines with nothing drawn (backdrop fill) */
+    uint64_t setupTicks;  /* per-frame setup: keys, art lookups, palettes, splits */
+    uint32_t rowHits;     /* Slice B text-row cache hits */
+    uint32_t rowMisses;   /* Slice B text-row cache misses (one row render each) */
+} NitroRender2DProfile;
+/* A copy of the accumulators (which keep running). */
+void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out);
+
 /* A BG of engine A's whole map (256 x 256 pixels: a text BG of that size;
  * 0 otherwise, nothing written) into out, a line of 256 after another, as
  * RGBA5551 (red in the top bits; 0 where the BG is clear): what the

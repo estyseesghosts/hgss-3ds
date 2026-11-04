@@ -35,6 +35,10 @@
 static u32 sNextSrc[PORT_DMA_CHANNELS];
 static u32 sNextDest[PORT_DMA_CHANNELS];
 
+/* H-blank DMA channel transfers run so far (NitroPort_DmaHBlank): tells an
+ * hb_dma_us that is one channel per line from several. */
+static u32 sHBlankDmaTransfers;
+
 static vu32 *ChannelRegs(u32 dmaNo)
 {
     /* Source, destination, control: three words per channel. */
@@ -184,10 +188,16 @@ void NitroPort_DmaHBlank(void)
         u32 cnt = ChannelRegs(dmaNo)[2];
 
         if ((cnt & MI_DMA_ENABLE) && (cnt & MI_DMA_TIMING_MASK) == MI_DMA_TIMING_H_BLANK) {
+            sHBlankDmaTransfers++;
             Transfer(dmaNo, cnt);
             Finish(dmaNo, cnt, (cnt & MI_DMA_CONTINUOUS_ON) != 0);
         }
     }
+}
+
+u32 NitroPort_DmaHBlankTransfers(void)
+{
+    return sHBlankDmaTransfers;
 }
 
 void NitroPort_DmaVBlank(void)

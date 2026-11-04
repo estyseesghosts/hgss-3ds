@@ -531,38 +531,46 @@ static void ensure_clip(GeoState *g)
     for(j=0;j<16;j++)put32(0x640+j*4,(uint32_t)g->clip.a[j]);
     for(j=0;j<9;j++)put32(0x680+j*4,(uint32_t)g->vec.a[(j/3)*4+(j%3)]);
 }
-static GeoVertex interpolate(const GeoVertex *a,const GeoVertex *b,double t)
+static GeoVertex interpolate(const GeoVertex *a,const GeoVertex *b,float t)
 {
     GeoVertex v;
     int i;
     memset(&v,0,sizeof(v));   /* no outcode or screen position yet */
-    for(i=0;i<4;i++)v.clip[i]=(int32_t)((double)a->clip[i]+
-                                              ((double)b->clip[i]-a->clip[i])*t);
-    v.s=(int32_t)((double)a->s+((double)b->s-a->s)*t);
-    v.t=(int32_t)((double)a->t+((double)b->t-a->t)*t);
+    for(i=0;i<4;i++)v.clip[i]=(int32_t)((float)a->clip[i]+
+                                              ((float)b->clip[i]-(float)a->clip[i])*t);
+    v.s=(int32_t)((float)a->s+((float)b->s-(float)a->s)*t);
+    v.t=(int32_t)((float)a->t+((float)b->t-(float)a->t)*t);
     for(i=0;i<3;i++){
         int shift=i*5, av=(a->color>>shift)&31,bv=(b->color>>shift)&31;
         ((void)shift);
         /* Initialize below with whole RGB rather than bitfield writes. */
         if(i==0)v.color=0;
-        v.color |= (uint16_t)((int)(av+(bv-av)*t+0.5)<<shift);
+        v.color |= (uint16_t)((int)(av+(bv-av)*t+0.5f)<<shift);
     }
     return v;
 }
-/* floor(), to an int32 (saturated), without a library call. */
-static inline int32_t floor_int(double v)
+/* floor(), to an int32 (saturated), without a library call. Single
+ * precision: the 3DS's VFP does it in hardware (double is soft-float),
+ * and a screen coordinate's magnitude (a few 2^17) leaves more than
+ * enough mantissa for the 1/256-pixel result. */
+static inline int32_t floor_int(float v)
 {
     int32_t n;
-    if(v>=2147483647.0)return INT32_MAX;
-    if(v<=-2147483648.0)return INT32_MIN;
+    /* (float's nearest below 2^31; 2^31 itself is past int32's range) */
+    if(v>=2147483647.0f)return INT32_MAX;
+    if(v<=-2147483648.0f)return INT32_MIN;
     n=(int32_t)v;
-    return n-(v<(double)n);
+    return n-(v<(float)n);
 }
 static NitroGx3dVertex to_screen(const GeoVertex *v)
 {
     NitroGx3dVertex out;
-    double inv=(v->clip[3]>0)?1.0/v->clip[3]:0.0;
-    double nz=(double)v->clip[2]*inv;
+    /* Single precision throughout: this is the per-vertex hot path, and
+     * VFP's single-precision divide/multiply are hardware on the 3DS
+     * (double is soft-float). x/y end up at 1/256 pixel over at most a
+     * 512-pixel view: float's 24-bit mantissa holds that comfortably. */
+    float inv=(v->clip[3]>0)?1.0f/v->clip[3]:0.0f;
+    float nz=(float)v->clip[2]*inv;
     int i;
     memset(&out,0,sizeof(out));
     for(i=0;i<4;i++)out.clip[i]=v->clip[i];
@@ -572,19 +580,19 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
      * rather than cut to whole pixels as the DS does: the 3DS's GPU draws
      * smoother edges from it, and neighbouring models still meet. */
     {
-        double x0=s.viewport[0]&255,top=(191-(s.viewport[3]&255))&255;
-        double width=(s.viewport[2]-s.viewport[0]+1)&0x1FF;
-        double height=(s.viewport[3]-s.viewport[1]+1)&0xFF;
-        double w=(double)v->clip[3];
+        float x0=s.viewport[0]&255,top=(191-(s.viewport[3]&255))&255;
+        float width=(s.viewport[2]-s.viewport[0]+1)&0x1FF;
+        float height=(s.viewport[3]-s.viewport[1]+1)&0xFF;
+        float w=(float)v->clip[3];
         if(w>0){
-            out.x=floor_int(((double)v->clip[0]+w)*width/(2*w)*256+x0*256+0.5);
-            out.y=floor_int((w-(double)v->clip[1])*height/(2*w)*256+top*256+0.5);
+            out.x=floor_int(((float)v->clip[0]+w)*width/(2*w)*256+x0*256+0.5f);
+            out.y=floor_int((w-(float)v->clip[1])*height/(2*w)*256+top*256+0.5f);
         }
     }
-    if(nz<-1.0)nz=-1.0;
-    if(nz>1.0)nz=1.0;
-    out.depth=(uint32_t)((nz+1)*8388607.5);
-    out.inv_w=(float)inv;
+    if(nz<-1.0f)nz=-1.0f;
+    if(nz>1.0f)nz=1.0f;
+    out.depth=(uint32_t)((nz+1)*8388607.5f);
+    out.inv_w=inv;
     out.s=v->s/16.0f;out.t=v->t/16.0f;
     out.color=v->color;
     return out;
@@ -635,10 +643,13 @@ static unsigned sStagedCount, sStagedVertices, sStagedClipped;
 static int sPolygonFront;
 static int polygon_front(const GeoVertex *a,const GeoVertex *b,const GeoVertex *c)
 {
-    double x0=a->clip[0],y0=a->clip[1],w0=a->clip[3];
-    double x1=b->clip[0],y1=b->clip[1],w1=b->clip[3];
-    double x2=c->clip[0],y2=c->clip[1],w2=c->clip[3];
-    double det=x0*(y1*w2-w1*y2)-y0*(x1*w2-w1*x2)+w0*(x1*y2-y1*x2);
+    /* Single precision: the coordinates are int32 but the determinant's
+     * terms stay far inside float's range. A determinant near zero is a
+     * nearly edge-on polygon, where a sign change covers no pixels. */
+    float x0=a->clip[0],y0=a->clip[1],w0=a->clip[3];
+    float x1=b->clip[0],y1=b->clip[1],w1=b->clip[3];
+    float x2=c->clip[0],y2=c->clip[1],w2=c->clip[3];
+    float det=x0*(y1*w2-w1*y2)-y0*(x1*w2-w1*x2)+w0*(x1*y2-y1*x2);
     return det>0;
 }
 /* The vertex's screen position, worked out once: strips and quads share
@@ -776,7 +787,10 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
             int64_t da=plane_distance(left,(int)p),db=plane_distance(right,(int)p);
             if(da>=0 && m<12)tmp[m++]=*left;
             if((da<0)!=(db<0)&&m<12){
-                double t=(double)da/(double)(da-db);
+                /* (da and db have opposite signs here, so |da - db| is at
+                 * least |da|: t is 0..1 and float keeps it to ~1e-7,
+                 * well inside a 1/256-pixel clipped edge) */
+                float t=(float)da/(float)(da-db);
                 tmp[m++]=interpolate(left,right,t);
                 clipped=1;
             }
@@ -965,11 +979,15 @@ static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
     }
     s.attr=attr;s.texparam=texparam;s.plttbase=plttbase;
 }
-/* Where a vertex is on the screen, -1..1 (w > 0). */
-static int ndc_of(const int32_t clip[4],double *x,double *y)
+/* Where a vertex is on the screen, -1..1 (w > 0). Single precision:
+ * the in-between scene's match test only needs ~1e-7 there (a quarter of
+ * the screen is the cut-off), and the 3DS's VFP does float in hardware
+ * while double is soft-float. Matches the clipping/projection conversion:
+ * screen coords to ~1/256 px, depth to ~1-2 of 24 bits. */
+static int ndc_of(const int32_t clip[4],float *x,float *y)
 {
     if(clip[3]<=0)return 0;
-    *x=(double)clip[0]/clip[3];*y=(double)clip[1]/clip[3];
+    *x=(float)clip[0]/(float)clip[3];*y=(float)clip[1]/(float)clip[3];
     return 1;
 }
 /* Pair this scene's polygons (C, n) with the scene before's (P, m).
@@ -1250,12 +1268,12 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
             int mid=0;
             if(sMatch[j]>=0){
                 const PolyRecord *p=&P[sMatch[j]];
-                double x0,y0,x1,y1;
+                float x0,y0,x1,y1;
                 mid=p->count==c->count;
                 /* (moved more than a quarter of the screen: not the same
                  * thing, or a jump; where it is now) */
                 if(mid && ndc_of(p->clip[0],&x0,&y0) && ndc_of(c->clip[0],&x1,&y1) &&
-                   (fabs(x1-x0)>0.5 || fabs(y1-y0)>0.5))mid=0;
+                   (fabsf(x1-x0)>0.5f || fabsf(y1-y0)>0.5f))mid=0;
                 if(mid){
                     for(k=0;k<c->count;k++){
                         int q;
@@ -1271,10 +1289,10 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
                  * motion puts it halfway, not where it is now, half a
                  * step ahead of the rest: a building's roof coming in at
                  * the top jumped for a frame, 2026-10-21) */
-                double hx=-0.5*(double)sMotionX/128.0,hy=-0.5*(double)sMotionY/96.0;
+                float hx=-0.5f*sMotionX/128.0f,hy=-0.5f*sMotionY/96.0f;
                 for(k=0;k<c->count;k++){
-                    clip[k][0]+=(int32_t)floor(hx*(double)clip[k][3]+0.5);
-                    clip[k][1]+=(int32_t)floor(hy*(double)clip[k][3]+0.5);
+                    clip[k][0]+=(int32_t)floorf(hx*(float)clip[k][3]+0.5f);
+                    clip[k][1]+=(int32_t)floorf(hy*(float)clip[k][3]+0.5f);
                 }
             }
             replay_polygon(c,clip);
@@ -1284,7 +1302,7 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
              * view (none of this one's: they've gone): halfway out, not
              * gone half a step early (a strip at the screen's edge showed
              * what's behind for a frame). */
-            double fx=(double)sMotionX/128.0,fy=(double)sMotionY/96.0;
+            float fx=sMotionX/128.0f,fy=sMotionY/96.0f;
             unsigned i;
             memset(sPUsed,0,m);
             for(j=0;j<n;j++)if(sMatch[j]>=0)sPUsed[sMatch[j]]=1;
@@ -1295,15 +1313,15 @@ static int make_mid_scene(const NitroGx3dScene *now,NitroGx3dScene *sMid)
                 if(sPUsed[i] || !p->onScreen)continue;
                 for(k=0;k<p->count;k++){
                     memcpy(full,p->clip[k],sizeof(full));
-                    full[0]+=(int32_t)floor(fx*(double)full[3]+0.5);
-                    full[1]+=(int32_t)floor(fy*(double)full[3]+0.5);
+                    full[0]+=(int32_t)floorf(fx*(float)full[3]+0.5f);
+                    full[1]+=(int32_t)floorf(fy*(float)full[3]+0.5f);
                     all&=outcode(full);
                 }
                 if(!all)continue;   /* (not leaving the view: gone, as this scene has it) */
                 for(k=0;k<p->count;k++){
                     memcpy(clip[k],p->clip[k],sizeof(clip[k]));
-                    clip[k][0]+=(int32_t)floor(0.5*fx*(double)clip[k][3]+0.5);
-                    clip[k][1]+=(int32_t)floor(0.5*fy*(double)clip[k][3]+0.5);
+                    clip[k][0]+=(int32_t)floorf(0.5f*fx*(float)clip[k][3]+0.5f);
+                    clip[k][1]+=(int32_t)floorf(0.5f*fy*(float)clip[k][3]+0.5f);
                 }
                 replay_polygon(p,clip);
             }

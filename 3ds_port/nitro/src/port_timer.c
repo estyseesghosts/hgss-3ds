@@ -28,6 +28,16 @@
 
 #include "port_platform.h"
 
+/* libctru's tick counter, for the timer-sync cost. Not included as a header:
+ * its types clash with the SDK's (port_render2d.c does the same). Host builds
+ * have no counter, so the cost reads 0. */
+#ifdef __3DS__
+extern u64 svcGetSystemTick(void);
+#define PORT_NOW() svcGetSystemTick()
+#else
+#define PORT_NOW() 0
+#endif
+
 #define DS_BUS_HZ        33513982ULL
 #define CYCLES_PER_LINE  2130ULL       /* 355 dots of 6 cycles */
 #define LINES_PER_FRAME  263
@@ -55,6 +65,9 @@ static BOOL sClockStarted;
 static u64 sClockStart;
 static BOOL sVBlankSeen;
 static u64 sVBlankStart;
+static u64 sSyncCalls, sSyncTicks;
+static u64 sSoundPumpTicks;
+static u32 sSoundPumpCalls;
 
 /* ------------------------------------------------------------------ clock */
 
@@ -159,6 +172,7 @@ static void Advance(int i, u64 now)
 void NitroPort_SyncTimers(void)
 {
     u64 now = NitroPort_Cycles();
+    u64 t0 = PORT_NOW();
     int i;
 
     for (i = 0; i < 4; i++) {
@@ -169,6 +183,33 @@ void NitroPort_SyncTimers(void)
 
         reg_GX_VCOUNT = (u16)((192 + line) % LINES_PER_FRAME);
     }
+    sSyncTicks += PORT_NOW() - t0;
+    sSyncCalls++;
+}
+
+/* The syncs so far and their cost, in ARM11 ticks (NitroPort_SyncTimers).
+ * OS_GetTick is the hot caller; the V-blank and timer writes sync too. */
+void NitroPort_SyncTimersStats(u64 *calls, u64 *ticks)
+{
+    *calls = sSyncCalls;
+    *ticks = sSyncTicks;
+}
+
+/* ------------------------------------------------------- sound-pump time */
+
+/* The main program reports how long a NitroPort_SoundPumpReplies call took
+ * (the API is here because this file owns the tick counters; the call site
+ * is hgss/game/app/main_3ds.c). */
+void NitroPort_NoteSoundPumpTicks(u64 ticks)
+{
+    sSoundPumpTicks += ticks;
+    sSoundPumpCalls++;
+}
+
+void NitroPort_SoundPumpTickStats(u64 *ticks, u32 *calls)
+{
+    *ticks = sSoundPumpTicks;
+    *calls = sSoundPumpCalls;
 }
 
 void NitroPort_TimerSetReload(int id, u16 count)

@@ -29,6 +29,7 @@ SDK_TESTS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard tests/sdk/*/run.sh
 check-bootstrap:
 	@test -f build/upstream/lib/NitroSDK/include/nitro.h || \
 	    { echo "Run first: python3 tools/bootstrap.py"; exit 1; }
+	@python3 tools/check_patches.py --quiet
 
 test: tool-tests sdk-tests
 

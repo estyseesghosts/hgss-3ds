@@ -105,7 +105,14 @@ NNS_VOLUME_ALIAS_SECTION = ".rodata.alias_d750"
 NNS_VOLUME_SDK_SOURCE = "lib/asm/nitro_sdk_data.s"
 NNS_VOLUME_PORT_SOURCE = REPO / "hgss" / "compat" / "src" / "nns_volume_table.c"
 NNS_VOLUME_SYMBOL = "_0210D750"
-NNS_VOLUME_TABLE_SIZE = 0x80 * 2
+# 256 entries: 0..127 are SNDi_DecibelTable and 128..255 are the DS's
+# .rodata.unified_01 tail that the port source reproduces. snd_player.c indexes
+# the table with the fader's high byte too, and the field code parks the fader
+# at NNS_VOLUME_FADER_INDEX (GF_SndHandleMoveVolume(..., 128, 15)), so that
+# entry must read 0 dB, as it does on the DS.
+NNS_VOLUME_TABLE_ENTRIES = 0x100
+NNS_VOLUME_TABLE_SIZE = NNS_VOLUME_TABLE_ENTRIES * 2
+NNS_VOLUME_FADER_INDEX = 128
 
 PORT_DEFINES = ["-DSDK_ARM9", "-DSDK_TS", "-DSDK_4M", "-DSDK_CODE_ARM",
                 "-DSDK_FINALROM", "-DNNS_FINALROM", "-DSDK_PORT_3DS",
@@ -208,6 +215,25 @@ def port_cflags(target: str, cxx: bool = False) -> list[str]:
     flags += HOST_FLAGS if target == "host32" else ARM_FLAGS
     if SANITIZE and target == "host32":
         flags += SANITIZE_FLAGS
+    else:
+        # The game is 1,092 objects and used to carry no -O at all, so GCC's
+        # default (-O0) applied to all of them: no inlining, no frame-pointer
+        # elision, no IPA. Measured on devkitARM 16.1.0, -O2 shrinks the game's
+        # .text from 8,146,868 to 4,512,808 B (-44.6%) and the packaged .3dsx
+        # from 9,403,804 to 5,762,900 B -- and on an Old 3DS that freed memory
+        # comes straight out of the 64 MiB process budget and grows the linear
+        # heap, which is the resource the compositor is short of. -O3 and -Os
+        # were measured too: O3 is +17% over O2 for no measured gain, Os only
+        # saves a further 0.61 MB and slows hot code. Keep the sanitizer build
+        # where it was (the replay wants its debug info and its -O0 behaviour).
+        #
+        # -fno-ipa-icf: -O2 merges functions that compile to identical bodies,
+        # which changes function-pointer identity. This port passes functions
+        # around constantly (IRQ table entries, HBlank tasks, SysTask
+        # callbacks), so two byte-identical callbacks becoming one is not
+        # something the game's code can be assumed to survive. It costs well
+        # under 1% of code size.
+        flags += ["-O2"]
     return flags
 
 
@@ -295,16 +321,14 @@ def app_sources(target: str) -> list[Path]:
     else:
         # The 3DS shell's scripted-input parser (plain C, host-testable).
         sources.append(REPO / "hgss" / "game" / "app" / "3ds_input.c")
-        # The port's PICA backend (the classic off-screen path): it turns a
-        # scene into an RGBA8 image and hands it to the image API the 2D
-        # compositor reads. port_pica_abi.c is libctru's struct layout and is
-        # compiled separately (without -fno-short-enums); see the build.
+        # The port's PICA backend and remaster compositor. port_gx3d_pica.c
+        # draws the DS's polygons; port_compose_pica.c puts the 2D layers and
+        # 3D together at the 3DS screen's resolution. port_pica_abi.c is
+        # libctru's struct layout and is compiled separately (without
+        # -fno-short-enums); see the build.
         sources.append(REPO / "3ds_port" / "game" / "app" / "port_gx3d_pica.c")
+        sources.append(REPO / "3ds_port" / "game" / "app" / "port_compose_pica.c")
         sources.append(REPO / "3ds_port" / "game" / "app" / "port_pica_abi.c")
-        # The classic path never reaches the compose profiler; its real
-        # definitions are in port_compose_pica.c, which this program does not
-        # link. See the file.
-        sources.append(REPO / "hgss" / "game" / "app" / "pica_classic_stubs.c")
     return sources
 
 
@@ -970,13 +994,42 @@ def unresolved_symbols(text: str) -> list[str]:
     return list(seen)
 
 
-def check_nns_volume_table(nm: str, binary: Path) -> tuple[bool, str]:
-    """Confirm the linked program defines NNS's volume table, at full size.
+ELF_LAYOUT_SECTION_RE = re.compile(
+    r"\s*\[\s*\d+\]\s+\S*\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+"
+    r"([0-9a-fA-F]+)\s")
+
+
+def elf_bytes_at(readelf: str, binary: Path, addr: int, count: int) -> bytes | None:
+    """The file bytes behind `count` loaded bytes at virtual address `addr`.
+
+    None if no allocated, file-backed section holds the whole range.
+    """
+    for line in run([readelf, "-SW", str(binary)]).stdout.splitlines():
+        match = ELF_LAYOUT_SECTION_RE.match(line)
+        if not match:
+            continue
+        kind = match.group(1)
+        vaddr, offset, size = (int(g, 16) for g in match.group(2, 3, 4))
+        if kind == "NOBITS" or vaddr == 0:
+            continue
+        if not (vaddr <= addr and addr + count <= vaddr + size):
+            continue
+        with binary.open("rb") as handle:
+            handle.seek(offset + addr - vaddr)
+            data = handle.read(count)
+        return data if len(data) == count else None
+    return None
+
+
+def check_nns_volume_table(nm: str, readelf: str, binary: Path) -> tuple[bool, str]:
+    """Confirm the linked program's NNS volume table is the full 256-entry table.
 
     The decomp's empty .rodata.alias_d750 is removed from the SDK data object
     and hgss/compat/src/nns_volume_table.c supplies the table; a future section
     rename or an accidentally dropped app object must fail the build here
     rather than silently take the audio back to a clipped wall with hung notes.
+    The field fader parks at NNS_VOLUME_FADER_INDEX, so that entry must be 0 dB:
+    a short table reads whatever follows it there.
     """
     try:
         proc = run([nm, "-S", "--defined-only", str(binary)])
@@ -986,14 +1039,25 @@ def check_nns_volume_table(nm: str, binary: Path) -> tuple[bool, str]:
         parts = line.split()
         if len(parts) >= 4 and parts[-1] == NNS_VOLUME_SYMBOL:
             try:
+                addr = int(parts[0], 16)
                 size = int(parts[1], 16)
             except ValueError:
                 break
             if size != NNS_VOLUME_TABLE_SIZE:
                 return False, (f"{NNS_VOLUME_SYMBOL} is {size} bytes, "
                                f"want {NNS_VOLUME_TABLE_SIZE}")
+            fader = elf_bytes_at(readelf, binary,
+                                 addr + 2 * NNS_VOLUME_FADER_INDEX, 2)
+            if fader is None:
+                return False, (f"{NNS_VOLUME_SYMBOL}[{NNS_VOLUME_FADER_INDEX}] "
+                               "is not in the file")
+            value = int.from_bytes(fader, "little", signed=True)
+            if value != 0:
+                return False, (f"{NNS_VOLUME_SYMBOL}[{NNS_VOLUME_FADER_INDEX}] "
+                               f"is {value}, want 0 (0 dB)")
             return True, (f"{NNS_VOLUME_SYMBOL} -> "
-                          f"{NNS_VOLUME_PORT_SOURCE.name} ({size} bytes)")
+                          f"{NNS_VOLUME_PORT_SOURCE.name} ({size} bytes, "
+                          f"[{NNS_VOLUME_FADER_INDEX}] = 0)")
     return False, f"{NNS_VOLUME_SYMBOL} is not defined"
 
 
@@ -1230,6 +1294,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"hgss_game: {root} is not a bootstrapped checkout "
               f"(run python3 tools/bootstrap.py)", file=sys.stderr)
         return 2
+    # The patch stack is part of the source, and a tree that is missing a
+    # patch compiles silently and then misbehaves on hardware: a native tree
+    # without 1905 kept a raw 0x04000000 read that aborted the console at the
+    # first map load drawing the wireless icon. One `git log` is cheap.
+    if root.name == "upstream" and root.parent.name == "build":
+        patch_check = subprocess.run(
+            [sys.executable, str(TOOLS / "check_patches.py"), "--quiet",
+             "--root", str(root.parent.parent)],
+            capture_output=True, text=True)
+        if patch_check.returncode != 0:
+            print(patch_check.stderr, file=sys.stderr, end="")
+            print("hgss_game: build/upstream is missing patches; run "
+                  "python3 tools/check_patches.py for the list", file=sys.stderr)
+            return 2
     tools = target_tools(args.target)
     out.mkdir(parents=True, exist_ok=True)
     log_dir = out / "logs"
@@ -1341,14 +1419,15 @@ def main(argv: list[str] | None = None) -> int:
     pak_c = pak_reader_source(out)
     app_jobs.append((pak_c, out / "app" / "pak_reader_hgss.o", "c"))
     print(f"== compiling the app ({len(app_jobs)} files)", flush=True)
-    app_cflags = list(cflags) + [f"-I{REPO / '3ds_port' / 'pak' / 'include'}"]
+    app_cflags = list(cflags) + [f"-I{REPO / '3ds_port' / 'pak' / 'include'}",
+                                 f"-I{REPO / '3ds_port' / 'game' / 'app'}"]
     if args.target == "3ds":
         # main_3ds.c is the only file here that includes libctru's headers;
         # the game and the port keep NitroSDK's.
         app_cflags.append(f"-I{devkitpro() / 'libctru' / 'include'}")
-        # The app objects are compiled by hand, so port_cflags' lack of -O2
-        # would leave them at -O0. Platinum's own program is -O2; the PICA
-        # backend's per-frame batching benefits and the DS gate never sees it.
+        # (port_cflags carries -O2 now, so this is belt-and-braces for the
+        # app half: the PICA backend's per-frame batching benefits and the DS
+        # gate never sees these objects.)
         app_cflags.append("-O2")
     app_objects, app_failed = compile_objects(
         tools["cc"], app_cflags, app_jobs, args.jobs, log_dir, args.keep_going)
@@ -1393,7 +1472,8 @@ def main(argv: list[str] | None = None) -> int:
     (out / "link.log").write_text(text, encoding="utf-8")
     if proc.returncode == 0 and binary.is_file():
         print(f"   linked {binary}")
-        table_ok, table_text = check_nns_volume_table(tools["nm"], binary)
+        table_ok, table_text = check_nns_volume_table(tools["nm"], tools["readelf"],
+                                                     binary)
         print(f"   [sound] {table_text}")
         if not table_ok:
             print("hgss_game: the NNS volume table is missing or the wrong size; "

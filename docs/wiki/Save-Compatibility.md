@@ -23,6 +23,8 @@ The image is the cartridge's 4 Mbit flash chip, copied as bytes.
 
 A slot is valid when its footer has the right size, magic and slot number, and its CRC matches. This is what the tool's `check_slot` function tests, and the comment on it says it is a port of the game's `ValidateSaveSectorFooter`.
 
+Early 3DS builds wrote both the slot footer CRC and each substruct's own CRC with a reflected table, not CCITT (patches 1906/1907). The loader only checked the footer, so such a save loaded and then asserted at the first substruct that was read. The port now accepts and rewrites those legacy substruct CRCs on first read; `savetool.py repair` can rewrite the slot footers but does not know the substruct boundaries.
+
 ## How the game picks a slot
 
 Every valid slot has a `count`. The game picks the slot with the newer count when both are valid. The counts are u32 values and can wrap, so the comparison treats `0xFFFFFFFF` as older than `0` (`SaveCounterCompare` in `src/save.c`; the tool's `counter_compare` does the same).
@@ -42,15 +44,16 @@ Erased flash reads as `0xFF` bytes. An erased chip has no footer magic, so it re
 
 ## The tool: savetool
 
-`tools/savetool.py` normalizes, validates and compares save images. It is a standard-library Python program, and its three commands are:
+`tools/savetool.py` normalizes, validates, repairs and compares save images. It is a standard-library Python program, and its four commands are:
 
 | Command | What it does | Exit status |
 | --- | --- | --- |
 | `normalize IN [-o OUT]` | Strips a DeSmuME text footer, if present, and checks that the result is 524,288 bytes. | 0 on success, 2 on error. |
 | `validate FILE [--layout SIZE0,SIZE1]` | Discovers the slot sizes (or takes them from `--layout`), checks each slot in both mirrors, and prints the status and the newer mirror. | 0 only for `IS_GOOD`, otherwise 1. |
+| `repair IN -o OUT [--layout SIZE0,SIZE1]` | Recomputes the CRC of each structurally valid **slot footer**. It repairs the outer CRCs written by early 3DS builds; the port migrates per-substruct CRCs on first read. | 0 on success, 2 on error. |
 | `diff A B [--block N]` | Lists the byte ranges that differ, in blocks of `N` bytes (default `0x1000`). | 0 if identical, 1 if not. |
 
-The tool never edits its input. `normalize` writes a separate file if you give it `-o`. Its tests use synthetic images, as the test file's header says (`tests/test_savetool.py`, which has 15 test functions). Phase 0 records 15 tests passing ([docs/progress/phase-0.md](../progress/phase-0.md)).
+The tool never edits its input. `normalize` and `repair` write a separate file, named with `-o`. Its tests use synthetic images, as the test file's header says (`tests/test_savetool.py`, which has 18 test functions). Phase 0 records 15 tests passing ([docs/progress/phase-0.md](../progress/phase-0.md)); the repair command added three more.
 
 Use it on any image before comparing saves. `validate` is the quickest way to see whether a save is intact and which slot the game would load.
 
@@ -122,13 +125,13 @@ The plan lists six rules for the save ([gameplan.md](../../gameplan.md), "Rules"
 
 | Rule | Status |
 | --- | --- |
-| 1. Size exactly 524,288 bytes; reject other sizes; strip known emulator footers | `savetool normalize` and `validate` do this. The game's own load path in the port is not written yet (Phase 4). |
-| 2. Erased flash reads `0xFF`, which means "no save" | Stated in the plan. The HGSS path is not run yet (Phase 4). |
-| 3. Write-through: each completed write goes to the file, then `fsync` or the archive commit | Not started for HGSS. `port_card.c`, which the port reuses from Platinum, persists the flash image as a raw `.sav` file ([3ds_port/nitro/src/port_card.c](../../3ds_port/nitro/src/port_card.c) header). The CIA commit is not written. |
-| 4. No port data inside the save; port settings go in `port.ini` | Planned. No `port.ini` exists yet. |
+| 1. Size exactly 524,288 bytes; reject other sizes; strip known emulator footers | `savetool normalize`/`validate` do this for files. The port's card layer reads exactly 524,288 bytes and rejects other sizes; a DeSmuME `.dsv` still needs `savetool normalize` first. |
+| 2. Erased flash reads `0xFF`, which means "no save" | The port's card image is created filled with `0xFF`; the game's slot checks then see `NOT_EXIST` and offer New Game. |
+| 3. Write-through: each completed write goes to the file, then `fsync` or the archive commit | `port_card.c` writes each changed range, `fflush`es and `fsync`s before completing the request ([3ds_port/nitro/src/port_card.c](../../3ds_port/nitro/src/port_card.c) header). The CIA archive commit is not written; the `.3dsx`/PC paths use a file. |
+| 4. No port data inside the save; port settings go in `port.ini` | `port.ini` exists for `script` and `fps`; no save data is added to the image. |
 | 5. Console-bound values (MAC address, RTC offset) come from `port.ini` and fill fields only | Planned. |
 | 6. Layout equality is checked by the probe | Done locally, with 0 differences ([docs/progress/phase-1.md](../progress/phase-1.md)). Not yet in CI. |
 
-The plan's test list for saves (load a real save, port to melonDS and back, byte-level diff, interrupted write, Pokéwalker and Chatot data, hardware round trip) is not implemented. Only the layout probe and the savetool tests exist ([gameplan.md](../../gameplan.md), "Tests").
+The plan's full test list is not all in place: raw cartridge/emulator saves load now (1906), legacy port saves migrate their substruct CRCs (1907), and `savetool repair` fixes slot footers for old port saves. The melonDS/hardware round trips, interrupted-write fault injection, Pokéwalker/Chatot data and the byte-level diff are still manual or pending ([gameplan.md](../../gameplan.md), "Tests").
 
 Two pitfalls from the plan are still open. The CIA save archive must be committed after each write, or a save can be lost if the console powers off. Two versions, HeartGold and SoulSilver, must keep separate save folders, so one build never loads the other's save ([gameplan.md](../../gameplan.md), Phase 5 and "Pitfalls").

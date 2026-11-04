@@ -279,6 +279,38 @@ SOUND_SEQ_TEST_BIN := $(OUT)/test_sound_sequence
 $(SOUND_SEQ_TEST_BIN): tests/test_sound_sequence.c $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) -lm -o $@
 
+# Measurement tool, not a test: plays one sequence of a retail SDAT through the
+# port's audio stack (tests/sdat_render.c) and writes a WAV and mixer diagnostics.
+# Host32 only, and it needs NitroSystem's archive: SDAT_NNS_LIB=<libnitrosystem.a>.
+# `python3 tools/hgss_nitro.py sdat-render --out DIR` builds both archives first.
+# sdat_render has the diagnostics (NITRO_SOUND_STATS compiles port_sound_chip.c
+# with the frame hook); sdat_render_release has the port's own mixer, for timing.
+SDAT_RENDER_BIN := $(OUT)/sdat_render
+SDAT_RENDER_RELEASE_BIN := $(OUT)/sdat_render_release
+SDAT_NNS_LIB ?=
+.PHONY: sdat_render sdat_render_release
+sdat_render: $(SDAT_RENDER_BIN)
+sdat_render_release: $(SDAT_RENDER_RELEASE_BIN)
+
+# The game's NitroSystem volume table (_0210D750) is the port's own object, which
+# tools/hgss_game.py links into the game; the renderers link the same one, or
+# NNS_SndMain has no definition for it.
+SDAT_VOLUME_TABLE := $(ROOT)/hgss/compat/src/nns_volume_table.c
+
+$(SDAT_RENDER_BIN): tests/sdat_render.c src/port_sound_chip.c include/nitro_port_sound_chip.h $(LIB) $(SDAT_NNS_LIB) $(SDAT_VOLUME_TABLE)
+	@test "$(TARGET)" = host32 || { echo "sdat_render needs TARGET=host32"; exit 1; }
+	@test -n "$(SDAT_NNS_LIB)" || { echo "set SDAT_NNS_LIB=<libnitrosystem.a> (tools/hgss_nitro.py sdat-render does)"; exit 1; }
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(NNS_INCLUDES) -DNITRO_SOUND_STATS $(LDFLAGS) $< src/port_sound_chip.c $(SDAT_VOLUME_TABLE) \
+		-Wl,--start-group $(SDAT_NNS_LIB) $(LIB) -Wl,--end-group -lm -o $@
+
+$(SDAT_RENDER_RELEASE_BIN): tests/sdat_render.c $(LIB) $(SDAT_NNS_LIB) $(SDAT_VOLUME_TABLE)
+	@test "$(TARGET)" = host32 || { echo "sdat_render_release needs TARGET=host32"; exit 1; }
+	@test -n "$(SDAT_NNS_LIB)" || { echo "set SDAT_NNS_LIB=<libnitrosystem.a> (tools/hgss_nitro.py sdat-render does)"; exit 1; }
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(NNS_INCLUDES) $(LDFLAGS) $< $(SDAT_VOLUME_TABLE) \
+		-Wl,--start-group $(SDAT_NNS_LIB) $(LIB) -Wl,--end-group -lm -o $@
+
 # Unit tests run on the PC only.
 TEST_BIN := $(OUT)/test_nitro
 

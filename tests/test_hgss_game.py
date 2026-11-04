@@ -233,17 +233,19 @@ class AppSourceTests(unittest.TestCase):
     def test_3ds_program_has_the_pica_backend(self):
         """The 3D layer needs a GPU worker; the backend is program-only.
 
-        port_gx3d_pica.c draws a scene into an off-screen PICA target and
-        hands the image to the port's image API. port_pica_abi.c is linked
-        with it: it exposes libctru's struct layout to the port (the port is
-        built with -fno-short-enums, libctru is not).
+        port_gx3d_pica.c draws the DS's polygons; port_compose_pica.c puts
+        the 2D layers and 3D together at the 3DS screen's resolution.
+        port_pica_abi.c is linked with them: it exposes libctru's struct
+        layout to the port (the port is built with -fno-short-enums, libctru
+        is not).
         """
         names = [p.name for p in hg.app_sources("3ds")]
         self.assertIn("port_gx3d_pica.c", names)
+        self.assertIn("port_compose_pica.c", names)
         self.assertIn("port_pica_abi.c", names)
-        self.assertIn("pica_classic_stubs.c", names)
+        self.assertNotIn("pica_classic_stubs.c", names)
         self.assertNotIn("pica_scene.c", names)
-        for name in ("port_gx3d_pica.c", "port_pica_abi.c"):
+        for name in ("port_gx3d_pica.c", "port_compose_pica.c", "port_pica_abi.c"):
             self.assertNotIn(name, [p.name for p in hg.app_sources("host32")])
 
     def test_shader_sources_are_in_dvle_order(self):
@@ -484,30 +486,110 @@ class NnsVolumeTableTests(unittest.TestCase):
 
     def port_values(self):
         text = hg.NNS_VOLUME_PORT_SOURCE.read_text()
-        body = text[text.index("_0210D750[0x80] = {"):]
+        body = text[text.index("_0210D750[0x100] = {"):]
         body = body[body.index("{") + 1:body.index("};")]
         return [int(v) for v in re.findall(r"-?\d+", body)]
 
-    def test_has_the_128_linear_volume_steps(self):
-        values = self.port_values()
-        self.assertEqual(len(values), 128)
-        self.assertEqual(values[0], -32768)     # 0 = silence
-        self.assertEqual(values[-1], 0)         # 127 = 0 dB
-        self.assertTrue(all(a <= b for a, b in zip(values, values[1:])))
-
-    def test_matches_the_nitrosdk_table(self):
+    def sdk_values(self):
         sdk = hg.REPO / "build" / "upstream" / "lib" / "NitroSDK" / "src" / "snd" / "SND_util.c"
         if not sdk.is_file():
             self.skipTest("run tools/bootstrap.py first")
         text = sdk.read_text()
         body = text[text.index("SNDi_DecibelTable[0x80] = {"):]
         body = body[body.index("{") + 1:body.index("};")]
-        self.assertEqual(self.port_values(), [int(v) for v in re.findall(r"-?\d+", body)])
+        return [int(v) for v in re.findall(r"-?\d+", body)]
+
+    def test_has_the_256_entry_table(self):
+        values = self.port_values()
+        self.assertEqual(len(values), 256)
+        self.assertEqual(values[0], -32768)     # 0 = silence
+        self.assertEqual(values[127], 0)        # 127 = 0 dB
+        self.assertTrue(all(a <= b for a, b in zip(values, values[1:])))
+
+    def test_size_and_field_fader_entry_regression(self):
+        # Field code parks the fader at 128 (GF_SndHandleMoveVolume(..., 128, 15)),
+        # so snd_player.c reads entry 128 on every field BGM channel. The port
+        # table once stopped at 127; the read past it hit unrelated rodata.
+        self.assertEqual(hg.NNS_VOLUME_TABLE_SIZE, 0x200)
+        self.assertEqual(hg.NNS_VOLUME_FADER_INDEX, 128)
+        values = self.port_values()
+        self.assertEqual(len(values) * 2, hg.NNS_VOLUME_TABLE_SIZE)
+        self.assertEqual(values[hg.NNS_VOLUME_FADER_INDEX], 0)
+        self.assertEqual(values[128:132], [0, 59, 118, 178])  # DS .rodata.unified_01
+
+    def test_matches_the_nitrosdk_table(self):
+        self.assertEqual(self.port_values()[:128], self.sdk_values())
+
+    def tail_values(self):
+        """Entries 128..255 from the DS `.rodata.unified_01` bytes in nitro_sdk_data.s.
+
+        That section follows the empty `.rodata.alias_d750` section that
+        _0210D750 names; its first 256 bytes, read little-endian s16, are the tail.
+        """
+        asm = hg.REPO / "build" / "upstream" / hg.NNS_VOLUME_SDK_SOURCE
+        if not asm.is_file():
+            self.skipTest("run tools/bootstrap.py first")
+        data = bytearray()
+        in_section = False
+        for line in asm.read_text().splitlines():
+            directive = line.strip()
+            if directive.startswith(".section"):
+                if in_section:
+                    break
+                in_section = directive.startswith(".section .rodata.unified_01")
+                continue
+            if in_section and directive.startswith(".byte"):
+                data += bytes(int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{1,2})", directive))
+                if len(data) >= 256:
+                    break
+        self.assertGreaterEqual(len(data), 256, "unified_01 section shorter than 256 bytes")
+        return list(struct.unpack("<128h", bytes(data[:256])))
+
+    def test_matches_the_nitrosdk_tail(self):
+        # Index 128 is the field fader's entry (0 dB); 128..255 come from the same
+        # DS bytes, so the port must carry all 128 values, not just index 128.
+        self.assertEqual(self.port_values()[128:], self.tail_values())
 
     def test_port_programs_link_the_table(self):
         for target in ("host32", "3ds"):
             self.assertIn(hg.NNS_VOLUME_PORT_SOURCE, hg.app_sources(target))
-        self.assertEqual(hg.NNS_VOLUME_TABLE_SIZE, 256)
+        self.assertEqual(hg.NNS_VOLUME_TABLE_SIZE, 0x200)
+
+    def link_table(self, values):
+        """Link a program that defines _0210D750 with `values`; (nm, readelf, path)."""
+        if not sys.platform.startswith("linux"):
+            self.skipTest("needs GNU nm and readelf on a linux host")
+        cc, nm, readelf = (shutil.which(t) for t in ("cc", "nm", "readelf"))
+        if not (cc and nm and readelf):
+            self.skipTest("needs cc, nm and readelf")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        src = Path(tmp.name) / "table.c"
+        src.write_text("const short _0210D750[%d] = {%s};\n"
+                       "int main(void) { return 0; }\n"
+                       % (len(values), ", ".join(str(v) for v in values)))
+        binary = Path(tmp.name) / "table"
+        subprocess.run([cc, "-o", str(binary), str(src)], check=True)
+        return nm, readelf, binary
+
+    def test_checker_accepts_the_full_table(self):
+        nm, readelf, binary = self.link_table(self.port_values())
+        ok, text = hg.check_nns_volume_table(nm, readelf, binary)
+        self.assertTrue(ok, text)
+
+    def test_checker_rejects_the_old_128_entry_table(self):
+        nm, readelf, binary = self.link_table(self.port_values()[:128])
+        ok, text = hg.check_nns_volume_table(nm, readelf, binary)
+        self.assertFalse(ok)
+        self.assertIn("is 256 bytes, want 512", text)
+
+    def test_checker_rejects_a_nonzero_field_fader_entry(self):
+        values = self.port_values()
+        values[hg.NNS_VOLUME_FADER_INDEX] = 59
+        nm, readelf, binary = self.link_table(values)
+        ok, text = hg.check_nns_volume_table(nm, readelf, binary)
+        self.assertFalse(ok)
+        self.assertIn("[128] is 59, want 0", text)
 
     def test_sdk_alias_section_is_the_one_dropped(self):
         self.assertEqual(hg.NNS_VOLUME_ALIAS_SECTION, ".rodata.alias_d750")
@@ -630,8 +712,10 @@ class OverlayCheckTests(unittest.TestCase):
         the 3DS shell drew nothing for 39,000 frames that way.
         """
         text = (self.APP / "main_3ds.c").read_text()
-        for hook in ("NitroPort_RenderScreens", "NitroPort_CardFlush",
-                     "NitroPort_SetButtons", "NitroPort_SetTouch"):
+        for hook in ("NitroPort_CardFlush", "NitroPort_SetButtons",
+                     "NitroPort_SetTouch", "NitroPort_EngineAOnTop",
+                     "NitroPort_SoundRender", "NitroPort_SoundPumpReplies",
+                     "NitroPort_HBlankLinesOnce"):
             declarations = [line for line in text.splitlines()
                             if line.startswith(("void ", "int ")) and hook + "(" in line]
             self.assertTrue(declarations, f"{hook} is not declared")
@@ -675,59 +759,75 @@ class OverlayCheckTests(unittest.TestCase):
         # Above the game: a 20-30 ms composite must not starve the mixer.
         self.assertIn("AUDIO_THREAD_PRIORITY 0x2e", text)
 
-    def test_shell_skips_only_the_composite_never_the_blit(self):
-        """Both screens are copied every frame; only the composite may skip.
+    def test_shell_presents_through_the_remaster_only(self):
+        """There is no classic 1:1 path: the compositor is the display.
 
-        The framebuffer is double buffered. Skipping the copy of an unchanged
-        screen leaves the other buffer showing an older picture and the
-        display alternates between them -- the flicker the intro showed, and
-        a stale/black field in the bedroom. A new 3D image also forces engine
-        A, because the port's own uses3D test does not cover every field.
+        The game thread hands its display state to a drawer, the drawer
+        publishes the 2D layers, and the V-blank thread presents the composed
+        frames. The old software blit and gfxSwapBuffers path is gone, so a
+        256x192 image can never reach the LCD by itself.
         """
         text = (self.APP / "main_3ds.c").read_text()
-        # Engine A can show 3D and is always composed; only B is skipped.
-        self.assertIn("NitroPort_Render2D(0,", text)
-        self.assertIn("NitroPort_Render2DIfChanged(1,", text)
+        # The drawer/compositor/V-blank pipeline.
+        self.assertIn("NitroPort_Render2DSplit(", text)
+        self.assertIn("NitroPort_Render2DSplitIfChanged(", text)
+        self.assertIn("NitroPort_ComposePublish(", text)
+        self.assertIn("NitroPort_Compose2DCurrent(", text)
+        self.assertIn("NitroPort_Compose2DDone(", text)
+        self.assertIn("NitroPort_ComposeVBlank()", text)
+        self.assertIn("NitroPort_ComposeFrame(", text)
+        # The classic display: a converted 256x192 image copied to a
+        # framebuffer and swapped. None of it may remain.
+        self.assertNotIn("static void Blit(", text)
+        self.assertNotIn("gfxSwapBuffers()", text)
+        self.assertNotIn("NitroPort_Render2D(0,", text)
         # The image counter is logged so a hardware run can prove the GPU
-        # published images (it stayed 0 while no worker existed).
+        # published images.
         self.assertIn("NitroPort_Gx3dImageCount()", text)
-        self.assertNotIn("NitroPort_RenderScreens(top, bottom);", text)
-        frame = text[text.index("static void DrawFrame"):]
-        frame = frame[:frame.index("\n}")]
-        self.assertIn("Blit(top,", frame)
-        self.assertIn("Blit(bottom,", frame)
-        self.assertIn("gfxSwapBuffers()", frame)
-        self.assertEqual(frame.count("if (topFb != NULL)"), 1)
-        self.assertEqual(frame.count("if (bottomFb != NULL)"), 1)
 
-    def test_shell_runs_the_gpu_and_geometry_threads(self):
-        """The 3D layer is a worker, not a side effect of the composite.
+    def test_shell_runs_the_remaster_and_geometry_threads(self):
+        """The display is Platinum's: display, drawer and V-blank threads.
 
-        On the 3DS the port only converts an image that was handed over by a
-        GPU worker; with none, AcquireImage always returned NULL and engine A
-        drew black. The shell now starts the geometry thread (scene building
-        off the game's thread) and the GPU thread (PICA init, PicaRender,
-        submit, convert), flushes the geometry once a frame, and wakes the GPU
-        from the port's SWAP callback.
+        The display thread initialises citro3d and the compositor, draws each
+        finished scene with NitroPort_ComposeFrame, and the V-blank thread
+        presents it. The geometry thread keeps scene building off the game's
+        thread, and the game flushes once a frame before handing the state to
+        a drawer.
         """
         text = (self.APP / "main_3ds.c").read_text()
         self.assertIn("NitroPort_PicaInit()", text)
-        self.assertIn("NitroPort_PicaRender(scene, &dropped)", text)
+        self.assertIn("NitroPort_ComposeInit(&sCompose)", text)
+        self.assertIn("NitroPort_ComposeFrame(scene, seen,", text)
+        # A 2D-only screen (a menu, the intro before its first 3D) has no
+        # scene; the compositor must still draw its changed layers.
+        self.assertIn("scene == NULL || (r & bit)", text)
+        self.assertIn("NitroPort_Gx3dNewerScene(seen)", text)
+        self.assertIn("NitroPort_Gx3dNewerScenes(seen)", text)
         self.assertIn("NitroPort_Gx3dFlush()", text)
         self.assertIn("NitroPort_Gx3dThreadMain(&sGeoRunning)", text)
-        self.assertIn("NitroPort_Gx3dConvertPending()", text)
+        self.assertIn("NitroPort_Render2DTakeState(", text)
+        self.assertIn("NitroPort_ComposeVBlank()", text)
         # The camera-plane workaround is gone: the port drops the exact
         # (0,0,0,0) zero-area triangles itself, so the scene is passed on
         # untouched.
         self.assertNotIn("Hgss_PicaDropBehindCamera", text)
-        self.assertIn("NitroPort_PicaRender(scene, &dropped)", text)
-        # The GPU thread gets the New 3DS's free core, not the game's.
-        self.assertIn("sNew3ds ? 2 : -2", text)
+        self.assertNotIn("NitroPort_PicaRender(scene, &dropped)", text)
+        # The first scene is built with the wide view: the startup
+        # SetWideView is before the geometry thread, not only per frame.
+        self.assertLess(text.index("NitroPort_Gx3dSetWideView(320);"),
+                        text.index("GpuStartGeometry(priority)"))
+        # Engine A's drawer gets the New 3DS's free core. The display thread's
+        # core is chosen by the caller: core 0 on a New 3DS, core 1 on an Old
+        # 3DS (whose share is 80%, not the 30% the first plan assumed).
+        self.assertIn("StartDrawer(ENGINE_A, priority + 1, 2)", text)
+        self.assertIn("threadCreate(GpuMain, NULL, 128 * 1024, priority, core, false)",
+                      text)
+        self.assertIn("GpuStart(displayPriority, displayCore)", text)
         # A strong override: the port's default is a weak no-op.
         self.assertIn("void NitroPort_Gx3dScenePublished(void)", text)
         self.assertNotIn("weak", text[text.index("void NitroPort_Gx3dScenePublished"):
                                     text.index("void NitroPort_Gx3dScenePublished") + 200])
-        # Flush happens before the composite that reads the image.
+        # Flush happens before the drawers that read the scene.
         frame = text[text.index("void NitroPort_OnFrame"):]
         frame = frame[:frame.index("\n}")]
         self.assertLess(frame.index("NitroPort_Gx3dFlush()"),
@@ -754,37 +854,119 @@ class OverlayCheckTests(unittest.TestCase):
         self.assertNotIn("Hgss_PicaDropBehindCamera",
                          (self.APP / "main_3ds.c").read_text())
 
-    def test_shell_falls_back_to_2d_if_the_gpu_will_not_start(self):
-        """A failed PICA init or thread must not take the game down.
+    def test_shell_refuses_to_fall_back_to_2d(self):
+        """The remaster is mandatory: no failed display may run the game 1:1.
 
-        The previous hardware builds drew both screens without 3D; that is
-        still what a failed GPU start leaves, with a line in the log.
+        A failed citro3d or compose init stops the display thread with
+        ``sDisplayFailed`` set, and main shows ``DisplayErrorScreen`` and
+        never starts the game thread. The only remaining fallback is the
+        geometry thread going back to the game's own thread, which changes
+        where scenes are built, not how they are displayed.
         """
         text = (self.APP / "main_3ds.c").read_text()
         gpu = text[text.index("static void GpuMain"):]
         gpu = gpu[:gpu.index("\nstatic bool GpuStart")]
         self.assertIn("if (!NitroPort_PicaInit())", gpu)
+        self.assertIn("if (!NitroPort_ComposeInit(&sCompose))", gpu)
         self.assertIn("sGpuRunning = false", gpu)
+        self.assertNotIn("sDisplayFailed", gpu)
         start = text[text.index("static bool GpuStart"):]
         start = start[:start.index("\nstatic void GpuStop")]
         self.assertIn("if (!sGpuRunning)", start)
         self.assertIn("return false", start)
+        # A failed display is reported, not papered over with the old blit.
+        self.assertIn("static void DisplayErrorScreen(void)", text)
+        self.assertIn("if (displayReady) {", text)
+        self.assertLess(text.index("displayReady = GpuStart("),
+                        text.index("threadCreate(GameThread"))
+        self.assertIn("DisplayErrorScreen();", text)
         # Geometry failure returns the engine to the game's thread.
         geo = text[text.index("static bool GpuStartGeometry"):]
         geo = geo[:geo.index("\nstatic void GpuStopGeometry")]
         self.assertIn("NitroPort_Gx3dStopThread()", geo)
 
+    def test_shell_maps_touch_to_the_ds_screen(self):
+        """The remaster's lower screen is 320x240; the game's is 256x192.
 
+        Passing raw 3DS coordinates was a pre-existing bug (the old 1:1 art
+        was offset by (32,24)). Both physical axes now scale by 4/5, and
+        scripted input still passes DS coordinates unchanged.
+        """
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("touchX = touch.px * 4 / 5;", text)
+        self.assertIn("touchY = touch.py * 4 / 5;", text)
+        touch = text[text.index("if (held & KEY_TOUCH) {"):]
+        touch = touch[:touch.index("\n    }")]
+        self.assertIn("4 / 5", touch)
+
+    def test_shell_keeps_native_3d_on_an_old_3ds(self):
+        """Old 3DS uses the same layout with smooth3d off, not a fallback."""
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("sCompose.smooth3d = sNew3ds ? 2 : 0;", text)
+        self.assertIn("sCompose.wide = sIniWide;", text)
+        self.assertIn("static int sIniWide = 1;", text)
+
+    def test_shell_reserves_linear_memory_for_compose(self):
+        """Compose needs linear memory beside the game's heap."""
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("void __system_allocateHeaps(void)", text)
+        # A 64 MiB process (an Old 3DS) gives the game a bounded heap and the
+        # rest to the display. The old test was `remaining > 16 MB * 2`, which
+        # a 30.7 MiB Old 3DS fails -- it silently fell through to a half split
+        # and the compositor was left 408 KB for the 3D textures.
+        self.assertIn("HEAP_O3DS_GAME", text)
+        self.assertIn("remaining <= HEAP_SMALL_TOTAL", text)
+        self.assertNotIn("HEAP_SMALL_GAME * 2u", text)
+        self.assertIn("__ctru_linear_heap_size", text)
+
+    def test_pc_box_start_handles_mode_4(self):
+        """The PC box start state must not use an uninitialised next state.
+
+        MOVE POKEMON can arrive as mode 4; the retail start switch has no
+        case for it, so the fade returned the previous frame's PCBoxWork
+        pointer as the state index and crashed in PCBox_RunStateMachine.
+        Patch 1909 initialises/defaults it and guards the dispatch.
+        """
+        patches = sorted((REPO / "patches" / "pokeheartgold").glob("1909-*.patch"))
+        self.assertTrue(patches, "patch 1909 is missing")
+        text = "\n".join(p.read_text() for p in patches)
+        self.assertIn("enum PCBoxState PCBox_State_Start(PCBoxWork *work)", text)
+        self.assertIn("enum PCBoxState nextState = PC_BOX_STATE_MOVE_MODE_INPUT;", text)
+        self.assertIn("nextState = PC_BOX_STATE_MOVE_MODE_INPUT;", text)
+        self.assertIn("return PCBox_StartFadeIn(work, nextState);", text)
+        self.assertIn("int layout = 3;", text)
+        self.assertIn("*state >= PC_BOX_STATE_EXIT", text)
+        self.assertIn("*state = PC_BOX_STATE_START;", text)
+
+    def test_trainer_approach_task_is_passed(self):
+        """The trainer walk-up must pass the task, not a bare no-arg call.
+
+        The public prototype once said IsDone(void) while the definition took
+        SysTask *; ARM read r0 (the ScriptEnv slot address) and dereferenced
+        NULL at the first trainer in line of sight. Patch 1908 fixes the
+        prototype and the call.
+        """
+        patches = sorted((REPO / "patches" / "pokeheartgold").glob("1908-*.patch"))
+        self.assertTrue(patches, "patch 1908 is missing")
+        text = "\n".join(p.read_text() for p in patches)
+        self.assertIn("BOOL TrainerApproach_IsDone(SysTask *task);", text)
+        self.assertIn("void TrainerApproach_Delete(SysTask *task);", text)
+        self.assertIn("TrainerApproach_IsDone(approach)", text)
+        self.assertIn("TrainerApproach_Delete(approach)", text)
+
+    def test_shell_has_a_console_only_on_its_error_screens(self):
         """NitroPort_Log writes to stderr, which the console draws on screen.
 
         A console initialised at startup put every log line over the bottom
-        screen; it belongs to the "can't start" path only.
+        screen; it belongs to the two "can't start" paths only -- the pack
+        error and the mandatory display error.
         """
         text = (self.APP / "main_3ds.c").read_text()
-        self.assertEqual(text.count("consoleInit("), 1)
-        error = text[text.index("static void PakErrorScreen"):]
-        error = error[:error.index("\n}")]
-        self.assertIn("consoleInit(", error)
+        self.assertEqual(text.count("consoleInit("), 2)
+        for name in ("static void PakErrorScreen", "static void DisplayErrorScreen"):
+            error = text[text.index(name):]
+            error = error[:error.index("\n}")]
+            self.assertIn("consoleInit(", error)
 
     def test_shell_caps_the_frame_rate_at_60_by_default(self):
         """A frame under the refresh is not a 60 Hz frame.
@@ -815,15 +997,16 @@ class OverlayCheckTests(unittest.TestCase):
     def test_shell_waits_after_the_draw_never_before_it(self):
         """The cap is a sleep after the frame, not another V-blank before it.
 
-        Both blits and gfxSwapBuffers stay unconditional and ahead of the wait;
-        a frame that already overran returns from the wait immediately, and one
-        more than a whole period behind re-anchors the deadline instead of
-        bursting to catch up.
+        The drawn frame goes to the drawers and is presented at the next
+        V-blank; the frame-start deadline stays after that hand-off. A frame
+        that already overran returns from the wait immediately, and one more
+        than a whole period behind re-anchors the deadline instead of bursting
+        to catch up.
         """
         text = (self.APP / "main_3ds.c").read_text()
-        draw = text[text.index("static void DrawFrame"):]
+        draw = text[text.index("static bool DrawFrame"):]
         draw = draw[:draw.index("\n}")]
-        self.assertIn("gfxSwapBuffers()", draw)
+        self.assertIn("NitroPort_Compose2DOffered(", draw)
         self.assertNotIn("svcSleepThread", draw)
         self.assertNotIn("WaitForFrameCap", draw)
         frame = text[text.index("void NitroPort_OnFrame"):]
@@ -843,6 +1026,840 @@ class OverlayCheckTests(unittest.TestCase):
     def test_check_is_declared_for_the_program(self):
         text = (self.APP / "heartgold.h").read_text()
         self.assertIn("int Heartgold_CheckOverlays(void);", text)
+
+
+class PixelFilterPresetTests(unittest.TestCase):
+    """The X+R pixel-filter cycle and its lower-screen toast (source wiring).
+
+    The presets are cheap-to-expensive, the 3D texture filter is changed on
+    the display thread only, and the toast is drawn into the lower screen's
+    published layers without touching the upper screen's stereo.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    PORT = REPO / "3ds_port" / "game" / "app"
+
+    def test_shell_calls_the_runtime_setter(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("NitroPort_ComposeSetFilter(p->filter2d, p->filter3d)",
+                      text)
+
+    def test_combo_is_detected_before_scripted_input(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        combo = text.index("filterCombo = (held & (KEY_X | KEY_R))")
+        scripted = text.index("HgssScript_HeldButtons(")
+        self.assertLess(combo, scripted)
+        # Physical X and R are masked while the combo is held; the scripted
+        # buttons are OR'd afterwards and stay untouched.
+        mask = text.index("buttons &= (uint16_t)~(HGSS_BUTTON_X | HGSS_BUTTON_R)")
+        self.assertLess(mask, scripted)
+
+    def test_presets_are_the_five_asked_for(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        for label in ("NEAREST/NEAREST", "SHARP/NEAREST", "SHARP/SHARP",
+                      "SHARP/XBRZ-S", "SCALE2X/XBRZ-S"):
+            self.assertIn(f'"{label}"', text)
+        self.assertIn("COMPOSE_FILTER_NEAREST, 0", text)
+        self.assertIn("COMPOSE_FILTER_SHARP,   0", text)
+        self.assertIn("COMPOSE_FILTER_SHARP,   2", text)
+        self.assertIn("COMPOSE_FILTER_SHARP,   4", text)
+        self.assertIn("COMPOSE_FILTER_SCALE2X, 4", text)
+        # The default is SHARP/NEAREST, index 1.
+        self.assertIn("static int sFilterPreset = 1;", text)
+
+    def test_toast_is_lower_screen_under_and_over(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("layers->under[i] = color;", text)
+        self.assertIn("layers->over[i] = (uint16_t)(0x8000u | color);", text)
+        self.assertIn("layers->overAlpha[i] = 16;", text)
+        self.assertIn("toast_draw(layers);", text)
+        self.assertIn("if (!top)", text)
+
+    def test_toast_expires_by_tick(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("#define TOAST_SECONDS 2", text)
+        self.assertIn("#define TOAST_TICKS ((u64)TOAST_SECONDS * SYSCLOCK_ARM11)", text)
+        self.assertIn("svcGetSystemTick() + TOAST_TICKS", text)
+        self.assertIn("svcGetSystemTick() >= until", text)
+
+    def test_texture_filter_is_not_set_from_the_shell(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertNotIn("NitroPort_PicaTextureFilter", text)
+
+    def test_runtime_setter_is_in_the_port(self):
+        header = (self.PORT / "port_pica.h").read_text()
+        compose = (self.PORT / "port_compose_pica.c").read_text()
+        self.assertIn("int NitroPort_ComposeSetFilter(int filter2d, int filter3d);",
+                      header)
+        self.assertIn("int NitroPort_ComposeSetFilter(int filter2d, int filter3d)\n{",
+                      compose)
+        self.assertIn("__atomic_store_n(&sFilterRequest", compose)
+        self.assertIn("__atomic_exchange_n(&sFilterRequest", compose)
+        self.assertIn("NitroPort_PicaTextureFilter(filter3d)", compose)
+        # The filter is latched into each published set so a frame drawn with
+        # it samples it with the same filter.
+        self.assertIn("set->filter2d = filter2d;", compose)
+        self.assertIn("set->filter2d == COMPOSE_FILTER_SCALE2X", compose)
+
+
+class AptSuspendTests(unittest.TestCase):
+    """Sleep/HOME must not let a compose cross the GPU handover."""
+
+    APP = REPO / "hgss" / "game" / "app"
+
+    def _function(self, text, start, end):
+        at = text.index(start)
+        return text[at:text.index(end, at)]
+
+    def test_compose_is_bracketed_by_the_suspend_handshake(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        loop = self._function(text, "static void GpuComposeLoop", "/* Once a frame")
+        # Busy first, then check: the Dekker order with AptHook.
+        self.assertGreaterEqual(loop.count("__atomic_store_n(&sComposing, true"), 2)
+        self.assertGreaterEqual(loop.count("suspended = __atomic_load_n(&sSuspended"), 2)
+        self.assertGreaterEqual(loop.count("if (!suspended)"), 2)
+        self.assertGreaterEqual(loop.count("__atomic_store_n(&sComposing, false"), 2)
+        # AptHook waits for a compose already in progress before taking the
+        # presentation queue, and reports whether it settled.
+        hook = self._function(text, "static void AptHook", "/* Wait for the game's thread")
+        self.assertIn("__atomic_load_n(&sComposing, __ATOMIC_SEQ_CST)", hook)
+        self.assertLess(hook.index("__atomic_load_n(&sComposing"),
+                        hook.index("NitroPort_ComposeHold(1)"))
+
+    def test_resume_is_applied_after_apt_hooks(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        hook = self._function(text, "static void AptHook", "/* Wait for the game's thread")
+        self.assertIn("__atomic_store_n(&sResumePending, true", hook)
+        self.assertIn("sAptHome", hook)
+        self.assertIn("sAptAsleep", hook)
+        # The actual resume happens after aptMainLoop returns, so citro3d's
+        # own restore hook has run.
+        frame = self._function(text, "void NitroPort_OnFrame", "/* The game stopped itself. */")
+        self.assertIn("__atomic_exchange_n(&sResumePending", frame)
+        self.assertLess(frame.index("if (!aptMainLoop())"),
+                        frame.index("__atomic_exchange_n(&sResumePending"))
+        self.assertIn("NitroPort_ComposeHold(0)", frame)
+        self.assertLess(frame.index("NitroPort_ComposeHold(0)"),
+                        frame.index("__atomic_store_n(&sSuspended, false"))
+
+
+class PatchStackTests(unittest.TestCase):
+    """tools/check_patches.py must catch a tree that is missing a patch.
+
+    It compares the commit subject `git am` records with the tree's history,
+    because `git apply --check` cannot tell an applied patch from a missing one
+    on a cumulative stack (later patches rewrite the same lines).
+    """
+
+    def _subject(self, text):
+        import tempfile
+        from tools.check_patches import patch_subject
+
+        with tempfile.NamedTemporaryFile("w", suffix=".patch", delete=False) as f:
+            f.write(text)
+            path = f.name
+        try:
+            return patch_subject(Path(path))
+        finally:
+            Path(path).unlink()
+
+    def test_subject_strips_the_patch_tag(self):
+        self.assertEqual(
+            self._subject("From abc\nSubject: [PATCH] gx: send the ortho projection\n\n---\n"),
+            "gx: send the ortho projection")
+
+    def test_subject_strips_a_numbered_tag_and_folds_continuation_lines(self):
+        # format-patch folds long subjects; git am joins them back with spaces.
+        self.assertEqual(
+            self._subject("Subject: [PATCH 3/4] save: check the next chunk header\n"
+                          " is in range before reading it\n"
+                          "\nbody\n"),
+            "save: check the next chunk header is in range before reading it")
+
+    def test_the_checker_covers_every_patch_stack(self):
+        from tools.check_patches import PATCH_STACKS
+
+        names = [name for name, _ in PATCH_STACKS]
+        self.assertEqual(names, ["NitroSDK", "NitroSystem", "pokeheartgold"])
+
+
+class ThreadLifecycleTests(unittest.TestCase):
+    """The game thread must never be freed while it is still running.
+
+    `WaitForGame` exits its loop when `sGameThreadAlive` is false, and a new
+    thread has not necessarily executed its first instruction when
+    `threadCreate` returns. The flag is therefore set before the thread
+    exists; treating "not started" as "ended" freed a live thread's stack on
+    hardware and the process died in teardown.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+
+    def test_the_alive_flag_is_set_before_the_thread_exists(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        at = text.index("thread = threadCreate(GameThread")
+        self.assertIn("sGameThreadAlive = true;", text[max(0, at - 500):at])
+        # And a failed create must not leave it claiming a live thread.
+        after = text[at:at + 400]
+        self.assertIn("sGameThreadAlive = false;", after)
+
+    def test_a_running_thread_is_not_freed(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        at = text.index("static void WaitForGame(Thread thread)")
+        wait = text[at:text.index("\n}\n", at)]
+        self.assertIn("R_SUCCEEDED(threadJoin(thread, 5000 * 1000000LL))", wait)
+        self.assertLess(wait.index("R_SUCCEEDED(threadJoin(thread, 5000"),
+                        wait.index("threadFree(thread);"))
+        # A timed-out join leaves the thread alive: freeing it corrupts the
+        # stack it is running on. Mark it stuck so the caller exits instead.
+        self.assertIn("sThreadsStuck = true;", wait)
+        self.assertIn("not freeing it", wait)
+
+
+class DisplayPerformanceTests(unittest.TestCase):
+    """The first performance wave: one compose per game frame, no brightness
+    re-renders, a trimmed over publish, startup knobs and [perf] accounting."""
+
+    APP = REPO / "hgss" / "game" / "app"
+    PORT = REPO / "3ds_port" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+
+    def _function(self, text, start, end):
+        at = text.index(start)
+        return text[at:text.index(end, at)]
+
+    def test_one_compose_wake_per_handed_frame(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        show = self._function(text, "static bool ShowScreen", "static void DrawerMain")
+        # A publish must not wake the display thread on its own.
+        self.assertNotIn("LightEvent_Signal(&sGpuWake)", show)
+        draw = self._function(text, "static bool DrawFrame", "static void GpuComposeLoop")
+        # Only the drawers actually handed the frame are counted.
+        self.assertIn("take[i] = true;", draw)
+        # Add per handed drawer, not store: a drawer from the frame before
+        # may still be finishing and about to decrement.
+        self.assertIn("__atomic_add_fetch(&sDrawFramePending, 1", draw)
+        self.assertNotIn("__atomic_store_n(&sDrawFramePending", draw)
+        drawer = self._function(text, "static void DrawerMain", "static bool StartDrawer")
+        self.assertIn("__atomic_sub_fetch(&sDrawFramePending, 1", drawer)
+        self.assertIn("== 0", drawer)
+        # Exactly one wake in the drawer, after the last one finishes.
+        self.assertEqual(drawer.count("LightEvent_Signal(&sGpuWake)"), 1)
+        self.assertLess(drawer.index("__atomic_sub_fetch(&sDrawFramePending"),
+                        drawer.index("__atomic_store_n(&d->busy, false"))
+        # The V-blank thread keeps its wake.
+        vblank = self._function(text, "static void VBlankMain", "static bool VBlankStart")
+        self.assertIn("LightEvent_Signal(&sGpuWake)", vblank)
+
+    def test_unchanged_render_refreshes_master_bright(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        render = self._function(text, "static bool RenderScreen", "static bool ShowScreen")
+        skipped = render[render.index("if (!drawn)"):]
+        self.assertIn("int bright = NitroPort_Render2DMasterBright(engine, 1);",
+                      skipped)
+        # A changed brightness must publish the untouched layers, or the
+        # compositor keeps the old GPU brightness and fades stick.
+        self.assertIn("if (bright != layers->masterBright)", skipped)
+        self.assertIn("layers->masterBright = bright;", skipped)
+        self.assertIn("return true;", skipped)
+        self.assertLess(skipped.index("layers->masterBright = bright;"),
+                        skipped.index("return true;"))
+
+    def test_master_bright_is_not_in_the_small_signature(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        small = self._function(text, "static u32 EngineSmallSignature",
+                               "static u32 EngineVramSignature")
+        # MASTER_BRIGHT at 0x6C: the compositor applies it on the GPU.
+        self.assertIn("regs[0x6C / 4] = 0;", small)
+        self.assertEqual(small.count("regs[0x6C / 4] = 0;"), 2)
+
+    def test_publish_skips_an_empty_over_layer(self):
+        text = (self.PORT / "port_compose_pica.c").read_text()
+        self.assertIn("int hasOver = l->has3d && set->overBottom > 0;", text)
+        self.assertIn("hasOver, w, h, OVER_ROWS(l), set->under, set->over", text)
+
+    def test_port_ini_has_the_display_keys(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        read = self._function(text, "static void ReadDisplayOptions",
+                              "/* `script=PATH` in port.ini")
+        for key in ('IniValue("filter"', 'IniValue("stereo"', 'IniValue("wide"'):
+            self.assertIn(key, read)
+        for value in ('"sharp"', '"nearest"', '"smooth"', '"scale2x"'):
+            self.assertIn(value, read)
+        for value in ('"on"', '"off"', '"1"', '"0"'):
+            self.assertIn(value, text)
+        self.assertIn("sCompose.filter = sIniFilter;", text)
+        self.assertIn("sCompose.stereo = sIniStereo;", text)
+        self.assertIn("sCompose.wide = sIniWide;", text)
+        # Read after the frame cap and before the config is filled.
+        self.assertLess(text.index("ReadFrameCap();"), text.index("ReadDisplayOptions();"))
+        self.assertLess(text.index("ReadDisplayOptions();"),
+                        text.index("memset(&sCompose, 0, sizeof(sCompose));"))
+        for line in ('"[perf] filter=%s"', '"[perf] stereo=off',
+                     '"[perf] wide=off'):
+            self.assertIn(line, text)
+
+    def test_perf_lines_and_drawer_counters(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        drawer = self._function(text, "typedef struct Drawer", "static Drawer sDrawers")
+        for field in ("u64 ticks;", "u64 renderTicks;", "u64 publishTicks;",
+                      "unsigned count;", "unsigned drawn;"):
+            self.assertIn(field, drawer)
+        perf = self._function(text, "static void PerfLog", "static void WaitForFrameCap")
+        for api in ("NitroPort_PicaTimes(", "NitroPort_ComposeStats(",
+                    "NitroPort_PicaTextureStats(", "NitroPort_PicaCmdStats(",
+                    "NitroPort_Gx3dThreadStats(", "NitroPort_Gx3dProducerWaitMicros(",
+                    "NitroPort_Gx3dThreadWakeups(", "sSoundMixTicks"):
+            self.assertIn(api, perf)
+        for line in ('"[perf] display:', '"[perf] geometry:', '"[perf] audio:',
+                     '"[perf] drawer %d'):
+            self.assertIn(line, perf)
+        # FRAMETIME separates the hand-off from the rest of the interval, and
+        # carries DrawFrame's two phases apart (the audits attributed the
+        # "13.5 ms hand-off" to three different things, so it is measured).
+        self.assertIn('"FRAMETIME frame=%lu game_us=%llu state_us=%llu total_us=%llu "', text)
+        self.assertIn('"hblank_us=%llu handoff_us=%llu hb_keep_us=%llu hb_dma_us=%llu hb_irq_us=%llu"',
+                      text)
+        # The walk itself must be split: on an Old 3DS it is 9.5-13.8 ms when
+        # the game arms it and 8 us when it does not, and the three parts have
+        # different fixes.
+        self.assertIn("void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq);", text)
+        self.assertIn("NitroPort_HBlankSplit(&sFrameHbKeep", text)
+        self.assertNotIn("FRAMETIME frame=%lu logic_us=%llu draw_us", text)
+
+
+class PerformanceWaveTwoTests(unittest.TestCase):
+    """The second performance wave: honest instruments, optimised game
+    objects, and the Old 3DS memory profile."""
+
+    APP = REPO / "hgss" / "game" / "app"
+    PORT = REPO / "3ds_port" / "game" / "app"
+
+    def _function(self, text, start, end):
+        at = text.index(start)
+        return text[at:text.index(end, at)]
+
+    def test_log_lines_fit_and_flush_off_the_frame_path(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        at = text.index("#define LOG_LINE ")
+        size = int(text[at + len("#define LOG_LINE "):].split()[0])
+        # 220 truncated every [perf] display line on hardware mid-field.
+        self.assertGreaterEqual(size, 512)
+        self.assertIn("setvbuf(sLog, sLogBuf, _IOFBF, sizeof(sLogBuf));", text)
+        log = self._function(text, "void NitroPort_Log(const char *fmt, ...)\n{", "\n/* The 3DS's buttons")
+        # No per-line SD write: flushes are once a second, and the perf block
+        # (the lines a run is judged by) flushes explicitly.
+        self.assertNotIn("fflush(sLog);", log)
+        self.assertIn("FlushLogLocked()", log)
+        self.assertIn("FlushLog();", text)
+        # The ring still holds the last lines for the exception log.
+        self.assertIn("fprintf(sLog, \"%s\\n\", sRing[at]);", text)
+
+    def test_frame_time_counters_share_one_anchor(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        frame = self._function(text, "void NitroPort_OnFrame", "/* The game stopped itself. */")
+        # total_us is measured at entry, before the pause/restore returns, so
+        # it cannot come out smaller than the state_us measured inside it
+        # (frame 1800 used to report total 10,810 < state 14,118).
+        self.assertLess(frame.index("totalUs = sHaveLastFrameTick"),
+                        frame.index("sFrame++;"))
+        self.assertLess(frame.index("totalUs = sHaveLastFrameTick"),
+                        frame.index("if (sPaused)"))
+        self.assertIn("sPrevStateUs = stateUs;", frame)
+        self.assertIn("state_us=%llu", frame)
+        self.assertIn("prevStateUs", frame)
+        self.assertLess(frame.index("FlushLog();"), frame.index("sPrevStateUs = stateUs;"))
+
+    def test_perf_reports_the_memory_the_split_is_made_from(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        # Without the free-linear and game-heap numbers a run cannot say
+        # whether the 10 MB game heap is still right.
+        self.assertIn('"[perf] mem: linear_free=%lu KB game_heap_used=%lu KB"', text)
+        self.assertIn("linearSpaceFree()", text)
+
+    def test_game_objects_are_compiled_optimised(self):
+        import tools.hgss_game as g
+
+        for target in ("3ds", "host32"):
+            flags = g.port_cflags(target)
+            self.assertIn("-O2", flags, target)
+            self.assertNotIn("-O0", flags, target)
+        # The sanitizer build keeps its own level (the replay wants debug
+        # info and the -O0 behaviour it was verified with).
+        source = (REPO / "tools" / "hgss_game.py").read_text()
+        self.assertIn("if SANITIZE and target == \"host32\":", source)
+        self.assertLess(source.index("flags += SANITIZE_FLAGS"),
+                        source.index("flags += [\"-O2\"]"))
+
+    def test_sun_shadow_room_is_opt_in(self):
+        port = (self.PORT / "port_gx3d_pica.c").read_text()
+        header = (self.PORT / "port_pica.h").read_text()
+        shell = (self.APP / "main_3ds.c").read_text()
+        # HGSS never turns the sun shadows on, so their 1,438 KB of vertex
+        # room was allocated for nothing -- on an Old 3DS that is a third of
+        # the linear memory the 3D texture cache was short of.
+        self.assertIn("static int sShadowWanted = 1;", port)
+        self.assertIn("void NitroPort_PicaSetShadowRoom(int on)", port)
+        self.assertIn("void NitroPort_PicaSetShadowRoom(int on);", header)
+        self.assertIn("sShadowRoom = sShadowWanted ? SHADOW_VERTICES : 0;", port)
+        self.assertIn("NitroPort_PicaSetShadowRoom(sCompose.shadows);", shell)
+        self.assertLess(shell.index("NitroPort_PicaSetShadowRoom(sCompose.shadows);"),
+                        shell.index("displayReady = GpuStart("))
+
+    def test_classic_readback_images_are_lazy(self):
+        port = (self.PORT / "port_gx3d_pica.c").read_text()
+        # 1,152 KB of classic-path readback images were allocated at startup
+        # and the remaster never calls NitroPort_PicaRender.
+        self.assertIn("static int classic_images_ready(void)", port)
+        init = self._function(port, "int NitroPort_PicaInit(void)", "void NitroPort_PicaExit(void)")
+        self.assertIn("sImages[i]=NULL;", init)
+        self.assertNotIn("linearAlloc(IMAGE_BYTES)", init)
+        render = self._function(port, "int NitroPort_PicaRender(", "scene_registers(scene);")
+        self.assertIn("classic_images_ready()", render)
+
+
+    def test_old_3ds_asks_for_one_texel_a_pixel(self):
+        shell = (self.APP / "main_3ds.c").read_text()
+        port = (self.PORT / "port_compose_pica.c").read_text()
+        header = (self.PORT / "port_pica.h").read_text()
+        self.assertIn("int texScale;", header)
+        # Old 3DS: 1 outright, not the automatic 2-then-fall-back ladder (the
+        # 2x sets are 13,824 KB and the failed attempt drops the menu and the
+        # weather BG on the way down).
+        self.assertIn("sCompose.texScale = sIniTexScale != 0 ? sIniTexScale : (sNew3ds ? 0 : 1);",
+                      shell)
+        self.assertIn("int scale = config->texScale == 1 ? 1", port)
+        self.assertLess(port.index("config->texScale == 1"),
+                        port.index("!small && (config->filter"))
+        # And the log says what was actually used, not what was asked for.
+        self.assertIn("%d texel%s a pixel", port)
+        self.assertIn('IniValue("texscale"', shell)
+
+    def test_core_1_share_is_logged(self):
+        shell = (self.APP / "main_3ds.c").read_text()
+        # Every core-1 placement decision depends on the share the system
+        # actually grants, and it had never been read back.
+        self.assertIn("APT_GetAppCpuTimeLimit(&accepted)", shell)
+        self.assertIn("core 1 share: asked %lu%%, the system allows %lu%%", shell)
+
+
+class PerformanceWaveThreeTests(unittest.TestCase):
+    """The third performance wave: the last double hot path, audio off core
+    0, the Old 3DS launch-only filter, and the lower screen at 30 Hz."""
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+
+    def test_in_between_scene_match_is_single_precision(self):
+        source = (self.NITRO / "port_gx3d.c").read_text()
+        # ndc_of was the last double entry point in the geometry path; the
+        # quarter-screen cut-off needs ~1e-7, not soft-float double.
+        self.assertIn("static int ndc_of(const int32_t clip[4],float *x,float *y)",
+                      source)
+        self.assertNotIn("static int ndc_of(const int32_t clip[4],double *x,double *y)",
+                         source)
+        mid = source[source.index("for(j=0;j<n;j++){"):source.index(
+            "sMidMatched=used;")]
+        self.assertIn("float x0,y0,x1,y1;", mid)
+        self.assertIn("fabsf(x1-x0)>0.5f", mid)
+        self.assertIn("float hx=-0.5f*sMotionX/128.0f", mid)
+        self.assertIn("floorf(hx*(float)clip[k][3]+0.5f)", mid)
+        self.assertIn("float fx=sMotionX/128.0f", mid)
+        self.assertIn("floorf(fx*(float)full[3]+0.5f)", mid)
+        self.assertIn("floorf(0.5f*fx*(float)clip[k][3]+0.5f)", mid)
+        self.assertNotIn("double", mid)
+
+    def test_audio_stays_on_core_0_on_old_3ds(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        # Tried on core 1, reverted: log 9 vs log 8 in the same field showed
+        # core 1 oversubscribed (geometry 61-79% -> 84-100% busy for identical
+        # throughput, display starved to 0.0 composes/s). Default core 0 on
+        # Old 3DS, -2 on New 3DS; `audiocore=` overrides either for A/B runs.
+        self.assertIn('IniValue("audiocore"', text)
+        self.assertIn("sIniAudioCore = value[0] - '0';", text)
+        self.assertIn("sAudioCore = sIniAudioCore >= 0 ? sIniAudioCore : (sNew3ds ? -2 : 0);",
+                      text)
+        self.assertIn("AUDIO_THREAD_STACK,\n"
+                      "                                AUDIO_THREAD_PRIORITY, sAudioCore, false);",
+                      text)
+        # A failed pin falls back to core 0 rather than staying silent.
+        self.assertIn("threadCreate(AudioThread, NULL, AUDIO_THREAD_STACK,\n"
+                      "                                    AUDIO_THREAD_PRIORITY, 0, false);",
+                      text)
+        self.assertIn("on core %d", text)
+        # The share must be requested before the audio thread exists: a
+        # core-1 threadCreate before it fails and falls back to core 0
+        # (log-o3ds-soulsilver-8's "on core 0").
+        main = text[text.index("int main(int argc, char **argv)"):]
+        self.assertLess(main.index("RequestCore1Share();"), main.index("AudioStart();"))
+        # The per-interval line names the core it measured and counts the
+        # mixer starvation the move is judged by.
+        self.assertIn('"[perf] audio: %.1f%% of core %d (%.1f ms mixing in %.1f s), %u dropped of %u"',
+                      text)
+        self.assertIn("ndspGetDroppedFrames()", text)
+
+    def test_filter_cycle_is_launch_only_on_old_3ds(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        # The combo detection itself is unchanged (physical X+R before
+        # scripted input, masked while held).
+        self.assertIn("filterCombo = (held & (KEY_X | KEY_R))", text)
+        # ...but on an Old 3DS it never fires: the profile is fixed at
+        # launch (1 texel a pixel; filter3d presets would 2-4x texture
+        # memory mid-run with under a megabyte free).
+        self.assertIn("if (!sNew3ds) {\n        filterCombo = false;\n    }", text)
+        self.assertIn("[perf] Old 3DS profile: launch-time filter only", text)
+
+    def test_lower_screen_is_30hz_on_old_3ds(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn('IniValue("lower30"', text)
+        # Default by console: Old 3DS 30 Hz, New 3DS 60 Hz.
+        self.assertIn("sIniLower30 = sNew3ds ? 0 : 1;", text)
+        drawer = text[text.index("static void DrawerMain"):
+                       text.index("static bool StartDrawer")]
+        # Only engine B ever skips (it cannot carry the 3D); never a forced
+        # redraw, and never on a New 3DS.
+        self.assertIn("!sNew3ds && sIniLower30 && ((d->stamp & 1u) != 0)", drawer)
+        self.assertIn("!sMustDraw[lowerIdx]", drawer)
+        self.assertIn("sToastDirty", drawer)
+        self.assertIn("RenderScreen(1, d->aOnTop, d->stamp)", drawer)
+        # A skipped frame publishes nothing, so the display reuses the last
+        # set instead of advancing its stamp.
+        self.assertIn("nothing rendered and nothing published", drawer)
+        # Game logic stays 60 Hz: only the lower 2D halves.
+        self.assertIn("lower 2D at %s", text)
+
+
+class PerformanceSliceATests(unittest.TestCase):
+    """Slice A: per-phase 2D draw counters plus the empty-line cut.
+
+    The field's drawer render is ~2/3 of the drawer and the wall; before
+    caching rows (Slice B) the build must say which phase the time is in.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_render2d.h"
+
+    def test_profile_struct_and_getter_are_declared(self):
+        header = self.HEADER.read_text()
+        for field in ("uint64_t textTicks;", "uint64_t layerTicks;",
+                      "uint64_t objTicks;", "uint64_t mergeTicks;",
+                      "uint64_t blendTicks;", "uint64_t windowTicks;",
+                      "uint64_t finishTicks;", "uint32_t lines;",
+                      "uint32_t textDraws;", "uint32_t layerDraws;",
+                      "uint32_t blendLines;", "uint32_t emptyLines;"):
+            self.assertIn(field, header)
+        self.assertIn("void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out);",
+                      header)
+
+    def test_ticks_come_from_the_3ds_counter_only(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        # port_os.c's pattern: the port never includes libctru's headers.
+        self.assertIn("#ifdef __3DS__", text)
+        self.assertIn("extern u64 svcGetSystemTick(void);", text)
+        self.assertIn("#define R2D_NOW() svcGetSystemTick()", text)
+        # Host builds (tests, tools) have no counter: phases read 0, counts
+        # stay exact, and no undefined reference is introduced.
+        self.assertIn("#define R2D_NOW() 0", text)
+
+    def test_draw_engine_time_per_phase(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        draw = text[text.index("static inline __attribute__((always_inline)) void DrawEngineT"):
+                    text.index("static void DrawEngine(")]
+        self.assertIn("DrawTextBg(e, bg, bgcnt[bg], dispcnt, y, &t,", draw)
+        self.assertIn("prof->textTicks += R2D_NOW() - t0;", draw)
+        self.assertIn("prof->textDraws++;", draw)
+        self.assertIn("px = LayerLine(e, work, bg, kind[bg], bgcnt[bg], dispcnt, y,", draw)
+        self.assertIn("prof->layerTicks += R2D_NOW() - t0;", draw)
+        self.assertIn("prof->layerDraws++;", draw)
+        self.assertIn("objs = DrawObjs(e, objFrame, dispcnt, y, objLine);", draw)
+        self.assertIn("prof->objTicks += R2D_NOW() - t0;", draw)
+        self.assertIn("Merge(&t, px, prioOf, p, x0, x1,", draw)
+        self.assertIn("prof->mergeTicks += R2D_NOW() - t0;", draw)
+        self.assertIn("BlendLine(&blendState, row, enableLine, layer1, anyWindow);", draw)
+        self.assertIn("prof->blendTicks += R2D_NOW() - t1;", draw)
+        self.assertIn("prof->blendLines++;", draw)
+        self.assertIn("prof->windowTicks += R2D_NOW() - t0;", draw)
+        self.assertIn("prof->finishTicks += R2D_NOW() - t0;", draw)
+        self.assertIn("prof->lines++;", draw)
+        # Exactly one empty-line count, in the backdrop-fill cut (a second
+        # counter elsewhere would double-count plain-path lines).
+        self.assertEqual(draw.count("prof->emptyLines++;"), 1)
+        self.assertLess(draw.index("Slice A cut: nothing drawn on the line"),
+                        draw.index("prof->emptyLines++;"))
+        self.assertIn("void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out)",
+                      text)
+
+    def test_empty_lines_fill_with_backdrop(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        draw = text[text.index("static inline __attribute__((always_inline)) void DrawEngineT"):
+                    text.index("static void DrawEngine(")]
+        # Only when nothing drew (filled == 0 the row is all zero: it was
+        # memset above and no Merge or PUT wrote into it), and only on the
+        # plain path (no brighten/darken layer to apply).
+        self.assertIn("if (t.filled == 0) {", draw)
+        self.assertIn("pair[x] = back2;", draw)
+        # Odd widths still terminate exactly (widths are even today).
+        self.assertIn("if (width & 1) {", draw)
+
+    def test_perf_logs_the_2d_split(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        perf = text[text.index("static void PerfLog"):text.index("static void WaitForFrameCap")]
+        self.assertIn("NitroPort_Render2DProfile(0, ", perf)
+        self.assertIn("NitroPort_Render2DProfile(1, ", perf)
+        self.assertIn('"[perf] 2d: text %.1f%%, affine %.1f%%, obj %.1f%%, merge %.1f%%, blend %.1f%%, "',
+                      perf)
+        self.assertIn("setup %.1f%%", perf)
+        self.assertIn("rows %u/%u", perf)
+        # Cumulative counters, differenced per interval like the rest.
+        self.assertIn("sPerf2d[0] = *a;", perf)
+        self.assertIn("sPerf2d[1] = *b;", perf)
+
+
+class PerformanceSliceBTests(unittest.TestCase):
+    """Slice B: scroll-shifted text-BG row reuse.
+
+    A text pixel is a pure function of its map coordinate, so a rendered map
+    row serves every screen line showing it at any scroll offset. The key is
+    BgKey (map, tiles, palettes — but not scroll) plus the wide-clear variant
+    BgKey doesn't cover.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_render2d.h"
+
+    def test_row_cache_holds_whole_map_rows(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("#define TEXTROW_SLOTS 256", text)
+        self.assertIn("u16 px[512];", text)
+        # Direct-mapped by row (256 slots cover any frame's window, so no
+        # within-frame collisions and no LRU bookkeeping).
+        self.assertIn("slot = &table[ty & (TEXTROW_SLOTS - 1)];", text)
+        self.assertIn("slot->key == key && slot->ty == (u16)ty", text)
+
+    def test_row_key_is_scroll_invariant_but_content_complete(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        start = text.index("static u64 FoldClearVariant(const Engine *e, int bg, u64 key)\n{")
+        fold = text[start:text.index("static u64 TextRowKey(const Engine *e, int bg, u16 bgcnt, u32 dispcnt)\n{",
+                                     start)]
+        key = text[text.index("static u64 TextRowKey(const Engine *e, int bg, u16 bgcnt, u32 dispcnt)\n{",
+                              start):text.index("static const u16 *TextRowCached", start)]
+        # Scroll comes from the IO regs, which BgKey never reads: reuse
+        # across scroll positions.
+        self.assertIn("BgKeyCached(e, bg, BG_TEXT, bgcnt, dispcnt)", key)
+        # ...while the wide-clear palette variant BgKey misses is folded in
+        # (BgPal4 reads a different table for it, so the key must differ).
+        self.assertIn("e->clearBgs", fold)
+        self.assertIn("e->clearMask", fold)
+        self.assertIn("KeyAdd", fold)
+
+    def test_row_fill_renders_with_text_bg_pixel(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        start = text.index("static const u16 *TextRowCached(const Engine *e, int pe, int bg, u64 key, int ty, u16 bgcnt,\n")
+        fill = text[start:text.index("/* (wider canvas) each BG's hand-drawn picture", start)]
+        # The fill computes exactly what the old per-pixel tile loop did, so
+        # cached and direct pixels are identical by construction.
+        self.assertIn("slot->px[i] = TextBgPixel(e, bg, bgcnt, dispcnt, i, ty);", fill)
+        # A zero key never hits (empty slots read as key 0): captures drawn
+        # without a key use the direct path, as before.
+        self.assertIn("if (key == 0) {", fill)
+
+    def test_plain_path_copies_spans_with_put(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        draw = text[text.index("static inline __attribute__((always_inline)) void DrawTextBgT"):
+                    text.index("static void DrawTextBg(")]
+        # Map-coordinate indexing makes any scroll offset, window shift or
+        # segment layout hit; PUT keeps the front-layer/window semantics.
+        self.assertIn("TextRowCached(e, e->isA ? 0 : 1, bg, sTextKey[e->isA ? 0 : 1][bg], ty, bgcnt, dispcnt)",
+                      draw)
+        self.assertIn("PUT(x + i, cachedRow[tx + i], flags);", draw)
+        # Without a cached row the old tile loop runs as before (captures
+        # drawn without a key, or a failed malloc): still present verbatim.
+        self.assertIn("u32 entryAddr = rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2;",
+                      draw)
+
+    def test_keys_are_per_frame_per_engine(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("static u64 sTextKey[2][4];", text)
+        draw = text[text.index("static inline __attribute__((always_inline)) void DrawEngineT"):
+                    text.index("static void DrawEngine(")]
+        # One BgKey walk per BG per frame, shared by LookUpArt, the gpuBg
+        # path and the row cache (was: one walk each = three).
+        self.assertIn("u64 frameKey[4];", draw)
+        self.assertIn("frameKey[bg] = (kind[bg] == BG_NONE || kind[bg] == BG_3D)", draw)
+        self.assertIn("sTextKey[pe][bg] = kind[bg] == BG_TEXT ? FoldClearVariant(e, bg, frameKey[bg]) : 0;",
+                      draw)
+        self.assertIn("LookUpArt(e, kind, bgcnt, dispcnt, frameKey);", draw)
+        self.assertIn("frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);",
+                      draw)
+        # Captures set their own fresh keys (they run outside any DrawEngineT,
+        # whose per-frame keys they must not reuse).
+        self.assertIn("sTextKey[engine ? 1 : 0][bg] = kind[bg] == BG_TEXT ? TextRowKey(&e, bg, bgcnt[bg], dispcnt) : 0;",
+                      text)
+
+    def test_profile_counts_setup_and_row_hits(self):
+        header = self.HEADER.read_text()
+        self.assertIn("uint64_t setupTicks;", header)
+        self.assertIn("uint32_t rowHits;", header)
+        self.assertIn("uint32_t rowMisses;", header)
+
+
+class PerformanceSliceS4Tests(unittest.TestCase):
+    """Slice S4: H-blank/timer/sound-pump/DMA attribution counters.
+
+    Additive diagnostics only: paired tick reads, host-safe counters, no
+    dispatch, walk-position, VCOUNT or save-format changes. Suggested by the
+    implementing subagent; integrated and tested by the lead.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port.h"
+
+    def test_hblank_irq_attribution_counters(self):
+        text = (self.NITRO / "port_os.c").read_text()
+        self.assertIn("static u64 sHBlankIrqBitTicks[NITRO_PORT_IRQ_BITS];", text)
+        self.assertIn("static u32 sHBlankIrqBitCalls[NITRO_PORT_IRQ_BITS];", text)
+        self.assertIn("if (sHBlankWalking) {", text)
+        self.assertIn("sHBlankIrqBitTicks[bit] += PORT_NOW() - t;", text)
+        self.assertIn("sHBlankIrqBitCalls[bit]++;", text)
+        self.assertIn("sHBlankWalking = 1;", text)
+        self.assertIn("sHBlankWalking = 0;", text)
+        self.assertIn("void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out)", text)
+        self.assertIn("#define PORT_NOW() svcGetSystemTick()", text)
+        self.assertIn("#define PORT_NOW() 0", text)
+
+    def test_timer_sync_and_soundpump_counters(self):
+        text = (self.NITRO / "port_timer.c").read_text()
+        self.assertIn("sSyncTicks += PORT_NOW() - t0;", text)
+        self.assertIn("sSyncCalls++;", text)
+        self.assertIn("void NitroPort_SyncTimersStats(u64 *calls, u64 *ticks)", text)
+        self.assertIn("void NitroPort_NoteSoundPumpTicks(u64 ticks)", text)
+        self.assertIn("sSoundPumpTicks += ticks;", text)
+        self.assertIn("sSoundPumpCalls++;", text)
+        self.assertIn("void NitroPort_SoundPumpTickStats(u64 *ticks, u32 *calls)", text)
+        self.assertIn("#define PORT_NOW() 0", text)
+
+    def test_hblank_dma_transfer_count(self):
+        text = (self.NITRO / "port_dma.c").read_text()
+        self.assertIn("static u32 sHBlankDmaTransfers;", text)
+        self.assertIn("sHBlankDmaTransfers++;", text)
+        self.assertIn("u32 NitroPort_DmaHBlankTransfers(void)", text)
+
+    def test_new_diagnostic_declarations(self):
+        header = self.HEADER.read_text()
+        self.assertIn("void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out);", header)
+        self.assertIn("} NitroPortIrqTime;", header)
+        self.assertIn("void NitroPort_SyncTimersStats(u64 *calls, u64 *ticks);", header)
+        self.assertIn("void NitroPort_NoteSoundPumpTicks(u64 ticks);", header)
+        self.assertIn("void NitroPort_SoundPumpTickStats(u64 *ticks, u32 *calls);", header)
+        self.assertIn("u32 NitroPort_DmaHBlankTransfers(void);", header)
+
+    def test_shell_reports_the_hblank_split(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        # The pump is timed apart from game_us at its call site.
+        self.assertIn("NitroPort_NoteSoundPumpTicks(svcGetSystemTick() - pumpStart);", text)
+        perf = text[text.index("static void PerfLog"):text.index("static void WaitForFrameCap")]
+        self.assertIn("NitroPort_HBlankIrqByBit(bits);", perf)
+        self.assertIn("NitroPort_SyncTimersStats(&syncCalls, &syncTicks);", perf)
+        self.assertIn("NitroPort_SoundPumpTickStats(&pumpTicks, &pumpCalls);", perf)
+        self.assertIn("NitroPort_DmaHBlankTransfers();", perf)
+        self.assertIn('"[perf] hbirq: b0 %.2fms/%u b1 %.2fms/%u b2 %.2fms/%u b3 %.2fms/%u "',
+                      perf)
+        # Last-walk values, never differenced: the per-bit table resets every
+        # walk, so a per-interval diff underflows (log-11's garbage line).
+        self.assertNotIn("sPerfIrq[", perf)
+        self.assertNotIn("sPerfIrq[", text[text.index("static void PerfLog"):])
+
+    def test_o3dsched_display_first_demotion(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        # Opt-in experiment only: same-core threads don't preempt, so the
+        # always-ready geometry worker starves the display on a saturated
+        # core 1 (log-9's 0.0 composes/s). Demoting geometry below the
+        # event-driven display is the fix candidate; default unchanged.
+        self.assertIn('IniValue("o3dsched"', text)
+        self.assertIn("sIniSched = 0;", text)
+        self.assertIn("sIniSched = 1;", text)
+        self.assertIn("o3dsched is Old-3DS-only", text)
+        geo = text[text.index("static bool GpuStartGeometry"):text.index("static void GpuStopGeometry")]
+        # Demoted below the display (0x32) on an Old 3DS only; New 3DS keeps
+        # its geometry placement.
+        self.assertIn("sIniSched ? priority + 3 : priority - 1", geo)
+        self.assertIn("threadCreate(GeoMain, NULL, 64 * 1024, priority - 1, 2, false)", geo)
+
+    def test_hot_path_has_no_integer_divide_or_modulo(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        draw = text[text.index("static inline __attribute__((always_inline)) void DrawEngineT"):
+                    text.index("static void DrawEngine(")]
+        tbg = text[text.index("static inline __attribute__((always_inline)) void DrawTextBgT"):
+                   text.index("static void DrawTextBg(")]
+        # Text maps are 256/512 wide (sTextSizes), so wraparound is a mask;
+        # ARMv6 has no integer divider (a libcall per line per BG).
+        self.assertIn("& (mapW - 1)", draw + tbg)
+        self.assertNotIn("% mapW", tbg)
+        # VRAM-display loop: W is the 256-pixel DS width.
+        self.assertIn("(i >> 8) * e.width + e.origin + (i & 255)", text)
+
+
+class PerformanceSliceS3Tests(unittest.TestCase):
+    """Slice S3: merge/finish/OBJ hot paths, all provably pixel-identical.
+
+    The T_LAYER merge extension is flag-independent (no T_WINDOW bit, no
+    prio filter, layerOf written exactly where PUT would write it). The
+    SnapshotOver/finish skips fire only where the skipped loop provably
+    writes nothing else. The art-line skip fires only where the art loop
+    would continue on every group.
+    """
+
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+
+    def _draw(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        return text[text.index("static inline __attribute__((always_inline)) void DrawEngineT"):
+                    text.index("static void DrawEngine(")]
+
+    def test_opaque_pair_merge_covers_t_layer(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        merge = text[text.index("static inline __attribute__((always_inline)) void MergeT("):
+                     text.index("static void Merge(Target *t, const u16 *line,")]
+        # flags == 0 (as before) plus exactly T_LAYER (no window bit, so no
+        # enable check; prioOf NULL, so no priority check): the general path
+        # below this is PUT without window/priority, which the word and
+        # pixel paths reproduce plus layerOf.
+        self.assertIn("if ((flags == 0 || flags == T_LAYER) && prioOf == NULL &&", merge)
+        self.assertIn("int writeLayer = (flags & T_LAYER) != 0;", merge)
+        self.assertIn("layerOf[x] = layer;", merge)
+        self.assertIn("layerOf[x + 1] = layer;", merge)
+        # T_PLAIN and any window bit still take the general path.
+        self.assertNotIn("flags & ~T_LAYER", merge)
+
+    def test_snapshot_over_skips_effect_free_rows(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        snap = text[text.index("static void SnapshotOver("):text.index(
+            "static inline __attribute__((always_inline)) void DrawEngineT")]
+        # The non-blend loop needs effect >= 2 AND a first-target bit; when
+        # neither can fire it only fills alpha with 16.
+        self.assertIn("if (effect < 2 || (bldcnt & 0x1Fu) == 0) {", snap)
+        self.assertIn("memset(alpha, 16, (size_t)w);", snap)
+
+    def test_finish_falls_back_to_plain_resolve(self):
+        draw = self._draw()
+        # The brighten loop darkens even with effect 0/1 when a first-target
+        # bit matches (existing behavior, kept), so the plain resolve is
+        # only identical with no first-target bits at all (layerOf holds
+        # 0-4, backdrop is 5: bits 0-5 covered).
+        self.assertIn("if (!(flags & T_LAYER) || (bldcnt & 0x3Fu) == 0) {", draw)
+
+    def test_obj_art_line_skip(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        draw = text[text.index("static BOOL DrawObjs("):text.index(
+            "/* ------------------------------------------------------------ the frame */")]
+        # Same ay/rows test the art loop starts each group with: skipping
+        # writes nothing the loop wouldn't, including the sprites copy.
+        self.assertIn("int artHere = 0, ak;", draw)
+        self.assertIn("int aay = ArtWrap(y - f->art[ak].dy, H, 256);", draw)
+        self.assertIn("if (!artHere) {", draw)
 
 
 class OutputParsingTests(unittest.TestCase):

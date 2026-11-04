@@ -1,0 +1,87 @@
+From 5a356fe9ba1638dd26a7752378437f42730b4653 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Mon, 2 Nov 2026 21:04:30 -0500
+Subject: [PATCH] trainer: pass the approach task to TrainerApproach_IsDone
+
+ScrCmd_TrainerStepTowardsPlayer called TrainerApproach_IsDone() with no argument, and the public header declared it as taking none. The definition takes SysTask *; on ARM the callee read r0 (the ScriptEnv attribute address, not the task), then SysTask_GetData(work) returned NULL and work->done dereferenced 0x4. A trainer in line of sight therefore crashed the field task on the first TrainerStepTowardsPlayer, before the battle could start.
+
+Fix the prototype and pass *approachTask. Also harden TrainerApproach_GetDone against a NULL task/data. Save, audio and battle behavior are unchanged; this is the original task pointer the caller already checks.
+---
+ include/map_object_behavior.h |  5 +++++
+ src/map_object_behavior.c     |  5 +++++
+ src/scrcmd_battle.c           | 12 ++++++++++++
+ 3 files changed, 22 insertions(+)
+
+diff --git a/include/map_object_behavior.h b/include/map_object_behavior.h
+index da3688c..9cabc1c 100644
+--- a/include/map_object_behavior.h
++++ b/include/map_object_behavior.h
+@@ -5,7 +5,12 @@
+ 
+ BOOL TryGetSeenByNpcTrainers(FieldSystem *fieldSystem, BOOL doublesEligible);
+ int TrainerApproach_Start(FieldSystem *fieldSystem, LocalMapObject *localMapObject, PlayerAvatar *playerAvatar, int movement, int remaining, int unk10, int encounterType, u16 trainerNum);
++#ifdef SDK_PORT_3DS
++BOOL TrainerApproach_IsDone(SysTask *task);
++void TrainerApproach_Delete(SysTask *task);
++#else
+ BOOL TrainerApproach_IsDone(void);
+ void TrainerApproach_Delete(int task);
++#endif
+ 
+ #endif // POKEHEARTGOLD_MAP_OBJECT_BEHAVIOR_H
+diff --git a/src/map_object_behavior.c b/src/map_object_behavior.c
+index d323b63..2b3a135 100644
+--- a/src/map_object_behavior.c
++++ b/src/map_object_behavior.c
+@@ -715,8 +715,13 @@ static SysTask *TrainerApproach_CreateTask(FieldSystem *fieldSystem, LocalMapObj
+ }
+ 
+ static BOOL TrainerApproach_GetDone(SysTask *task) {
++#ifdef SDK_PORT_3DS
++    TrainerApproachWork *work = task != NULL ? SysTask_GetData(task) : NULL;
++    return work != NULL ? work->done : TRUE;
++#else
+     TrainerApproachWork *work = SysTask_GetData(task);
+     return work->done;
++#endif
+ }
+ 
+ static void TrainerApproach_DestroyTask(SysTask *task) {
+diff --git a/src/scrcmd_battle.c b/src/scrcmd_battle.c
+index eba1dd2..7e992c3 100644
+--- a/src/scrcmd_battle.c
++++ b/src/scrcmd_battle.c
+@@ -43,6 +43,9 @@ BOOL ScrCmd_GetTrainerPathToPlayer(ScriptContext *ctx) {
+ 
+ BOOL ScrCmd_TrainerStepTowardsPlayer(ScriptContext *ctx) {
+     int *approachTask;
++#ifdef SDK_PORT_3DS
++    SysTask *approach;
++#endif
+     u16 trainerNum = ScriptGetVar(ctx);
+     u16 *retPtr = ScriptGetVarPointer(ctx);
+ 
+@@ -58,11 +61,20 @@ BOOL ScrCmd_TrainerStepTowardsPlayer(ScriptContext *ctx) {
+         return TRUE;
+     }
+ 
++#ifdef SDK_PORT_3DS
++    approach = (SysTask *)*approachTask;
++    if (approach != NULL && TrainerApproach_IsDone(approach) == TRUE) {
++        TrainerApproach_Delete(approach);
++        *approachTask = 0;
++        *retPtr = 1;
++    }
++#else
+     if (TrainerApproach_IsDone() == TRUE) {
+         TrainerApproach_Delete(*approachTask);
+         *approachTask = 0;
+         *retPtr = 1;
+     }
++#endif
+ 
+     return TRUE;
+ }
+-- 
+2.43.0
+

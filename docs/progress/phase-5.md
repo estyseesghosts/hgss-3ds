@@ -2,7 +2,7 @@
 
 Status: **runs on hardware; the 3D camera-plane drop, 60 Hz cap, audio
 level/staging fixes, the Settings-close fix, the raw-DS-address fix, the battle
-Poképics, the close-hang fix and the SoulSilver program, pending a console re-run.** The game boots, plays the intro, reaches Oak's
+Poképics, the close-hang fix, the SoulSilver program and the save-CRC/tall-grass fixes, pending a console re-run.** The game boots, plays the intro, reaches Oak's
 speech and the player's house, draws both screens and plays audio. The ninth
 run (log-9) showed the GPU pipeline working at 87 Hz; frame starts are now
 capped at 60 Hz, the NNS volume table, pre-saturation 6 dB headroom and NDSP
@@ -14,9 +14,41 @@ that crashed the tenth run is gone (patch 1905), the battle's Poképics render
 owner's hardware re-run (3D rate and title, audio by ear, frame times,
 Settings open/close, a wild encounter), the SoulSilver program's hardware run,
 a full-speed run through Oak's speech, the save round-trip, the Old 3DS
-decision and the `.cia` decision.
+performance plan ([agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md)) and the `.cia`
+decision.
 
-Last verified: **2026-11-02**, container `/workspaces/pokeheartgold-3ds`.
+Last verified: **2026-11-02 (session 15)**, container `/workspaces/pokeheartgold-3ds`.
+
+## Update 2026-11-03 — Old 3DS performance investigation (plan only)
+
+No source changed. The owner reports the New 3DS does not always hold 60 fps and
+drains the battery, and the Old 3DS does not reach 30 fps. Five read-only audits
+(compiler/build, CPU hot paths, GPU/compositor, memory/VRAM, threading) ran
+against `log-o3ds-soulsilver.txt` and `log-soulsilver-normal-playthrough.txt`;
+the plan is [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md).
+
+Measured findings that change the picture:
+
+- The Old 3DS process is exactly **64 MiB** — image 33.26 MiB (of which 24.40 is
+  `.bss`) plus heaps 30.73 MiB — so the memory ceiling is our own image, not a
+  loader mode.
+- `__system_allocateHeaps` never takes its small-process branch on Old 3DS
+  (`remaining` 30.73 MiB is below the `16 MB * 2` bound), so it half-splits
+  15.7/15.7 MB although the game heap was using 798 KB.
+- The compositor finishes with **408 KB** free for 3D textures. Sharp 2× cannot
+  fit: its layer sets alone are 13,824 KB.
+- All 1,092 game objects are at **`-O0`**. `-O2` was measured to shrink game
+  `.text` by 44.6% and the artifact from 9,403,804 to 5,762,900 B, which returns
+  ~3.49 MiB to the linear heap.
+- The average DS clock is 39-46 Hz by the audio counters, while sampled frame
+  bodies cost 14.0-14.7 ms — the deficit is stalls, and the current counters
+  cannot attribute it (frame 1800 reports `total_us` below `state_us`).
+
+The wave plan (W0 instruments, W1 compiler, W2 memory, W3 game-thread cost,
+W4 2D renderer, W5 publish, W6 threading) is sequenced instruments-first. The
+owner's decisions: widescreen stays on Old 3DS as a launch option; only the
+lower screen's 2D drops to 30 Hz; Old and New 3DS keep separate profiles.
+
 
 ## What is in the tree
 
@@ -29,10 +61,15 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   variant (folder `pokeheartgold-ss/`, `soulsilver3ds.pak`, save name, build
   ID, game code and `pokesoulsilver.3dsx`) is selected by the decomp's
   `SOULSILVER` define; the shared sources carry the HeartGold default.
-- **Display** centered 1:1 only: top 256×192 at (72,24) in 400×240, bottom at
-  (32,24) in 320×240. The framebuffer is written in its stored orientation
-  (`fb[x * 240 + (239 - y)]`), not rotated twice. The remaster, wide and
-  lower-menu paths are off.
+- **Display** Phase A remaster only, with no 1:1 fallback. `port_compose_pica.c`
+  composes the upper screen from a 320×192 canvas at 1.25× → 400×240 and the
+  lower screen from 256×192 at 1.25× → 320×240. The 3D is drawn at the
+  screen's own resolution; the New 3DS also uses `smooth3d = 2` (2× render,
+  averaged), while the Old 3DS uses `smooth3d = 0`. Drawer threads render the
+  2D layers, the display thread composes each new scene, and the V-blank
+  thread presents it. A GPU/display start failure shows `DisplayErrorScreen()`
+  instead of running at 1×. Touch maps `px * 4/5`, `py * 4/5` to the DS's
+  256×192.
 - **Input** D-pad and circle pad (40-unit dead zone) → DS D-pad;
   A/B/X/Y/L/R/Start/Select mapped; ZL/ZR and C-stick unused.
 - **APT** an `aptHook` pauses on suspend/sleep and resumes on restore/wakeup;
@@ -45,7 +82,7 @@ Adapted from Platinum's shell, built around `Heartgold_Run`:
   thread. The exit log prints `audio: N dropped frames of M`. Without
   `dspfirm.cdc` the game runs silent, `log.txt` says so, and nothing else
   changes.
-- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` (**9,278,712 bytes** with the latest camera-plane-drop/audio-table/pre-saturation-headroom/NDSP-cache and Options-close fixes) plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). It also compiles Platinum's classic PICA backend (`port_gx3d_pica.c`, `port_pica_abi.c`) and the shader blob from the three vendored `.v.pica` files; see the GPU-pipeline and camera-plane sections below.
+- **Build** `python3 tools/hgss_game.py --target 3ds --out …` links 1092/1092 with 0 unresolved and packages `pokeheartgold.3dsx` plus `pokeheartgold-3ds.smdh` (smdhtool + the generic placeholder icon). With Phase A it compiles `port_gx3d_pica.c`, `port_compose_pica.c`, `port_pica_abi.c` and the shader blob from the three vendored `.v.pica` files; the classic-only `pica_classic_stubs.c` is gone. See the GPU-pipeline, remaster and camera-plane sections below.
 - **Scripted input** `port.ini`'s `script=PATH` (or `script.txt` beside the
   pack) is parsed by `3ds_input.c` and replayed frame-for-frame, including
   six-frame button holds and touch positions. Without a script the console's
@@ -659,6 +696,20 @@ inaudible). The independent ADPCM/interpolation audit found no decoder defect;
 the sound-chip suite is now 81 checks (exact ADPCM samples and a smooth-loop
 test included).
 
+**Then the field fader.** Field BGM still sounded distorted and unlevelled
+after the 128-entry table. `snd_player.c` also indexes `_0210D750` with the
+fader's high byte, unclamped, and every field warp calls
+`GF_SndHandleMoveVolume(SND_HANDLE_FIELD, 128, 15)`, so the fader settles at
+index 128. The port table stopped at 127, so that read took unrelated port
+rodata as decibels and pinned every field BGM channel at full volume. On the
+DS, the words after the alias are the unlabelled `.rodata.unified_01` section:
+index 128 is 0 dB, then 59, 118, 178. `hgss/compat/src/nns_volume_table.c` now
+holds all 256 entries; the tail is the first 256 bytes of that section from the
+decomp's `lib/asm/nitro_sdk_data.s` (line 621 onward), and it matches the
+retail ARM9 decode at 0x0210D750 for all 256 entries. `check_nns_volume_table`
+requires 512 bytes and entry 128 = 0 in the linked ELF, and
+`NnsVolumeTableTests` covers the size, the fader entry, and the checker.
+
 ## The camera-plane triangle: zero area, not a wing
 
 S10 and S11 read the title's fan as Ho-oh's left wing and tried to draw it
@@ -756,7 +807,134 @@ with it. The 3DS build is 1092/1092, 0 unresolved, `3dsxdump` rc 0. The
 hardware run of the SS program is the owner's next check; the HeartGold
 artifact was rebuilt from the same tree and is otherwise unchanged.
 
+## Phase A: the remaster display (built; pending the owner's hardware run)
+
+Phase A of [3DS-Remaster-Audit](../wiki/3DS-Remaster-Audit.md) replaces the
+classic 1:1 display. It is **mandatory**: there is no fallback to the old
+picture on either console.
+
+**What was wired**
+
+- `hgss/game/app/main_3ds.c` includes `port_pica.h` and calls
+  `NitroPort_ComposeInit`. It has the three Platinum display threads:
+  - `GpuComposeLoop` (the display thread): owns the newest scene and
+    recomposes it whenever a drawer publishes new 2D, so a text box over a
+    still field does not wait for new geometry; it calls
+    `NitroPort_ComposeFrame` and keeps a scene waiting for its 2D or an LCD
+    framebuffer.
+  - `DrawerMain` (one on a New 3DS for each engine, one for both on an Old
+    3DS): `NitroPort_Render2DSplit[IfChanged]` into
+    `NitroPort_ComposeLayersOf(engine)`, then `NitroPort_ComposePublish`.
+  - `VBlankMain`: `gspWaitForVBlank` → `NitroPort_ComposeVBlank`, then wakes
+    the display thread.
+- H-blank line effects are captured once per frame
+  (`NitroPort_HBlankLinesOnce`), and the field's repeating weather BGs are
+  handed to the compositor (`NitroPort_RepeatingBgs`,
+  `NitroPort_ComposeNoteBgOffsets`) instead of being redrawn.
+- `tools/hgss_game.py` compiles `port_compose_pica.c` into the program, adds
+  the `3ds_port/game/app` include path and drops `pica_classic_stubs.c`.
+- The old `Blit`/`gfxSwapBuffers` path and the classic `NitroPort_PicaRender`
+  worker are gone.
+
+**Display settings**
+
+| Setting | New 3DS | Old 3DS |
+| --- | --- | --- |
+| Upper | 320×192 at 1.25× → 400×240 | same |
+| Lower | 256×192 at 1.25× → 320×240 | same |
+| `filter` | `COMPOSE_FILTER_SHARP` | same |
+| `smooth3d` | 2 (2× render, averaged) | 0 (native) |
+| `stereo` | 1 | 1 |
+| `edges` / `edges3d` | off | off |
+| `filter3d` | nearest | nearest |
+| drawers | A on core 2, B on core 0 | one drawer, both engines, core 0 |
+| geometry | core 2 | core 1 (APT share); game's thread if unavailable |
+
+The 3D is drawn at the screen's own resolution on both consoles; `smooth3d`
+is a quality/cost choice for the New 3DS, not a requirement for "native".
+
+**Startup display keys in `port.ini`** (read once, before the display
+thread starts; any other value keeps the default):
+
+| Key | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `filter` | `sharp`, `nearest`, `smooth`, `scale2x` | `sharp` | the startup 2D filter; X+R still changes it at runtime |
+| `stereo` | `on`/`1`, `off`/`0` | `on` | `off` draws the 3D flat |
+| `wide` | `on`/`off` | `on` | `off` pillarboxes the upper screen (a layout choice, not a performance knob) |
+
+Each non-default value is logged with `[perf]`. The Old 3DS default filter is
+unchanged in this wave; the owner will measure the presets.
+
+**Memory and failure**
+
+`__system_allocateHeaps` (Platinum's) gives the compositor linear memory:
+with less than 48 MB free the game heap gets 16 MB and linear memory the
+rest; otherwise the libctru split is capped at 24 MB (game) / 32 MB (linear).
+If `NitroPort_PicaInit`, `NitroPort_ComposeInit`, a drawer or the V-blank
+thread fails, the program logs the reason and shows `DisplayErrorScreen()`;
+the game thread is not started. A failed geometry thread still moves scene
+building back to the game's thread.
+
+**Verification**
+
+- `tests/test_hgss_game.py`: 102 tests pass in the Linux build container. The
+  four `ObjectAliasTests` need `gcc-10` and 32-bit tooling and are skipped by
+  the environment on macOS; they pass in the container.
+- Both `pokeheartgold.3dsx` (9,403,732 B, `sha256 9c9c63df…7656`) and
+  `pokesoulsilver.3dsx` (9,403,804 B, `sha256 774a98c1…0c90`) build with the
+  remaster app objects and pass `validate_3dsx`.
+- **Still needed on hardware:** boot and field on an Old 3DS, frame rate and
+  memory headroom, touch alignment, stereo/slider, audio, and a HOME-menu
+  close. None of this can be measured in the container.
+
+### Trainer walk-up crash (fixed, patch 1908)
+
+The Phase A field crash when a trainer saw the player was not the remaster or
+the battle. `ScrCmd_TrainerStepTowardsPlayer` called
+`TrainerApproach_IsDone()` with no argument while the public header declared
+it `(void)`; the definition takes `SysTask *`. On ARM the callee read `r0`
+(the ScriptEnv slot address), `SysTask_GetData` returned NULL, and
+`work->done` dereferenced `0x4`. The x86 PC build happened not to crash
+because its calling convention left a different value there.
+
+Patch 1908 corrects the prototypes and passes `*approachTask`, plus a NULL
+guard in `TrainerApproach_GetDone`. It is `SDK_PORT_3DS`-only so the DS
+matching ROM is unchanged. The rebuilt 3DS disassembly now loads the task
+into `r0` immediately before `bl TrainerApproach_IsDone`.
+
+### PC box MOVE POKEMON crash (fixed, patch 1909)
+
+Selecting MOVE POKEMON crashed on entering the PC box overlay. The script
+can launch the box as mode 4, which has no retail `PCBox_State_Start` case;
+`nextState` was left uninitialised, so the fade returned the previous frame's
+`PCBoxWork *` as the next state and `PCBox_RunStateMachine` indexed
+`gPCBoxStateTable` with that heap pointer.
+
+Patch 1909 initialises the state, maps mode 4 to the move layout (which
+`PCBox_InitPanels` already selected), defaults the mode-grid layout, and adds
+a port-only bounds check that resets an invalid state to `PC_BOX_STATE_START`
+instead of indexing out of bounds. The `#else` text is unchanged for the DS
+matching build.
+
+### Black screens after HOME/sleep (shell suspend handshake)
+
+The display thread could start a compose after `ONSUSPEND` had begun:
+`ComposeGpuBusy()` only counts already-submitted GPU frames, so `AptHook`
+returned while a frame was still in the CPU build phase. APT then took the
+GPU and the GX queue never completed; HOME could not finish its jump, hence
+no `ONRESTORE`, black screens and an unresponsive console.
+
+The shell now uses Platinum's handshake: `sComposing` is set before the
+`sSuspended` check around both compose calls; `AptHook` waits for it before
+`NitroPort_ComposeHold(1)`, then waits for drawers/GPU. The restore hook only
+sets `sResumePending`; `NitroPort_OnFrame` performs the actual resume after
+`aptMainLoop` returns, so citro3d's restore hook has run first. Platinum's
+`sAptHome`/`sAptAsleep` guards and detailed `[apt]` timing/status logs are
+included.
+
 ## Pending user runs
+
+
 
 All of these are in `docs/wiki/Hardware-Testing.md` with exact steps and the
 definition of a pass:
@@ -766,10 +944,12 @@ definition of a pass:
 - In-game Settings open → QUIT → field, twice in a row (patch 1904; the
   session-11 crash).
 - Walk into tall grass on Route 29 to the first wild battle, and a trainer
-  battle (patch 1905; the session-12 crash).
+  battle (patch 1905; the session-12 crash). The PC now reaches the wild
+  battle with a legacy save (patch 1907); the console run is still pending.
 - Old 3DS measurement (the support decision is recorded only after it).
 - Save round-trip both ways: port save → melonDS Continue; cartridge save →
-  port Continue.
+  port Continue. Raw cartridge/emulator saves now load (1906), and legacy
+  port saves migrate their substruct CRCs on first read (1907).
 - `dspfirm.cdc`: without it the run is silent by design.
 
 None of these is marked done. The container cannot attach a console, read an
@@ -777,15 +957,22 @@ SD card or run a cartridge.
 
 ## Open gaps
 
-- The classic PICA pipeline runs on hardware; the latest **60 Hz cap, NNS
+- **Phase A remaster hardware run** is the next owner check, on both an Old
+  3DS and a New 3DS: boot, field, intro/title, a wild and a trainer battle,
+  touch alignment, stereo/slider, audio, a HOME-menu close, and frame times.
+  The container builds and tests the code but cannot measure the GPU or
+  memory. `smooth3d = 0` is the Old 3DS default because its GPU is slower;
+  if it still cannot hold a playable rate, the next lever is the 2D filter
+  and drawer scheduling, **not** a 1:1 fallback.
+- The earlier hardware checks remain pending: **60 Hz cap, NNS
   volume-table/pre-saturation-headroom/NDSP-cache audio fixes, camera-plane
-  drop, the Options close fix (1904) and the raw-DS-address fix (1905)** are
-  pending the owner's re-run (frame times, no clipping or rough timbre, no
-  title fan or gap, the in-game Settings close back to the field, and a wild
-  and a trainer battle).
-- Old 3DS 3D: the classic target and images need several MB of linear memory;
-  `NitroPort_PicaInit` logs and falls back to 2D if it cannot get it, but the
-  Old 3DS case is still unmeasured.
+  drop, the Options close fix (1904), the raw-DS-address fix (1905), the CRC
+  table fix (1906) and the substruct-CRC migration (1907)** (frame times, no
+  clipping or rough timbre, no title fan or gap, the in-game Settings close
+  back to the field, and a cartridge/emulator save loading).
+- Old 3DS memory: Phase A adds Platinum's `__system_allocateHeaps` so the
+  compositor's linear allocations fit beside the game's heap; the real
+  headroom (allocator failures, texture cache) is still unmeasured.
 - `--sanitize` requires `libstdc++` at link time only for the ASan runtime;
   the normal link stays libstdc++-free.
 - SMDH: `smdhtool` can package a generic, non-ROM icon; the cart-derived icon
@@ -794,3 +981,14 @@ SD card or run a cartridge.
   drop in `stage_triangle()` plus `test_camera_plane_triangle`); `platinum.lock`
   is unchanged and the PR content is recorded in
   [decisions.md](../decisions.md).
+
+## Runtime pixel-filter presets
+
+X+R now cycles five mixed 2D/3D filter presets, cheapest first:
+`NEAREST/NEAREST`, `SHARP/NEAREST` (the default), `SHARP/SHARP`,
+`SHARP/XBRZ-S`, `SCALE2X/XBRZ-S`. A small lower-screen toast names the
+preset for about two seconds. The cycle does not touch `smooth3d` or the
+upper screen's stereo. The 2D filter is latched into each published layer
+set; the 3D texture filter is applied only by the display thread. Both
+Old and New 3DS can use every preset. Hardware measurement of the frame
+times for each preset is still pending.
