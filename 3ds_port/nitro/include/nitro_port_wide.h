@@ -249,6 +249,11 @@ void NitroPort_RepeatingBg(int bg, int on);
 /* Those BGs (a bit each), while they count: in the field only (overlay5
  * loaded, not the battle's, no screen laid out in parts); 0 otherwise. */
 int NitroPort_RepeatingBgs(void);
+/* Slice S5c: text BGs the port nominates for the compositor quad itself,
+ * repeating-flagged or not (BGs 1-3: GpuBgOf still proves each one, so
+ * nomination is never a correctness claim). Same vetoes as RepeatingBgs;
+ * battles stay software for now. */
+int NitroPort_NominateGpuBgs(void);
 
 /* (the game: patch 0054, screen_fade_funcs.c) A window (0 or 1) of an
  * engine shaped by the game's circle fades (the screen closing or opening

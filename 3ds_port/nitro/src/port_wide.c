@@ -483,6 +483,24 @@ int NitroPort_RepeatingBgs(void)
     return laidOut ? 0 : (int)bgs;
 }
 
+/* Slice S5c: the port nominates text BGs for the compositor quad itself,
+ * repeating-flagged or not -- GpuBgOf still proves each one (z-order,
+ * blend, windows, H-blank), so nomination is never a correctness claim.
+ * Same vetoes as RepeatingBgs: the wide layout draws BGs its own way;
+ * battles stay software for now (one variable at a time). */
+int NitroPort_NominateGpuBgs(void)
+{
+    int laidOut;
+
+    if (!NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle")) {
+        return 0;
+    }
+    lock();
+    laidOut = sPartCount[0] > 0;
+    unlock();
+    return laidOut ? 0xE : 0;
+}
+
 void NitroPort_SetWideScreen(int extra)
 {
     sWideExtra = extra < 0 ? 0 : extra > 32 ? 32 : extra;

@@ -873,9 +873,11 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     if (top && sCompose.wide) {
         NitroPort_WideLayout(engine, &split);
         /* The field's repeating weather BGs: faster scrolled on the GPU
-         * with the 3D than redrawn in the picture every frame. */
+         * with the 3D than redrawn in the picture every frame. S5c: the
+         * port also nominates text BGs 1-3 (GpuBgOf proves each one;
+         * untaken ones draw in software exactly as before). */
         if (engine == 0 && NitroPort_ComposeDrawsBgs()) {
-            split.gpuBgs = NitroPort_RepeatingBgs();
+            split.gpuBgs = NitroPort_RepeatingBgs() | NitroPort_NominateGpuBgs();
         }
     }
     if (!top && __atomic_exchange_n(&sToastDirty, false, __ATOMIC_ACQ_REL)) {

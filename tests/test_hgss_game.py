@@ -1944,6 +1944,34 @@ class GpuBgAttributionTests(unittest.TestCase):
                         perf.index("sPerf2d[0] = *a;"))
 
 
+class GpuBgNominateTests(unittest.TestCase):
+    """Wave 2 S5c: the port nominates text BGs for the quad itself.
+
+    The game flags repeating weather BGs; the port additionally nominates
+    1-3. GpuBgOf (unchanged) still proves each one, so nomination moves no
+    correctness boundary: untaken BGs draw in software exactly as before.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    WIDE_H = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_wide.h"
+
+    def test_nominate_shares_the_repeating_vetoes(self):
+        text = (self.NITRO / "port_wide.c").read_text()
+        nom = text[text.index("int NitroPort_NominateGpuBgs(void)\n{"):
+                    text.index("void NitroPort_SetWideScreen(int extra)\n{")]
+        self.assertIn('!NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle")',
+                      nom)
+        self.assertIn("sPartCount[0] > 0", nom)
+        self.assertIn("return laidOut ? 0xE : 0;", nom)
+        self.assertIn("int NitroPort_NominateGpuBgs(void);", self.WIDE_H.read_text())
+
+    def test_shell_nominates_beside_the_game_flags(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("split.gpuBgs = NitroPort_RepeatingBgs() | NitroPort_NominateGpuBgs();",
+                      text)
+
+
 class GpuBgMapSizeTests(unittest.TestCase):
     """Wave 2 S5b: any text map size + the no-blend flat quad.
 
