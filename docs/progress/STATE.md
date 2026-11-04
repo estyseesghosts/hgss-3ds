@@ -363,6 +363,17 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - Actual-renderer fixture **811 checks, 0 failed**, also ASan/UBSan; same expanded
   fixture fails 10 checks on R1 source. Full native suite: **461 tests, no
   assertion failures**, same 11 baseline toolchain errors and 13 skips.
+- **Staged empty-scanline candidate: clean build `79afbd3`**. HG/SS both
+  **1092/1092 compiled, 0 failed**, linked, `validate_3dsx` **[]**; fresh SDK
+  archives. Versioned binaries and sidecars in `dist/sd-card/3ds/`,
+  `dist/soulsilver-sd-card/3ds/` (SS), and `~/hgss-private/sd-card/3ds/`.
+  - HG `pokeheartgold-79afbd3.3dsx`, **5,803,088 B**,
+    SHA-256 `8ac38df8d3cf0f39fb14720a3312fa24b27ffd4a4e7c77c0a66a4dcb31efc81a`.
+  - SS `pokesoulsilver-79afbd3.3dsx`, **5,803,144 B**,
+    SHA-256 `1b24658bd507a59fb906f49e0e3fcbe98721d32d547884dfb121208d3707dddf`.
+  Launch the versioned candidate explicitly with unchanged frozen save/script/
+  config. Earlier binaries and unversioned launch files are preserved. Actual
+  improvement over run 25, goldens and New 3DS smoke remain pending.
 - Detailed comparison, exact proof, review, scope and pending hardware/golden
   gates: [o3ds-log25-empty-scanlines.md](agent-notes/o3ds-log25-empty-scanlines.md).
 
