@@ -154,7 +154,7 @@ static void sequence_case(int snapshot, int mapSize)
 }
 
 enum Change { PALETTE, TILE, OAM, WINDOW, HBLANK, NOMINATION, BUFFER,
-              BLANK_RETURN, LAYOUT, AFFINE, ENGINE_B, FORCED_RENDER };
+              BLANK_RETURN, LAYOUT, AFFINE, ENGINE_B, BACKDROP_EFFECT, FORCED_RENDER };
 static void fallback_case(enum Change change)
 {
     reset(1);
@@ -182,10 +182,20 @@ static void fallback_case(enum Change change)
         candidate = layout(over, alpha);
         break;
     case LAYOUT: candidate.stretch = 1; break;
-    case AFFINE: wr32(0, Rd32(NitroPort_IoReg, 0) | 1); break;
+    case AFFINE: {
+        /* DS mode 1 keeps BG2 text; mode 2 makes BG2 affine. */
+        wr32(0, (Rd32(NitroPort_IoReg, 0) & ~7u) | 2);
+        Engine e; SetUpEngine(&e, 0, &candidate);
+        CHECK(BgKind(&e, 2, Rd32(NitroPort_IoReg, 0)) == BG_AFFINE);
+        break;
+    }
     case ENGINE_B:
         engine = 1;
         wr32(0x1000, 0x10000 | 0x200);
+        break;
+    case BACKDROP_EFFECT:
+        wr16(0x50, 0x20 | 0x80); /* backdrop as brightness first target */
+        wr16(0x54, 9);
         break;
     case FORCED_RENDER:
         candidate.gpuBgs = 0;
@@ -196,8 +206,15 @@ static void fallback_case(enum Change change)
     unsigned before = sProfile[engine].lines;
     u16 *pixels = change == BUFFER ? refUnder : under;
     CHECK(NitroPort_Render2DSplitIfChanged(engine, pixels, &candidate) == 1);
-    CHECK(sProfile[engine].lines > before);
-    if (engine == 0) CHECK(sProfile[0].lines > lines);
+    /* R3 can resolve a GPU-only picture directly even after content/buffer
+     * changes. These cases still require fresh output, not old cached pixels. */
+    int flat = change == PALETTE || change == TILE || change == BUFFER ||
+               change == BLANK_RETURN || change == FORCED_RENDER;
+    if (!flat && sProfile[engine].lines == before) {
+        fprintf(stderr, "fallback case %d unexpectedly omitted scanlines\n", change);
+    }
+    CHECK(flat ? sProfile[engine].lines == before : sProfile[engine].lines > before);
+    if (engine == 0 && !flat) CHECK(sProfile[0].lines > lines);
     /* For all fallbacks, compare the defined pixels and metadata with a full
      * draw of exactly the same input, not merely the "did draw" counter. */
     static u16 expectedUnder[320 * 192], expectedOver[320 * 192];
@@ -217,6 +234,35 @@ static void fallback_case(enum Change change)
     CHECK(memcmp(candidate.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
 }
 
+static void flat_content_case(int change)
+{
+    reset(1);
+    NitroRender2DSplit initial = layout(over, alpha);
+    NitroPort_Render2DSplit(0, under, &initial);
+    CHECK(initial.nGpuQuads == 2);
+    unsigned lines = sProfile[0].lines;
+    switch (change) {
+    case 0: NitroPort_BgVram[0x70000] ^= 1; break; /* unrelated VRAM */
+    case 1: NitroPort_BgVram[32] ^= 1; break; /* actual taken tile */
+    case 2: ((u16 *)NitroPort_Pltt)[0] = 0x1234; break; /* CPU backdrop */
+    case 3: ((u16 *)NitroPort_Pltt)[1] = 0x4321; break; /* GPU palette */
+    case 4: ((u16 *)NitroPort_Oam)[2] = 17; break; /* still-disabled OBJ */
+    }
+    wr16(0x14, 43); wr16(0x18, 63);
+    NitroRender2DSplit candidate = layout(over, alpha);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &candidate) == 1);
+    CHECK(sProfile[0].lines == lines);
+    NitroRender2DSplit ref = layout(refOver, refAlpha);
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+    CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+    CHECK(memcmp(alpha, refAlpha, sizeof(alpha)) == 0);
+    CHECK(candidate.nGpuQuads == ref.nGpuQuads);
+    CHECK(memcmp(candidate.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
+    CHECK(memcmp(candidate.gpuBgKey, ref.gpuBgKey, sizeof(ref.gpuBgKey)) == 0);
+    CHECK(candidate.backdrop == ref.backdrop);
+}
+
 int main(void)
 {
     scroll_case(0, 1, 3, 0, 0, 0);
@@ -231,6 +277,7 @@ int main(void)
         sequence_case(snapshot, 0xC000);
     }
     for (int c = PALETTE; c <= FORCED_RENDER; c++) fallback_case((enum Change)c);
+    for (int c = 0; c < 5; c++) flat_content_case(c);
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

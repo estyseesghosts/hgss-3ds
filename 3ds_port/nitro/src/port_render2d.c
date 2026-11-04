@@ -103,6 +103,10 @@ typedef struct SplitReuse {
 static SplitReuse sSplitReuse[2];
 static u32 sCommittedTextOnly[2];
 static u32 sSplitPictureSerial[2];
+/* IfChanged may resolve an empty software picture after authoritative GPU
+ * commit. Forced Split renders retain the scanline reference implementation. */
+#define R2D_TRY_FLAT 0x80000000u
+static void Fill(u16 *out, u16 color, int n);
 static u32 SplitLayoutSignature(int engine, const NitroRender2DSplit *split);
 static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *split,
                          u32 layout, int snapshot);
@@ -192,7 +196,7 @@ static State2D sState[2];
 #define WIDE_PICS_MAX 16   /* pictures a layout draws (NITRO_WIDE_PICTURE) */
 
 typedef struct Engine {
-    u32 reusePixels;       /* requested committed-text mask; revalidated below */
+    u32 reusePixels;       /* committed-text mask / TRY_FLAT; revalidated below */
     const u8 *ioAll;       /* all the registers (live, or a State2D's) */
     const u8 *io;          /* the engine's registers (A: +0, B: +0x1000) */
     /* (an H-blank effect) its first NITRO_LINE_REGS bytes on each line, or
@@ -4884,7 +4888,22 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     if (frameOk && committedText && committedText == ((dispcnt >> 8) & 0xEu) &&
         objFrame->count == 0 && !e->circles[0].on && !e->circles[1].on) {
         sCommittedTextOnly[pe] = committedText;
-        if (e->reusePixels == committedText) {
+        if ((e->reusePixels & R2D_TRY_FLAT) && e->height == H && e->top == 0 &&
+            !(bldcnt & 0x20) && split->over != NULL) {
+            /* All 2D layers are actual GPU takes, not nominations. Each CPU
+             * row therefore has t.filled == 0: SnapshotOver clears over and
+             * leaves its unused alpha alone; resolve writes the backdrop.
+             * No backdrop first-target bit means even a colour effect cannot
+             * change that result. Do two whole-plane operations instead of
+             * 192 row setups, OBJ/priority walks, clears and timed finishes.
+             * Refill on EVERY call: content changes and new buffers are safe;
+             * there is no new unchanged-memory or writer-coverage assumption. */
+            Fill(out, backdrop, width * H);
+            memset(split->over, 0, (size_t)width * H * sizeof(u16));
+            split->scroll3dLines = 0;
+            return;
+        }
+        if ((e->reusePixels & ~R2D_TRY_FLAT) == committedText) {
             split->scroll3dLines = 0;
             return;
         }
@@ -6454,7 +6473,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
                 return 0;   /* brightness-only is handled by the shell */
             }
             u32 mask = r->mask;
-            Render(engine, under, split, mask);
+            Render(engine, under, split, mask | R2D_TRY_FLAT);
             return 1;       /* current quads must be published, pixels reused */
         }
     }
@@ -6469,7 +6488,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         last[e].small = small;
         last[e].valid = 1;
         last[e].vramValid = 0;
-        Render(engine, under, split, 0);
+        Render(engine, under, split, R2D_TRY_FLAT);
         last[e].serial = sSplitPictureSerial[e];
         return 1;
     }
@@ -6479,7 +6498,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     }
     last[e].vram = vram;
     last[e].vramValid = 1;
-    Render(engine, under, split, 0);
+    Render(engine, under, split, R2D_TRY_FLAT);
     last[e].serial = sSplitPictureSerial[e];
     return 1;
 }

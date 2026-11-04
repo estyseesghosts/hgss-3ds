@@ -346,7 +346,27 @@ Newest first. Each entry: what changed, what was run, what it proved.
   have split DISP fully the first time; (c) emulator rig had no boot check and
   the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
   session — always target exact PIDs.
-### 2026-11-04 — R1: committed GPU-scroll software-pixel reuse (hardware pending)
+### 2026-11-04 — run 25: traversable, not finished; empty scanline follow-up
+
+- Owner confirms walking Goldenrod → adjacent southern route → Goldenrod is
+  now possible. Build **908f84c** finishes HOME-close cleanly; **0 audio drops
+  of 56169**. This is a functional improvement, not the playability finish line.
+- Scripted 2400–4200 mean display rate **7.800 → 7.925/s** versus run 24:
+  essentially flat, so do not claim a moving-Goldenrod FPS win. Common post-script
+  4800/5400 samples improve **7.7 → 8.75 composes/s**, drawer **2.1 → 2.7/s**,
+  render wall **257 → 182 ms**. Manual route/stereo samples are kept separate.
+- Existing counters show repeated all-empty CPU scanlines after GPU BG commit.
+  Lead-authored follow-up replaces that known-empty scanline walk with a whole
+  backdrop fill/over clear, using the authoritative current all-text/no-sprite
+  gate. It refills every call, adds no cache/invalidation assumptions, counters,
+  allocations, GPU coverage, or scheduler/audio/game-clock changes.
+- Actual-renderer fixture **811 checks, 0 failed**, also ASan/UBSan; same expanded
+  fixture fails 10 checks on R1 source. Full native suite: **461 tests, no
+  assertion failures**, same 11 baseline toolchain errors and 13 skips.
+- Detailed comparison, exact proof, review, scope and pending hardware/golden
+  gates: [o3ds-log25-empty-scanlines.md](agent-notes/o3ds-log25-empty-scanlines.md).
+
+### 2026-11-04 — R1: committed GPU-scroll software-pixel reuse (run 25 received)
 
 - Actual work-avoidance slice, not another diagnostic-only build: both committed
   text BGs may scroll without rerunning CPU scanlines. Existing setup/validation
