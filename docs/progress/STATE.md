@@ -346,6 +346,38 @@ Newest first. Each entry: what changed, what was run, what it proved.
   have split DISP fully the first time; (c) emulator rig had no boot check and
   the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
   session — always target exact PIDs.
+### 2026-11-04 — session: o3dsched display-first default, log-24 phase change, S8 assessed
+
+- **o3dsched display-first is now the Old 3DS default (build `9228982-dirty`,
+  174 tests green, staged).** The frozen benchmark `port.ini` carries no
+  `o3dsched` key, so without the key Old 3DS gets display-first (geometry
+  demoted below the display on core 1); explicit `o3dsched=default` keeps the
+  old order and the N3DS guard is intact. No port.ini change, no freeze breach.
+- **Log-24 (o3DS, scripted, display-first) is a phase change, not an increment:**
+  composes/s 0.2 → 7.3–8.2, drops 13–143 → **0** every window, display build
+  seconds → 17–19 ms, takes still clean (38–46/window, zero rejects). `late`
+  reads 60–71 (frames now exist to be late for instead of being dropped).
+- **The texture-burst wall reframed: it was scheduling, not conversion.** Same
+  28 first-seen textures cost 7,022 ms in log-22 vs 51 ms in log-24. Per-texture
+  cost was the display thread being descheduled mid-convert (priority
+  inversion), never texel work — the steady-state cache was already fine and no
+  amortization scheme is needed. Lesson: distrust per-unit averages that bundle
+  thread wait time; compare identical counts across scheduler states first.
+- **S8 backface pre-cull: correct, shipped, unmeasurable on the field — said
+  plainly.** `clipped` (316–461K), `culled` (12–49K), ms/scene (34–37) all flat
+  vs log-22: field waste is fully-outside polygons (already cheap outcode
+  rejects), backface share ~2%. The slice stays (provably exact, helps
+  backface-heavy scenes), but it is not the field's cost. Do not cite S8 for
+  field gains.
+- **Remaining wall, ranked (all hardware log-24):** drawer render 293–877
+  ms/frame at 1.1–1.7 fps is now binding (software 2D both engines + capture/
+  upscale on core 0); geometry still saturated at ~34 ms/scene on core 1 but no
+  longer blocking the display. Next slice should break down drawer render
+  before cutting (2D shares explain only part of it).
+- **Still open (unchanged):** battle UI mirror (veto identity + mechanism —
+  see agent-notes/s21-session-battle-mirror.md); emulator A/B pixel gate
+  (rig needs the boot-reliability fixes noted last session); atlas 9-cell cap
+  as future tuning; `region front=0` cosmetic on the field.
 - **Staged for hardware (o3dsched display-first default, 2026-11-04):** HG `pokeheartgold-9228982-dirty.3dsx`
   `5,801,668 B` `sha256 6b54784f…51eaf9`, SS `pokesoulsilver-9228982-dirty.3dsx`
   `5,801,724 B` `sha256 1f451256…cf28a10` (`validate_3dsx` `[]`; in
