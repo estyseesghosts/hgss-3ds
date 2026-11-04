@@ -1897,7 +1897,7 @@ class GpuBgAttributionTests(unittest.TestCase):
         header = self.HEADER.read_text()
         for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC",
                      "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND",
-                     "SIZE", "NOWRAP", "STRETCH", "DISP"):
+                     "SIZE", "NOWRAP", "STRETCH", "DISP", "WIN", "BG0"):
             self.assertIn(f"NITRO_GPUBG_REJECT_{name}", header)
         self.assertIn("NITRO_GPU_BG_REJECTS", header)
         for name in ("SEMI", "BITMAP", "AFFINE", "SQUEEZE", "CAP", "BLEND", "MOVED"):
@@ -1919,9 +1919,12 @@ class GpuBgAttributionTests(unittest.TestCase):
         gate = text[text.index("if (split->has3d && split->gpuBgs) {"):
                      text.index("} else for (b = 1; b < 4 && nBgTake < NITRO_GPU_BG_SLOTS; b++) {")]
         # Total: with 3D + nominations live, exactly one of stretch,
-        # per-line H-blank regs, or DISPCNT mode fails (see frameOk).
+        # per-line H-blank regs, windows, BG0 undisplayed, or DISPCNT
+        # display mode fails (see frameOk, in its check order).
         self.assertIn("split->stretch ? NITRO_GPUBG_REJECT_STRETCH", gate)
         self.assertIn("e->lines != NULL ? NITRO_GPUBG_REJECT_HBLANK", gate)
+        self.assertIn("(dispcnt & 0xE000) ? NITRO_GPUBG_REJECT_WIN", gate)
+        self.assertIn("((dispcnt & 0x108) != 0x108) ? NITRO_GPUBG_REJECT_BG0", gate)
         self.assertIn(": NITRO_GPUBG_REJECT_DISP", gate)
 
     def test_every_reject_returns_its_reason(self):
@@ -1951,7 +1954,7 @@ class GpuBgAttributionTests(unittest.TestCase):
     def test_shell_reports_rejects_before_the_snapshot(self):
         text = (self.APP / "main_3ds.c").read_text()
         perf = text[text.index("static void PerfLog"):text.index("static void WaitForFrameCap")]
-        self.assertIn('"[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr/str/dsp', perf)
+        self.assertIn('"[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr/str/dsp/win/bg0', perf)
         self.assertIn("obj %u/%u/%u/%u/%u/%u/%u, region %u/%u", perf)
         # Cumulative counters, differenced like rows -- and read before the
         # snapshot below overwrites them (always-zero otherwise).

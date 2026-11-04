@@ -181,7 +181,9 @@ enum NitroGpuBgReject {
     NITRO_GPUBG_REJECT_SIZE,      /* map bigger than the quad texture */
     NITRO_GPUBG_REJECT_NOWRAP,    /* affine without wraparound */
     NITRO_GPUBG_REJECT_STRETCH,   /* stretched transition frame (frame gate only) */
-    NITRO_GPUBG_REJECT_DISP,      /* DISPCNT not in 3D-graphics mode (frame gate only) */
+    NITRO_GPUBG_REJECT_DISP,      /* DISPCNT display mode not graphics (frame gate only) */
+    NITRO_GPUBG_REJECT_WIN,       /* windows enabled (frame gate only) */
+    NITRO_GPUBG_REJECT_BG0,       /* BG0/3D layer not displayed (frame gate only) */
     NITRO_GPU_BG_REJECTS
 };
 /* Slice S6: why an OBJ stays on software (per evaluated OBJ). */
