@@ -1510,6 +1510,32 @@ class PerformanceWaveThreeTests(unittest.TestCase):
         self.assertIn("if (!sNew3ds) {\n        filterCombo = false;\n    }", text)
         self.assertIn("[perf] Old 3DS profile: launch-time filter only", text)
 
+    def test_backface_culled_before_projection_and_clip(self):
+        source = (self.NITRO / "port_gx3d.c").read_text()
+        stage = source[source.index("static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)"):
+                       source.index("static void begin_polygon(void)")]
+        # Same predicate as the per-piece test, earlier: facing decided from
+        # clip coords (no projection needed), culled polys skip screen
+        # projection and the 6-plane Sutherland-Hodgman clip. The per-piece
+        # tests below stay as the safety net.
+        light = stage.index("light_vertex(a);light_vertex(b);light_vertex(c);")
+        front = stage.index("sPolygonFront=polygon_front(a,b,c);")
+        inside = stage.index("if(!(a->outside | b->outside | c->outside))")
+        self.assertLess(light, front)
+        self.assertLess(front, inside)
+        self.assertIn("if(polygon_culled()){", stage)
+        # Kept for shadows either way (keep_for_shadow projects itself);
+        # counted as culled (coarser than per-piece: one per polygon).
+        self.assertIn("if(sShadowCapture)keep_for_shadow(a,b,c);", stage)
+        self.assertIn("sDiag.cullFacing++;", stage)
+        # Lighting still runs first: the replay record reuses these colours.
+        self.assertLess(stage.index("light_vertex(a);light_vertex(b);light_vertex(c);"),
+                        stage.index("sPolygonFront=polygon_front(a,b,c);"))
+        # Downstream tests untouched: inside fork, crossing clip, per-piece.
+        self.assertIn("if(add_screen_triangle(screen_of(a),screen_of(b),screen_of(c)) || polygon_culled())",
+                      stage)
+        self.assertIn("for(p=0;p<6;p++){", stage)
+
     def test_lower_screen_is_30hz_on_old_3ds(self):
         text = (self.APP / "main_3ds.c").read_text()
         self.assertIn('IniValue("lower30"', text)

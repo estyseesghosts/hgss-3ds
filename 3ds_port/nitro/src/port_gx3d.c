@@ -768,6 +768,19 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
         return;
     }
     light_vertex(a);light_vertex(b);light_vertex(c);
+    /* S8: backface before projecting or clipping it. A polygon facing away
+     * draws nothing wherever it is (its pieces share its plane), so the
+     * screen projection and the Sutherland-Hodgman clip are pure cost for
+     * it. Same predicate as the per-piece test below (which stays as the
+     * safety net), same shadow keep, same counters' meaning shifted
+     * coarser: one culled polygon instead of its pieces. Lighting still
+     * runs first: the replay record below reuses these colours. */
+    sPolygonFront=polygon_front(a,b,c);
+    if(polygon_culled()){
+        if(sShadowCapture)keep_for_shadow(a,b,c);
+        sDiag.cullFacing++;
+        return;
+    }
     if(!(a->outside | b->outside | c->outside)){
         if(add_screen_triangle(screen_of(a),screen_of(b),screen_of(c)) || polygon_culled())
             keep_for_shadow(a,b,c);
