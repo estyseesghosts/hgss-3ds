@@ -1927,6 +1927,12 @@ class GpuBgAttributionTests(unittest.TestCase):
         self.assertIn("((dispcnt & 0x108) != 0x108) ? NITRO_GPUBG_REJECT_BG0", gate)
         self.assertIn(": NITRO_GPUBG_REJECT_DISP;", gate)
         self.assertIn("prof->gpuBgReject[reason]++;", gate)
+        # Regression (log-20): Render zeroes the split ahead of `over` on
+        # every call, so the 3D header must be assigned before frameOk
+        # reads it -- a zeroed has3d failed the gate while dispcnt passed,
+        # misattributed to DISP on every frame.
+        self.assertLess(text.index("split->has3d = e->isA && kind[0] == BG_3D;"),
+                        text.index("int frameOk = split != NULL"))
 
     def test_gate_logs_its_dispcnt_once(self):
         text = (self.NITRO / "port_render2d.c").read_text()

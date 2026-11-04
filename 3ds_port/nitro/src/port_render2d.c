@@ -4401,9 +4401,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     int nBgTake = 0;
     int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS];
     int takeHofs[NITRO_GPU_BG_SLOTS], takeVofs[NITRO_GPU_BG_SLOTS];
-    int frameOk = split != NULL && split->has3d && split->gpuBgs && e->lines == NULL && !split->stretch &&
-                  !(dispcnt & 0xE000) && (dispcnt & 0x108) == 0x108 && ((dispcnt >> 16) & 3) == 1;
     if (split != NULL) {
+        /* The 3D header before frameOk reads it: Render zeroes the split
+         * ahead of `over` on every call, so frameOk must see this call's
+         * values, not the previous call's (log-20's all-dsp was a zeroed
+         * has3d failing the gate while dispcnt itself passed). */
         split->has3d = e->isA && kind[0] == BG_3D;
         split->prio3d = bgcnt[0] & 3;
         split->scroll3d = split->has3d ? (Rd16(io, 0x10) - e->shift3d) & 0x1FF : 0;
@@ -4413,6 +4415,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         split->evb = evb;
         split->blend3d = (bldcnt >> 8) & 0x3F;
         split->backdrop = backdrop;
+    }
+    int frameOk = split != NULL && split->has3d && split->gpuBgs && e->lines == NULL && !split->stretch &&
+                  !(dispcnt & 0xE000) && (dispcnt & 0x108) == 0x108 && ((dispcnt >> 16) & 3) == 1;
+    if (split != NULL) {
         /* S5/S6 bundle: quads and slots start empty every frame; takes
          * below fill them. (A stale quad drawn over a menu would be a
          * wrong picture, not just a slow one.) */
