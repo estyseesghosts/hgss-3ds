@@ -127,6 +127,25 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * brightness still counts (the menu fades with it). */
 unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 
+/* Slice S5 reject reasons: why a text BG stays on the software path.
+ * Indices into NitroRender2DProfile.gpuBgReject (GpuBgOf's checks, in
+ * order). stdint types only: this header compiles on both sides of the
+ * DS-ABI u64 alignment split, so the layout must not depend on it. */
+enum NitroGpuBgReject {
+    NITRO_GPUBG_REJECT_SETUP = 0, /* not wanted (cannot fire: caller guards) */
+    NITRO_GPUBG_REJECT_HBLANK,    /* H-blank line regs live, or windows, or no 3D mode */
+    NITRO_GPUBG_REJECT_OFF,       /* wanted BG not enabled */
+    NITRO_GPUBG_REJECT_MODE,      /* not a text BG in this mode */
+    NITRO_GPUBG_REJECT_MOSAIC,    /* mosaic set */
+    NITRO_GPUBG_REJECT_SIZE,      /* map bigger than 256x256 */
+    NITRO_GPUBG_REJECT_EXT,       /* ext-palette 8bpp */
+    NITRO_GPUBG_REJECT_BLEND,     /* blend targets not (this BG, 3D) */
+    NITRO_GPUBG_REJECT_BEHIND,    /* at or below the 3D */
+    NITRO_GPUBG_REJECT_BETWEEN,   /* another BG between it and the 3D */
+    NITRO_GPUBG_REJECT_OBJ,       /* an OBJ between it and the 3D */
+    NITRO_GPUBG_REJECT_OBJBLEND,  /* semi-transparent/bitmap OBJ over it */
+    NITRO_GPU_BG_REJECTS
+};
 /* Slice-A instruments: where a drawn frame's 2D time goes, per engine.
  * Ticks are ARM11 ticks on a 3DS (0 in host builds, where there is no tick
  * counter). Cumulative since startup; the caller diffs per interval. Counts
@@ -147,6 +166,13 @@ typedef struct NitroRender2DProfile {
     uint64_t setupTicks;  /* per-frame setup: keys, art lookups, palettes, splits */
     uint32_t rowHits;     /* Slice B text-row cache hits */
     uint32_t rowMisses;   /* Slice B text-row cache misses (one row render each) */
+    /* Slice S5: why engine A's text BG stays on software. GpuBgOf runs once
+     * per frame when the compositor wants a BG; each reject below is a
+     * correctness condition of the bgTex path, and the counters say which
+     * one fires on the field -- that picks the next S5 slice. Cumulative
+     * since startup; the caller diffs per interval, like rowHits. */
+    uint32_t gpuBgTaken;  /* GpuBgOf took the BG (compositor draws the quad) */
+    uint32_t gpuBgReject[NITRO_GPU_BG_REJECTS];
 } NitroRender2DProfile;
 /* A copy of the accumulators (which keep running). */
 void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out);

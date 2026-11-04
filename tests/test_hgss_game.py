@@ -1874,6 +1874,64 @@ class PerformanceSliceS3Tests(unittest.TestCase):
         self.assertIn("if (!artHere) {", draw)
 
 
+class GpuBgAttributionTests(unittest.TestCase):
+    """Wave 2 S5 first code: why text BGs stay on software.
+
+    GpuBgOf runs once per engine-A frame with one silent `return -1` per
+    correctness condition; the counters say which fires on the field, and
+    that picks the next S5 slice. Zero behavior change: reason codes are
+    negative (both downstream uses guard `>= 0`), and counting rides the
+    existing profile snapshot/diff pattern.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_render2d.h"
+
+    def test_reject_enum_covers_every_check(self):
+        header = self.HEADER.read_text()
+        for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC", "SIZE",
+                     "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
+            self.assertIn(f"NITRO_GPUBG_REJECT_{name}", header)
+        self.assertIn("NITRO_GPU_BG_REJECTS", header)
+        # Profile counters ride the shared struct (stdint types only: the
+        # DS-ABI u64 alignment split must not move them; see the hbirq fix).
+        self.assertIn("uint32_t gpuBgTaken;", header)
+        self.assertIn("uint32_t gpuBgReject[NITRO_GPU_BG_REJECTS];", header)
+        self.assertNotIn("u64 gpuBg", header)
+
+    def test_every_reject_returns_its_reason(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        gpu = text[text.index("static int GpuBgOf("):text.index("/* The extended palette slot")]
+        self.assertEqual(gpu.count("return -(1 + NITRO_GPUBG_REJECT_"), 12)
+        for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC", "SIZE",
+                     "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
+            self.assertIn(f"return -(1 + NITRO_GPUBG_REJECT_{name});", gpu)
+        self.assertNotIn("return -1;", gpu)
+
+    def test_draw_counts_taken_and_rejects(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("prof->gpuBgTaken++;", text)
+        self.assertIn("prof->gpuBgReject[-1 - gb]++;", text)
+        self.assertIn("prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;", text)
+        # The change-detection caller mirrors the old -1 contract (its hash
+        # only gets more precise per reason) and counts nothing.
+        split = text[text.index("int NitroPort_Render2DSplitIfChanged("):]
+        self.assertNotIn("gpuBgTaken", split)
+        self.assertNotIn("gpuBgReject", split)
+        # Both downstream uses still guard >= 0, so reasons stay negative.
+        self.assertIn("if (isA && gpuBg >= 0) {", text)
+
+    def test_shell_reports_rejects_before_the_snapshot(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        perf = text[text.index("static void PerfLog"):text.index("static void WaitForFrameCap")]
+        self.assertIn('"[perf] gpubg: taken %u, reject ', perf)
+        # Cumulative counters, differenced like rows -- and read before the
+        # snapshot below overwrites them (always-zero otherwise).
+        self.assertLess(perf.index("[perf] gpubg:"),
+                        perf.index("sPerf2d[0] = *a;"))
+
+
 class OutputParsingTests(unittest.TestCase):
     def test_error_count(self):
         text = ("a.c:1:1: warning: something\n"

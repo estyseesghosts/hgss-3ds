@@ -490,19 +490,26 @@ static u32 ScreenBase(const Engine *e, u16 bgcnt, u32 dispcnt)
  * field's weather: the clouds' shadows, fog, sand); no windows and no
  * H-blank effect. Else -1. From the registers and OAM given (the state
  * taken, or the live one). */
+/* Which text BG the compositor can draw itself (bgTex quad with UV
+ * scrolling), or why not. Returns the BG (1-3), or -(1 + reason) with a
+ * NitroGpuBgReject reason (S5 attribution: the caller counts it). All
+ * rejects are correctness conditions of the quad path, not guesses. */
 static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
 {
     u32 dispcnt = Rd32(io, 0);
     u16 bldcnt = Rd16(io, 0x50);
     int bg, k, i, key, key3d, mode = dispcnt & 7;
 
-    if (wanted == 0 || lines || (dispcnt & 0xE000) || (dispcnt & 0x108) != 0x108 || ((dispcnt >> 16) & 3) != 1) {
-        return -1;
+    if (wanted == 0) {
+        return -(1 + NITRO_GPUBG_REJECT_SETUP);
+    }
+    if (lines || (dispcnt & 0xE000) || (dispcnt & 0x108) != 0x108 || ((dispcnt >> 16) & 3) != 1) {
+        return -(1 + NITRO_GPUBG_REJECT_HBLANK);
     }
     for (bg = 1; bg < 4 && !((wanted >> bg) & 1); bg++) {
     }
     if (bg > 3 || !(dispcnt & (0x100u << bg))) {
-        return -1;
+        return -(1 + NITRO_GPUBG_REJECT_OFF);
     }
     {
         u16 bgcnt = Rd16(io, 8 + bg * 2);
@@ -510,18 +517,27 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
         int text = mode == 0 || (mode == 1 && bg < 3) || (mode == 2 && bg < 2) || (mode == 3 && bg < 3) ||
                    (mode >= 4 && mode <= 5 && bg < 2);
 
-        if (!text || (bgcnt & 0x40) || (bgcnt >> 14) != 0 || ((bgcnt & 0x80) && (dispcnt & 0x40000000u))) {
-            return -1;
+        if (!text) {
+            return -(1 + NITRO_GPUBG_REJECT_MODE);
+        }
+        if (bgcnt & 0x40) {
+            return -(1 + NITRO_GPUBG_REJECT_MOSAIC);
+        }
+        if ((bgcnt >> 14) != 0) {
+            return -(1 + NITRO_GPUBG_REJECT_SIZE);
+        }
+        if ((bgcnt & 0x80) && (dispcnt & 0x40000000u)) {
+            return -(1 + NITRO_GPUBG_REJECT_EXT);
         }
         key = (bgcnt & 3) * 4 + bg;
     }
     key3d = (Rd16(io, 8) & 3) * 4;
     /* alpha blending, this BG the only first target, the 3D a second one */
     if (((bldcnt >> 6) & 3) != 1 || (bldcnt & 0x3F) != (1u << bg) || !(bldcnt & 0x100)) {
-        return -1;
+        return -(1 + NITRO_GPUBG_REJECT_BLEND);
     }
     if (key >= key3d) {
-        return -1;   /* (behind the 3D) */
+        return -(1 + NITRO_GPUBG_REJECT_BEHIND);   /* (behind the 3D) */
     }
     for (k = 1; k < 4; k++) {
         int kk;
@@ -531,7 +547,7 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
         }
         kk = (Rd16(io, 8 + k * 2) & 3) * 4 + k;
         if (kk > key && kk < key3d) {
-            return -1;   /* (a BG between it and the 3D) */
+            return -(1 + NITRO_GPUBG_REJECT_BETWEEN);   /* (a BG between it and the 3D) */
         }
     }
     if (dispcnt & 0x1000) {
@@ -549,13 +565,13 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
             }
             /* (an OBJ is in front of the BGs of its priority or lower) */
             if (prio > prioBg && prio <= prio3d) {
-                return -1;   /* (an OBJ between it and the 3D) */
+                return -(1 + NITRO_GPUBG_REJECT_OBJ);   /* (an OBJ between it and the 3D) */
             }
             /* (a semi-transparent or bitmap OBJ in front of it: the DS
              * blends it with what's under it, this BG; left out, it would
              * be blended with the 3D instead) */
             if (prio <= prioBg && ((a0 >> 10) & 3) != 0) {
-                return -1;
+                return -(1 + NITRO_GPUBG_REJECT_OBJBLEND);
             }
         }
     }
@@ -1849,6 +1865,7 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             while (x < xe) {
                 int tx = (x + off) & (mapW - 1);
                 int n = mapW - tx;
+                int i = 0;
 
                 if (n > xe - x) {
                     n = xe - x;
@@ -4253,6 +4270,15 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 split->gpuBgVofs = Rd16(io, 0x12 + gb * 4) & 0x1FF;
                 split->gpuBgKey = key;
                 kind[gb] = BG_NONE;
+                /* Slice S5: the BG left the picture for the GPU quad. */
+                prof->gpuBgTaken++;
+            } else if (gb < 0) {
+                /* Slice S5: why it stays on software (-(1 + reason)). */
+                prof->gpuBgReject[-1 - gb]++;
+            } else {
+                /* GpuBgOf's mode test passed but BgKind disagrees: same
+                 * bucket as MODE, never silent. */
+                prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
             }
         }
     } else if (e->isA && kind[0] == BG_3D) {
