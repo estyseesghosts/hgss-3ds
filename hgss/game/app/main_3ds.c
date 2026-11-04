@@ -102,9 +102,15 @@ void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq);
 /* Slice S4: H-blank attribution counters (3ds_port/nitro, diagnostics only).
  * The walk's interrupt handlers, one entry per IRQ bit (layout mirrors
  * nitro_port.h's NitroPortIrqTime, which this file cannot include next to
- * libctru's headers); SyncTimers cost/count; the sound-pump tick sink; the
- * H-blank DMA transfer count. */
-typedef struct NitroPortIrqTime { uint64_t ticks; uint32_t calls; } NitroPortIrqTime;
+ * libctru's headers: nitro's u64 is aligned(4) for DS save-layout compat,
+ * so the struct is 12 bytes with stride 12 -- a plain uint64_t mirror would
+ * be 16 bytes and every entry past [0] would read garbage). The alignment
+ * reduction only takes on the typedef (as in nitro's types.h), not on the
+ * member. SyncTimers cost/count; the sound-pump tick sink; the H-blank
+ * DMA transfer count. */
+typedef uint64_t NitroPortTick __attribute__((aligned(4)));
+typedef struct NitroPortIrqTime { NitroPortTick ticks; uint32_t calls; } NitroPortIrqTime;
+_Static_assert(sizeof(NitroPortIrqTime) == 12, "NitroPortIrqTime mirror must be 12 bytes like nitro_port.h");
 void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out);
 void NitroPort_SyncTimersStats(u64 *calls, u64 *ticks);
 void NitroPort_NoteSoundPumpTicks(u64 ticks);

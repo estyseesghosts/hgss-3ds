@@ -1839,6 +1839,13 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
             TextRowCached(e, e->isA ? 0 : 1, bg, sTextKey[e->isA ? 0 : 1][bg], ty, bgcnt, dispcnt);
 
         if (cachedRow != NULL) {
+            /* Slice S2b: the hit path copies whole words like MergeT's
+             * opaque-pair fast path (same proof: flags 0/T_LAYER only, so
+             * no window check; the row test decides). The general PUT loop
+             * below stays for windows and odd alignments. */
+            int writeLayer = (flags & T_LAYER) != 0;
+            int wideOk = flags == 0 || flags == T_LAYER;
+
             while (x < xe) {
                 int tx = (x + off) & (mapW - 1);
                 int n = mapW - tx;
@@ -1846,7 +1853,43 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
                 if (n > xe - x) {
                     n = xe - x;
                 }
-                for (int i = 0; i < n; i++) {
+                if (wideOk && ((((uintptr_t)(row + x)) | ((uintptr_t)(cachedRow + tx))) & 3) == 0) {
+                    /* Two opaque cached pixels over two empty screen pixels
+                     * copy as one word; anything else falls to the pixel
+                     * path, which decides each. */
+                    for (; i + 1 < n; i += 2) {
+                        u32 pair = *(const u32a *)(cachedRow + tx + i);
+
+                        if ((pair & 0x80008000u) == 0x80008000u) {
+                            u32 have = *(u32a *)(row + x + i);
+
+                            if (!(have & 0x80008000u)) {
+                                *(u32a *)(row + x + i) = pair;
+                                if (writeLayer) {
+                                    layerOf[x + i] = layer;
+                                    layerOf[x + i + 1] = layer;
+                                }
+                                filled += 2;
+                                continue;
+                            }
+                        }
+                        if ((cachedRow[tx + i] & OPAQUE) && !(row[x + i] & OPAQUE)) {
+                            row[x + i] = cachedRow[tx + i];
+                            if (writeLayer) {
+                                layerOf[x + i] = layer;
+                            }
+                            filled++;
+                        }
+                        if ((cachedRow[tx + i + 1] & OPAQUE) && !(row[x + i + 1] & OPAQUE)) {
+                            row[x + i + 1] = cachedRow[tx + i + 1];
+                            if (writeLayer) {
+                                layerOf[x + i + 1] = layer;
+                            }
+                            filled++;
+                        }
+                    }
+                }
+                for (; i < n; i++) {
                     PUT(x + i, cachedRow[tx + i], flags);
                 }
                 x += n;

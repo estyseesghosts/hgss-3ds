@@ -1674,6 +1674,10 @@ class PerformanceSliceBTests(unittest.TestCase):
         self.assertIn("TextRowCached(e, e->isA ? 0 : 1, bg, sTextKey[e->isA ? 0 : 1][bg], ty, bgcnt, dispcnt)",
                       draw)
         self.assertIn("PUT(x + i, cachedRow[tx + i], flags);", draw)
+        # Hit spans copy whole words like MergeT's fast path (flags 0 or
+        # T_LAYER only; row test decides; layerOf kept), general path kept.
+        self.assertIn("int wideOk = flags == 0 || flags == T_LAYER;", draw)
+        self.assertIn("*(u32a *)(row + x + i) = pair;", draw)
         # Without a cached row the old tile loop runs as before (captures
         # drawn without a key, or a failed malloc): still present verbatim.
         self.assertIn("u32 entryAddr = rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2;",
@@ -1751,6 +1755,13 @@ class PerformanceSliceS4Tests(unittest.TestCase):
         header = self.HEADER.read_text()
         self.assertIn("void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out);", header)
         self.assertIn("} NitroPortIrqTime;", header)
+        # DS-ABI u64 is aligned(4): the struct is 12 bytes, stride 12. The
+        # shell mirrors it by hand (log-13's b1/b6/b7 garbage was a 16-byte
+        # mirror reading a 12-byte table).
+        self.assertIn('_Static_assert(sizeof(NitroPortIrqTime) == 12', header)
+        shell = (self.APP / "main_3ds.c").read_text()
+        self.assertIn('_Static_assert(sizeof(NitroPortIrqTime) == 12', shell)
+        self.assertIn("aligned(4)", shell)
         self.assertIn("void NitroPort_SyncTimersStats(u64 *calls, u64 *ticks);", header)
         self.assertIn("void NitroPort_NoteSoundPumpTicks(u64 ticks);", header)
         self.assertIn("void NitroPort_SoundPumpTickStats(u64 *ticks, u32 *calls);", header)

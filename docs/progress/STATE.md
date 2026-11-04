@@ -149,15 +149,15 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
 
 ## Next actions, in order
 
-1. **Old 3DS 2D renderer (the remaining wall).** Slices A (counters +
-   empty-line cut), B (scroll-shifted text-row cache), S2a (unified per-frame
-   keys), S3 (T_LAYER merge, SnapshotOver/finish plain paths, OBJ art-line
-   skip) and S4 (H-blank/audio/DMA attribution) are implemented, tested (141
-   tests) and staged (`57ed38d6`/`8f58b099`); hardware verdict pending
-   (`rows hit/total`, `text %`, `setup %`, `hbirq`). S2b/S2c (band cache,
-   VRAM generations) held for that data per instrument-first. Everything
-   measured this session is in
-   [agent-notes/s20-performance-session.md](agent-notes/s20-performance-session.md).
+1. **Old 3DS 2D renderer.** Wave 1 code-complete, awaiting commit +
+   validation build (running): S1 row cache, S2a unified keys, S2b
+   word-copy hit path, S3 merge/finish/OBJ, S4 attribution + the 12-byte
+   hbirq stride fix, o3dsched experiment, int-divide removal (154 tests).
+   S2c stays deferred with data (setup 1–5%, rows 89–100%). Text 21–67%
+   trips the plan's Wave-2-start (>15%). Wave 2 S5 started: GpuBgOf
+   reject reasons + `[perf] gpubg` attribution (which check keeps text on
+   software picks the next slice). No staging until Wave 2 lands real
+   GPU relief.
 2. **Audio to core 1 — tried, reverted.** Log 9 proved core 1 oversubscribed
    (display down to 0.0 composes/s); default is back to core 0 with
    `audiocore=` kept for A/B. The `[perf] audio:` drop counter stays.
@@ -251,8 +251,8 @@ Newest first. Each entry: what changed, what was run, what it proved.
   boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
   with setup % and rows hit/miss, `hb_*`, texture/settle counts,
   `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
-- **Baseline artifacts for the benchmark runs:** HG `5,783,924 B` `sha256
-  57ed38d6…a13ec2b`, SS `5,783,980 B` `sha256 8f58b099…560df4`
+- **Baseline artifacts for the benchmark runs:** HG `5,784,436 B` `sha256
+  82c1ab05…400ba87`, SS `5,784,492 B` `sha256 2e8862d0…f21eb91`
   (`validate_3dsx` `[]`). Supersedes all earlier pairs — do not run those.
   Runs the same Wave 0 benchmark (`script.txt` + `port.ini` + save);
   report `[perf] display/2d` with `rows hit/total`, `setup %`, `hbirq`,

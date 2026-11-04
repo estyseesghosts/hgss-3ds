@@ -204,6 +204,10 @@ typedef struct NitroPortIrqTime {
     u64 ticks;
     u32 calls;
 } NitroPortIrqTime;
+/* DS-ABI u64 is aligned(4), so this is 12 bytes with stride 12. The shell
+ * (main_3ds.c) mirrors it by hand next to libctru headers -- if this grows
+ * a pad, the mirror's _Static_assert fires and both must change together. */
+_Static_assert(sizeof(NitroPortIrqTime) == 12, "NitroPortIrqTime must stay 12 bytes (DS u64 align 4)");
 void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out);
 
 /* ---------------------------------------------------------------- threads */
