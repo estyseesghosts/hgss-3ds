@@ -483,22 +483,18 @@ int NitroPort_RepeatingBgs(void)
     return laidOut ? 0 : (int)bgs;
 }
 
-/* Slice S5c: the port nominates text BGs for the compositor quad itself,
- * repeating-flagged or not -- GpuBgOf still proves each one (z-order,
- * blend, windows, H-blank), so nomination is never a correctness claim.
- * Same vetoes as RepeatingBgs: the wide layout draws BGs its own way;
- * battles stay software for now (one variable at a time). */
+/* Slice S5/S6 bundle: the port nominates text BGs for the compositor
+ * quad itself, repeating-flagged or not. No scene vetoes: per-BG
+ * validation (plain tiles, z-order, blend, windows, H-blank) plus the
+ * region rule prove each take in any scene, so untaken scenes just draw
+ * in software. Battles stay software (their UI churns faster than quad
+ * keys pay for). */
 int NitroPort_NominateGpuBgs(void)
 {
-    int laidOut;
-
-    if (!NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle")) {
+    if (NitroPort_OverlayLoadedNamed("battle")) {
         return 0;
     }
-    lock();
-    laidOut = sPartCount[0] > 0;
-    unlock();
-    return laidOut ? 0xE : 0;
+    return 0xE;
 }
 
 void NitroPort_SetWideScreen(int extra)

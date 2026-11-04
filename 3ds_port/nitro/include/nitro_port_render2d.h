@@ -190,6 +190,7 @@ enum NitroGpuObjReject {
     NITRO_GPUOBJ_REJECT_SQUEEZE,  /* engine squeeze effect active */
     NITRO_GPUOBJ_REJECT_CAP,      /* atlas full */
     NITRO_GPUOBJ_REJECT_BLEND,    /* BLDCNT touches OBJs */
+    NITRO_GPUOBJ_REJECT_MOVED,    /* wide layout moved OBJs */
     NITRO_GPU_OBJ_REJECTS
 };
 /* Quad texture wrap (per BG slot; text always repeats). */

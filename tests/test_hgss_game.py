@@ -1900,7 +1900,7 @@ class GpuBgAttributionTests(unittest.TestCase):
                      "SIZE", "NOWRAP"):
             self.assertIn(f"NITRO_GPUBG_REJECT_{name}", header)
         self.assertIn("NITRO_GPU_BG_REJECTS", header)
-        for name in ("SEMI", "BITMAP", "AFFINE", "SQUEEZE", "CAP", "BLEND"):
+        for name in ("SEMI", "BITMAP", "AFFINE", "SQUEEZE", "CAP", "BLEND", "MOVED"):
             self.assertIn(f"NITRO_GPUOBJ_REJECT_{name}", header)
         self.assertIn("NITRO_GPU_OBJ_REJECTS", header)
         # Profile counters ride the shared struct (stdint types only: the
@@ -1942,7 +1942,7 @@ class GpuBgAttributionTests(unittest.TestCase):
         text = (self.APP / "main_3ds.c").read_text()
         perf = text[text.index("static void PerfLog"):text.index("static void WaitForFrameCap")]
         self.assertIn('"[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr', perf)
-        self.assertIn("obj %u/%u/%u/%u/%u/%u, region %u/%u", perf)
+        self.assertIn("obj %u/%u/%u/%u/%u/%u/%u, region %u/%u", perf)
         # Cumulative counters, differenced like rows -- and read before the
         # snapshot below overwrites them (always-zero otherwise).
         self.assertLess(perf.index("[perf] gpubg:"),
@@ -1961,14 +1961,17 @@ class GpuBgNominateTests(unittest.TestCase):
     NITRO = REPO / "3ds_port" / "nitro" / "src"
     WIDE_H = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_wide.h"
 
-    def test_nominate_shares_the_repeating_vetoes(self):
+    def test_nominate_has_no_scene_vetoes(self):
         text = (self.NITRO / "port_wide.c").read_text()
         nom = text[text.index("int NitroPort_NominateGpuBgs(void)\n{"):
                     text.index("void NitroPort_SetWideScreen(int extra)\n{")]
-        self.assertIn('!NitroPort_OverlayLoadedNamed("overlay5") || NitroPort_OverlayLoadedNamed("battle")',
-                      nom)
-        self.assertIn("sPartCount[0] > 0", nom)
-        self.assertIn("return laidOut ? 0xE : 0;", nom)
+        # Battles stay software; everything else nominates and lets
+        # per-BG validation + the region rule decide (the old overlay5 /
+        # laidOut vetoes zeroed takes on the whole field).
+        self.assertIn('NitroPort_OverlayLoadedNamed("battle")', nom)
+        self.assertNotIn("overlay5", nom)
+        self.assertNotIn("laidOut", nom)
+        self.assertIn("return 0xE;", nom)
         self.assertIn("int NitroPort_NominateGpuBgs(void);", self.WIDE_H.read_text())
 
     def test_shell_nominates_beside_the_game_flags(self):
@@ -2075,6 +2078,10 @@ class GpuBgMultiTests(unittest.TestCase):
         self.assertIn("if ((frontClean || behindClean) && (nBgTake > 0 || nObjTake > 0)) {", text)
         self.assertIn("objFrame->taken[commitObj[s]] = 1;", text)
         self.assertIn("kind[split->gpuBgSlotBg[commitBg[s]]] = BG_NONE;", text)
+
+    def test_stretch_disables_takes(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("!split->stretch", text)
 
     def test_shell_copies_slots_and_quads(self):
         text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()

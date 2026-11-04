@@ -1603,7 +1603,7 @@ static void PerfLog(u64 now)
         /* Slice S5/S6 bundle: why layers stay on software (engine A only).
          * Cumulative counters, differenced per interval like rows; read
          * before the snapshot below. */
-        NitroPort_Log("[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u, obj %u/%u/%u/%u/%u/%u, region %u/%u",
+        NitroPort_Log("[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u, obj %u/%u/%u/%u/%u/%u/%u, region %u/%u",
                       (unsigned)(a->gpuBgTaken - sPerf2d[0].gpuBgTaken + a->gpuObjTaken - sPerf2d[0].gpuObjTaken),
                       (unsigned)(a->gpuBgReject[0] - sPerf2d[0].gpuBgReject[0]),
                       (unsigned)(a->gpuBgReject[1] - sPerf2d[0].gpuBgReject[1]),
@@ -1624,6 +1624,7 @@ static void PerfLog(u64 now)
                       (unsigned)(a->gpuObjReject[3] - sPerf2d[0].gpuObjReject[3]),
                       (unsigned)(a->gpuObjReject[4] - sPerf2d[0].gpuObjReject[4]),
                       (unsigned)(a->gpuObjReject[5] - sPerf2d[0].gpuObjReject[5]),
+                      (unsigned)(a->gpuObjReject[6] - sPerf2d[0].gpuObjReject[6]),
                       (unsigned)(a->gpuRegionClean[0] - sPerf2d[0].gpuRegionClean[0]),
                       (unsigned)(a->gpuRegionClean[1] - sPerf2d[0].gpuRegionClean[1]));
         sPerf2d[0] = *a;

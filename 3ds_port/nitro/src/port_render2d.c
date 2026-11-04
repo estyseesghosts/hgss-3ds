@@ -4398,7 +4398,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     int nBgTake = 0;
     int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS];
     int takeHofs[NITRO_GPU_BG_SLOTS], takeVofs[NITRO_GPU_BG_SLOTS];
-    int frameOk = split != NULL && split->has3d && split->gpuBgs && e->lines == NULL &&
+    int frameOk = split != NULL && split->has3d && split->gpuBgs && e->lines == NULL && !split->stretch &&
                   !(dispcnt & 0xE000) && (dispcnt & 0x108) == 0x108 && ((dispcnt >> 16) & 3) == 1;
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
@@ -4553,6 +4553,12 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             }
             if (o->affine) {
                 prof->gpuObjReject[NITRO_GPUOBJ_REJECT_AFFINE]++;
+                if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
+                continue;
+            }
+            if (e->objsMoved) {
+                /* (the wide layout moved some OBJs: quads use OAM positions) */
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_MOVED]++;
                 if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
                 continue;
             }
