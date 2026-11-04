@@ -273,17 +273,17 @@ Newest first. Each entry: what changed, what was run, what it proved.
   boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
   with setup % and rows hit/miss, `hb_*`, texture/settle counts,
   `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
-- **Staged for hardware (frame-gate attribution, 2026-11-04):** HG `pokeheartgold-0ae50af-dirty.3dsx`
-  `5,800,092 B` `sha256 547dd145…c425e48`, SS `pokesoulsilver-0ae50af-dirty.3dsx`
-  `5,800,148 B` `sha256 b30fd152…880269f` (`validate_3dsx` `[]`; in
+- **Staged for hardware (disp split, 2026-11-04):** HG `pokeheartgold-ae6e871-dirty.3dsx`
+  `5,800,180 B` `sha256 bac610f3…dd41bd`, SS `pokesoulsilver-ae6e871-dirty.3dsx`
+  `5,800,236 B` `sha256 51576592…bdc282` (`validate_3dsx` `[]`; in
   `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/`,
   `~/hgss-private/sd-card/3ds/`). Supersedes all earlier pairs. Same
   Wave 0 benchmark procedure on o3DS and N3DS; the `[perf] gpubg` line
-  gains `str`/`dsp` columns splitting the old `hblank` bucket (log-17 +
-  N3DS-4 showed takes evaluated every frame but the gate failing 100%
-  of the time). Report the full `gpubg` line plus `[perf] display/2d`
-  with `rows hit/total`, `text %`, `setup %`, `[perf] hbirq`, `hb_*`,
-  texture/settle counts, `linear_free`, `[gpu] clears`.
+  now ends `.../str/dsp/win/bg0` (log-18 narrowed the 100% gate failure
+  to DISPCNT: `str`/`hblank` zero, `dsp` every frame). Report the full
+  `gpubg` line plus `[perf] display/2d` (`rows hit/total`, `text %`,
+  `setup %`), `[perf] hbirq`, `hb_*`, texture/settle counts,
+  `linear_free`, `[gpu] clears`.
 - **Staged (current):** same pair, in `dist/sd-card/3ds/`,
   `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`.
 - **Pending (owner-gated, not marked done):** the two 600-frame hardware
