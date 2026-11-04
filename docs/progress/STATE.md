@@ -273,6 +273,79 @@ Newest first. Each entry: what changed, what was run, what it proved.
   boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
   with setup % and rows hit/miss, `hb_*`, texture/settle counts,
   `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
+### 2026-11-04 — session: Wave 2 field-complete, battle UI mirror bug, Wave 3 S8 started
+
+- **Wave 2 closed on hardware (log-22, build `9434629-dirty`, o3DS scripted).**
+  `taken` fires every evaluated field frame (exactly 2.0/clean frame: BG1+BG2 as
+  behind-3D quads), every reject column zero across 10,200 frames, `text` 40% →
+  16–21% on cached scenes. Path to green, one slice per log: S5/S6 bundle committed
+  blind (never evaluated — nomination vetoed) → log-16/17 all-zero with no rejects →
+  nominate fix (the `laidOut` check was not just over-broad but **inverted**;
+  nomination now unconditional except battle) → log-17/18 hblank-only → frame-gate
+  split into str/lines/disp → log-18 dsp-only → disp split into win/bg0/dispmode →
+  log-19 pure disp with `dispcnt=00010718` (graphics mode, BG0 shown, no windows:
+  the gate condition *passed* yet DISP counted) → root cause: `frameOk` read
+  `split->has3d` two lines **above** its assignment while `Render` memsets the
+  split header every call, so the gate ran on a zeroed has3d 100% of the time
+  (fix: assign header before `frameOk`; regression test pins the order) → log-21
+  genuine `mode` (plain-tile gate vetoed on clip/anchorWindows, both set
+  unconditionally by WideLayout yet both quad-exact: clip widens with the same
+  scroll, anchorWindows needs enabled windows which frameOk vetoes; veto narrowed
+  to art/partBgs/split) → log-22 takes. 173 tests, 0 failures throughout.
+- **Overlay names `overlay5`/`battle` do not exist — all name-gated checks are dead.**
+  `build/game-3ds/gen/overlay_table.c` has 129 entries: `OVY_N` + named apps
+  (`field`, `pokegear`, …); no `overlay5`, no `battle`. Consequences: battle
+  nominate veto never fires (takes evaluate in battle — see log-5), `RepeatingBgs`
+  always returns 0, `PixelField` never engages. Field rendering works only because
+  the wide default path (clip+origin, no parts) doesn't need them. Fix needs a real
+  battle identity (overlay ID set or game-state signal), not names.
+- **OPEN CRITICAL: battle UI text mirrored (hardware N3DS log-5 screenshot + live
+  Azahar repro).** Message-box text fully H-mirrored; status boxes (ENGELS/RATTATA)
+  and bottom menu perfect — per-layer. Takes fire in battle (~1.2/frame, zero
+  rejects) because the veto is dead (above). Ruled out statically: tiling
+  (Morton tables correct), text-quad UVs (pure offset), picture decode (honors
+  tile flips), Double2x path (correct), affine (0% in battle), flipV (vertical
+  only). Status: root cause not yet isolated; see
+  [agent-notes/s21-session-battle-mirror.md](agent-notes/s21-session-battle-mirror.md).
+  Battles stay software per plan once the veto works — that alone resolves it.
+- **S6 has no field candidates (by game design, not a bug).** OAM-A empty on the
+  field (game disables all 128 entries; mirror verified working); the 44 OAM-B
+  sprites are the touchscreen menu UI; field actors are BG-map tiles (already
+  inside the quads). S6 machinery tested, waits for OAM-A-heavy non-battle scenes.
+  `region front=0` on the field means nothing is in front (front takes engage in
+  UI scenes per log-5) — cosmetic.
+- **Wave 3 S8 shipped (build `6aca216-dirty`, staged pair below, 173/0 tests).**
+  Backface polygons now skip projection + 6-plane SH clip inside `stage_triangle`
+  (same predicate earlier; lighting still runs first so replay-record colours and
+  shadow-keep stay exact; per-piece tests stay as safety nets). Expect geometry
+  ms/scene down, `clipped` down, `culled` coarser. Needs o3DS+N3DS benchmark runs.
+- **Post-Wave-2 wall quantified (hardware log-22, timing-solid).** Texture
+  conversion is bursty, not churn: one compose spent 7.5 s converting 28
+  first-seen tiny textures (250 ms each — fixed per-texture cost, not texels;
+  cache already gives zeros in steady state, i.e. S10's headline already holds).
+  Otherwise scene build 0–5 s, drawer render 0.2–1.3 s/frame, publish 85–310 ms,
+  geometry 34 ms/scene at 99–100% busy (o3DS) vs 1–2 ms at 4–6% (N3DS). Ranking:
+  texture bursts ≫ scene build ≫ render (incl. all remaining 2D) > publish.
+  S10-as-written doesn't cover bursts (amortization needs a pop-in tradeoff
+  decision — deferred to owner).
+- **Azahar loop validated (functional only; timing not trusted per owner).**
+  Scripted bench reproduces hardware exactly (takes, zero rejects, behind-only,
+  obj silence) at ~4 game-fps. RPC gives screenshots + memory reads. Rigor rules
+  learned: never `rm` the open log (truncate), single emulator instance (broad
+  `pkill` killed the owner's interactive session — check PIDs first), fail fast
+  if no boot banner in 90 s. Emulator A/B pixel gate (pre/post-S8 at frame 3000)
+  rigged but not yet run.
+- **What went well:** attribution-led slicing (every log decided the next slice
+  in one cycle, no wasted stage); one-logical-slice-per-commit held through 8+
+  commits; test suite green at every step; the has3d and overlay-name roots were
+  found by reading code the logs pointed at, not guessing.
+- **What went wrong (and fixes):** (a) string-gated vetoes shipped without ever
+  verifying the names exist — add a boot-time existence assertion (or unit test
+  over `overlay_table.c`) for every `OverlayLoadedNamed` literal; (b) two
+  consecutive attribution-only slices (HBLANK split, then DISP split) — should
+  have split DISP fully the first time; (c) emulator rig had no boot check and
+  the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
+  session — always target exact PIDs.
 - **Staged for hardware (S8 backface pre-cull, 2026-11-04):** HG `pokeheartgold-6aca216-dirty.3dsx`
   `5,801,556 B` `sha256 f5b96379…128cc4981`, SS `pokesoulsilver-6aca216-dirty.3dsx`
   `5,801,548 B` `sha256 b8980533…c830c8c0` (`validate_3dsx` `[]`; in
