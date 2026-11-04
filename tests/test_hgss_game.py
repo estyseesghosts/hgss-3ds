@@ -1890,10 +1890,13 @@ class GpuBgAttributionTests(unittest.TestCase):
 
     def test_reject_enum_covers_every_check(self):
         header = self.HEADER.read_text()
-        for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC", "SIZE",
+        for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC",
                      "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
             self.assertIn(f"NITRO_GPUBG_REJECT_{name}", header)
         self.assertIn("NITRO_GPU_BG_REJECTS", header)
+        # Any map size routes (the picture and the quad are map-sized);
+        # mosaic and ext palettes stay software.
+        self.assertNotIn("NITRO_GPUBG_REJECT_SIZE", header)
         # Profile counters ride the shared struct (stdint types only: the
         # DS-ABI u64 alignment split must not move them; see the hbirq fix).
         self.assertIn("uint32_t gpuBgTaken;", header)
@@ -1903,11 +1906,15 @@ class GpuBgAttributionTests(unittest.TestCase):
     def test_every_reject_returns_its_reason(self):
         text = (self.NITRO / "port_render2d.c").read_text()
         gpu = text[text.index("static int GpuBgOf("):text.index("/* The extended palette slot")]
-        self.assertEqual(gpu.count("return -(1 + NITRO_GPUBG_REJECT_"), 12)
-        for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC", "SIZE",
+        self.assertEqual(gpu.count("return -(1 + NITRO_GPUBG_REJECT_"), 11)
+        for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC",
                      "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
             self.assertIn(f"return -(1 + NITRO_GPUBG_REJECT_{name});", gpu)
         self.assertNotIn("return -1;", gpu)
+        # Blend mode reported out (NULL-tolerant: the change-detection
+        # caller doesn't need it).
+        self.assertIn("static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blend)", gpu)
+        self.assertIn("if (blend != NULL) {", gpu)
 
     def test_draw_counts_taken_and_rejects(self):
         text = (self.NITRO / "port_render2d.c").read_text()
@@ -1930,6 +1937,71 @@ class GpuBgAttributionTests(unittest.TestCase):
         # snapshot below overwrites them (always-zero otherwise).
         self.assertLess(perf.index("[perf] gpubg:"),
                         perf.index("sPerf2d[0] = *a;"))
+
+
+class GpuBgMapSizeTests(unittest.TestCase):
+    """Wave 2 S5b: any text map size + the no-blend flat quad.
+
+    The picture, upload and UV math are map-sized (256x256 path
+    byte-identical); a BG nowhere in the blend draws opaque instead of
+    staying software. Fallback (mosaic, ext palettes, windows, H-blank,
+    brightness-on-it) is unchanged.
+    """
+
+    APP = REPO / "hgss" / "game" / "app"
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_render2d.h"
+    PICA = REPO / "3ds_port" / "game" / "app" / "port_pica.h"
+    COMPOSE = REPO / "3ds_port" / "game" / "app" / "port_compose_pica.c"
+
+    def test_split_and_layers_carry_size_and_blend(self):
+        header = self.HEADER.read_text()
+        self.assertIn("int gpuBgW, gpuBgH, gpuBgBlend;", header)
+        pica = self.PICA.read_text()
+        self.assertIn("int gpuBgW, gpuBgH, gpuBgBlend;", pica)
+
+    def test_drawer_sets_size_from_bgcnt_and_blend_from_gpubg(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        draw = text[text.index("if (split->has3d && split->gpuBgs) {"):
+                     text.index("} else if (e->isA && kind[0] == BG_3D) {")]
+        self.assertIn("int bgBlend = 1;", draw)
+        self.assertIn("GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs, &bgBlend)", draw)
+        self.assertIn("split->gpuBgW = sTextSizes[(bgcnt[gb] >> 14) & 3][0];", draw)
+        self.assertIn("split->gpuBgH = sTextSizes[(bgcnt[gb] >> 14) & 3][1];", draw)
+        self.assertIn("split->gpuBgBlend = bgBlend;", draw)
+
+    def test_picture_decode_is_size_general(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        pic = text[text.index("int NitroPort_Render2DBgPicture("):
+                     text.index("int NitroPort_Render2DLayer(")]
+        # Screen-block aware entries, map-stride rows; 256x256 reduces to
+        # the old linear form (block offset 0, stride 256).
+        self.assertIn("int mapW = sTextSizes[(bgcnt >> 14) & 3][0], mapH = sTextSizes[(bgcnt >> 14) & 3][1];", pic)
+        self.assertIn("(u32)((tx >> 5) + (ty >> 5) * (tilesX >> 5)) * 0x800", pic)
+        self.assertIn("out + (size_t)(ty * 8 + y) * (size_t)mapW + tx * 8", pic)
+        # Palette/pack paths untouched (test_render.c's 256 goldens hold).
+        self.assertIn("c = Rd16(e.bgPltt, index * 2);", pic)
+
+    def test_compositor_upload_draw_and_equality_are_size_aware(self):
+        text = self.COMPOSE.read_text()
+        self.assertIn("NitroPort_Tile16(l->gpuBgPicture, l->gpuBgW, l->gpuBgH, set->bgTex, BG_TEX_W);", text)
+        self.assertIn("NitroPort_Double2xTiled16(l->gpuBgPicture, 256, 256, set->bgTex, BG_TEX_W);", text)
+        self.assertIn("a->gpuBgW == b->gpuBgW && a->gpuBgH == b->gpuBgH && a->gpuBgBlend == b->gpuBgBlend;", text)
+        # Texels per map pixel (2 for doubled 256 maps, 1 for 1:1 bigger
+        # ones); UV wraps at the texture edge = the map edge either way.
+        self.assertIn("int texel = (mapW == 256 && mapH == 256) ? 2 : 1;", text)
+        self.assertIn("bu1 = bu0 + (float)canvasW * (float)texel / (float)BG_TEX_W;", text)
+        self.assertIn("bvTop = 1.0f - (float)(vofs - top) * (float)texel / (float)BG_TEX_W;", text)
+        # Flat quad: same 1-bit-alpha replace call, white vertex color.
+        self.assertIn("} else {", text)
+        self.assertIn("bu0, bvTop, bu1, bvBottom, 0xFFFFFFFFu);", text)
+
+    def test_shell_holds_a_whole_map_and_canonicalizes(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn("static uint16_t picture[512 * 512];", text)
+        self.assertIn("layers->gpuBgW = split.gpuBgW >= 256 ? split.gpuBgW : 256;", text)
+        self.assertIn("layers->gpuBgH = split.gpuBgH >= 256 ? split.gpuBgH : 256;", text)
+        self.assertIn("layers->gpuBgBlend = split.gpuBgBlend;", text)
 
 
 class OutputParsingTests(unittest.TestCase):

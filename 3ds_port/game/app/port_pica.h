@@ -272,8 +272,10 @@ typedef struct ComposeLayers {
      * blending onto the 3D (eva, evb: 0-16), its scroll when the picture
      * was drawn (the 3D scene's are newer: NitroGx3dScene.bg_ofs), and its
      * picture's key (NitroPort_Render2DBgPicture made again when it
-     * changes). */
+     * changes). gpuBgW/H are the map's size in pixels; gpuBgBlend is 1
+     * when the quad alpha-blends (eva, evb) and 0 when it draws opaque. */
     int gpuBg, gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
+    int gpuBgW, gpuBgH, gpuBgBlend;
     uint64_t gpuBgKey;
     /* (the drawer's) its picture (NitroPort_Render2DBgPicture: 256 x 256
      * RGBA5551), made as the game's state was read, when the key changed */

@@ -156,8 +156,11 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
    S2c stays deferred with data (setup 1–5%, rows 89–100%). Text 21–67%
    trips the plan's Wave-2-start (>15%). Wave 2 S5 started: GpuBgOf
    reject reasons + `[perf] gpubg` attribution (which check keeps text on
-   software picks the next slice). No staging until Wave 2 lands real
-   GPU relief.
+   software picks the next slice). S5b in tree (validation build running):
+   any text map size routes through the quad (map-sized picture/upload/UV;
+   256 path bit-identical), plus the no-blend flat quad (opaque replace,
+   incl. the battles no-first-target case). No staging until Wave 2 lands
+   real GPU relief.
 2. **Audio to core 1 — tried, reverted.** Log 9 proved core 1 oversubscribed
    (display down to 0.0 composes/s); default is back to core 0 with
    `audiocore=` kept for A/B. The `[perf] audio:` drop counter stays.

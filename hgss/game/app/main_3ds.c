@@ -919,8 +919,15 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     layers->gpuBgHofs = split.gpuBgHofs;
     layers->gpuBgVofs = split.gpuBgVofs;
     layers->gpuBgKey = split.gpuBgKey;
+    /* S5b: canonical map size (the split always sets it with the BG; 256
+     * when it somehow doesn't, so the compositor never divides by zero). */
+    layers->gpuBgW = split.gpuBgW >= 256 ? split.gpuBgW : 256;
+    layers->gpuBgH = split.gpuBgH >= 256 ? split.gpuBgH : 256;
+    layers->gpuBgBlend = split.gpuBgBlend;
     if (layers->gpuBg >= 0) {
-        static uint16_t picture[256 * 256];
+        /* S5b: the whole map (up to 512 x 512), made again when the key
+         * (map, tiles, colours: not the scroll) changes. */
+        static uint16_t picture[512 * 512];
         static uint64_t pictureKey;
         static int pictureValid;
 
@@ -1589,7 +1596,7 @@ static void PerfLog(u64 now)
          * A only; B never calls it). Cumulative counters, differenced per
          * interval like rows; read before the snapshot below. The top
          * reason picks the next S5 slice. */
-        NitroPort_Log("[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/size/ext/blend/behind/between/obj/obl %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u",
+        NitroPort_Log("[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u",
                       (unsigned)(a->gpuBgTaken - sPerf2d[0].gpuBgTaken),
                       (unsigned)(a->gpuBgReject[0] - sPerf2d[0].gpuBgReject[0]),
                       (unsigned)(a->gpuBgReject[1] - sPerf2d[0].gpuBgReject[1]),
@@ -1601,8 +1608,7 @@ static void PerfLog(u64 now)
                       (unsigned)(a->gpuBgReject[7] - sPerf2d[0].gpuBgReject[7]),
                       (unsigned)(a->gpuBgReject[8] - sPerf2d[0].gpuBgReject[8]),
                       (unsigned)(a->gpuBgReject[9] - sPerf2d[0].gpuBgReject[9]),
-                      (unsigned)(a->gpuBgReject[10] - sPerf2d[0].gpuBgReject[10]),
-                      (unsigned)(a->gpuBgReject[11] - sPerf2d[0].gpuBgReject[11]));
+                      (unsigned)(a->gpuBgReject[10] - sPerf2d[0].gpuBgReject[10]));
         sPerf2d[0] = *a;
         sPerf2d[1] = *b;
     }

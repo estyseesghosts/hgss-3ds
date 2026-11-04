@@ -1527,7 +1527,8 @@ static int same_display_state(const ComposeLayers *a, const ComposeLayers *b)
            a->scroll3dLines == b->scroll3dLines &&
            (!a->scroll3dLines || memcmp(a->scroll3dLine, b->scroll3dLine, sizeof(a->scroll3dLine)) == 0) &&
            a->gpuBg == b->gpuBg && a->gpuBgEva == b->gpuBgEva && a->gpuBgEvb == b->gpuBgEvb &&
-           a->gpuBgHofs == b->gpuBgHofs && a->gpuBgVofs == b->gpuBgVofs && a->gpuBgKey == b->gpuBgKey;
+           a->gpuBgHofs == b->gpuBgHofs && a->gpuBgVofs == b->gpuBgVofs && a->gpuBgKey == b->gpuBgKey &&
+           a->gpuBgW == b->gpuBgW && a->gpuBgH == b->gpuBgH && a->gpuBgBlend == b->gpuBgBlend;
 }
 
 /* A publish whose picture is already in one of the screen's textures: the
@@ -1676,10 +1677,15 @@ int NitroPort_ComposePublish(int engine, int screen)
     }
     /* A BG drawn here (the field's weather): its picture, when the set
      * doesn't hold it yet (made by the drawer as it read the game's state:
-     * l->gpuBgPicture). */
+     * l->gpuBgPicture). 256x256 maps upload doubled (2x2 texels a pixel, as
+     * before); bigger maps upload 1:1 -- all fit the 512x512 texture. */
     if (!l->displayOff && l->gpuBg >= 0 && set->bgTex && l->gpuBgPicture &&
         (!set->bgValid || set->bgKey != l->gpuBgKey)) {
-        NitroPort_Double2xTiled16(l->gpuBgPicture, 256, 256, set->bgTex, BG_TEX_W);
+        if (l->gpuBgW == 256 && l->gpuBgH == 256) {
+            NitroPort_Double2xTiled16(l->gpuBgPicture, 256, 256, set->bgTex, BG_TEX_W);
+        } else {
+            NitroPort_Tile16(l->gpuBgPicture, l->gpuBgW, l->gpuBgH, set->bgTex, BG_TEX_W);
+        }
         GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
         set->bgKey = l->gpuBgKey;
         set->bgValid = 1;
@@ -3009,9 +3015,11 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         }
         /* 4b. A BG drawn here, in front of the 3D and behind the rest (the
          * field's weather: ComposeLayers.gpuBg), from its picture, repeated
-         * and scrolled as the 3D scene had it, blended onto the 3D as the
-         * DS does: its colour x eva / 16 + the 3D's x evb / 16 where it isn't
-         * clear (the texture's colours are 0 there: what's under stays). */
+         * and scrolled as the 3D scene had it. Alpha-blended onto the 3D as
+         * the DS does (its colour x eva / 16 + the 3D's x evb / 16 where it
+         * isn't clear), or opaque (flat quad: the same 1-bit-alpha replace)
+         * when the DS blends nothing. The texture's colours are 0 where the
+         * map is clear: what's under stays. */
         if (info->gpuBg >= 0 && set->bgTex && set->bgValid && set->bgKey == info->gpuBgKey) {
             int hofs = scene->bg_ofs[info->gpuBg * 2], vofs = scene->bg_ofs[info->gpuBg * 2 + 1];
             uint16_t now[8], before[8];
@@ -3028,9 +3036,16 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
                 }
             }
             int origin = (canvasW - DS_W) / 2;
-            float bu0 = (float)(hofs - origin) / 256.0f, bu1 = bu0 + (float)canvasW / 256.0f;
-            float bvTop = 1.0f - (float)(vofs - top) / 256.0f, bvBottom = bvTop - (float)rows / 256.0f;
-            u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
+            /* Texels per map pixel: 2 for 256x256 maps (doubled upload, as
+             * before), 1 for bigger maps (1:1 upload: all fit the 512x512
+             * texture). UV wraps at the texture's edge = the map's edge. */
+            int mapW = info->gpuBgW >= 256 ? info->gpuBgW : 256;
+            int mapH = info->gpuBgH >= 256 ? info->gpuBgH : 256;
+            int texel = (mapW == 256 && mapH == 256) ? 2 : 1;
+            float bu0 = (float)(hofs - origin) * (float)texel / (float)BG_TEX_W;
+            float bu1 = bu0 + (float)canvasW * (float)texel / (float)BG_TEX_W;
+            float bvTop = 1.0f - (float)(vofs - top) * (float)texel / (float)BG_TEX_W;
+            float bvBottom = bvTop - (float)rows * (float)texel / (float)BG_TEX_W;
 
             if (sConfig.flipV) {
                 float t = bvTop;
@@ -3041,9 +3056,18 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
             make_texture(&sBgTex, set->bgTex, GPU_RGBA5551, BG_TEX_W, BG_TEX_W, linear, GPU_REPEAT);
             C3D_TexBind(0, &sBgTex);
             quad_combiner_modulate();
-            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
-                           GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-            quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, (a << 24) | (a << 16) | (a << 8) | b);
+            if (info->gpuBgBlend) {
+                u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
+
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                               GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+                quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom,
+                     (a << 24) | (a << 16) | (a << 8) | b);
+            } else {
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                               GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+                quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, 0xFFFFFFFFu);
+            }
             NitroPort_PicaProfileMark("the weather's BG");
         }
         /* 5. The layers in front, with their alpha (multiplied in). */

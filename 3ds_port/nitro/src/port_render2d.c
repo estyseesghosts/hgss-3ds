@@ -492,13 +492,15 @@ static u32 ScreenBase(const Engine *e, u16 bgcnt, u32 dispcnt)
  * taken, or the live one). */
 /* Which text BG the compositor can draw itself (bgTex quad with UV
  * scrolling), or why not. Returns the BG (1-3), or -(1 + reason) with a
- * NitroGpuBgReject reason (S5 attribution: the caller counts it). All
- * rejects are correctness conditions of the quad path, not guesses. */
-static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
+ * NitroGpuBgReject reason (S5 attribution: the caller counts it). *blend
+ * (NULL ok) reports how: 1 alpha-blended onto the 3D (the ADD quad), 0
+ * opaque (the flat quad). All rejects are correctness conditions of the
+ * quad path, not guesses. */
+static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blend)
 {
     u32 dispcnt = Rd32(io, 0);
     u16 bldcnt = Rd16(io, 0x50);
-    int bg, k, i, key, key3d, mode = dispcnt & 7;
+    int bg, k, i, key, key3d, mode = dispcnt & 7, takeBlend = 0;
 
     if (wanted == 0) {
         return -(1 + NITRO_GPUBG_REJECT_SETUP);
@@ -513,7 +515,8 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
     }
     {
         u16 bgcnt = Rd16(io, 8 + bg * 2);
-        /* (a text BG in this mode: BgKind's) */
+        /* (a text BG in this mode: BgKind's; any map size: the picture and
+         * the compositor's quad are map-sized, scrolled by UV) */
         int text = mode == 0 || (mode == 1 && bg < 3) || (mode == 2 && bg < 2) || (mode == 3 && bg < 3) ||
                    (mode >= 4 && mode <= 5 && bg < 2);
 
@@ -523,18 +526,28 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
         if (bgcnt & 0x40) {
             return -(1 + NITRO_GPUBG_REJECT_MOSAIC);
         }
-        if ((bgcnt >> 14) != 0) {
-            return -(1 + NITRO_GPUBG_REJECT_SIZE);
-        }
         if ((bgcnt & 0x80) && (dispcnt & 0x40000000u)) {
             return -(1 + NITRO_GPUBG_REJECT_EXT);
         }
         key = (bgcnt & 3) * 4 + bg;
     }
     key3d = (Rd16(io, 8) & 3) * 4;
-    /* alpha blending, this BG the only first target, the 3D a second one */
-    if (((bldcnt >> 6) & 3) != 1 || (bldcnt & 0x3F) != (1u << bg) || !(bldcnt & 0x100)) {
-        return -(1 + NITRO_GPUBG_REJECT_BLEND);
+    /* How the compositor draws it: alpha-blended onto the 3D alone (mode 1,
+     * this BG the only first target and the 3D a second one), or opaque
+     * (nowhere in the blend at all: mode 0, or brightness it isn't a
+     * target of -- battles set alpha blending with no first target, and
+     * an untargeted BG shows as-is). Blending it with any other layer, or
+     * brightening it, stays software. */
+    {
+        int first = (bldcnt >> bg) & 1, second = (bldcnt >> (8 + bg)) & 1;
+
+        if (((bldcnt >> 6) & 3) == 1 && first && (bldcnt & 0x3F) == (1u << bg) && (bldcnt & 0x100)) {
+            takeBlend = 1;
+        } else if (!first && !second) {
+            takeBlend = 0;
+        } else {
+            return -(1 + NITRO_GPUBG_REJECT_BLEND);
+        }
     }
     if (key >= key3d) {
         return -(1 + NITRO_GPUBG_REJECT_BEHIND);   /* (behind the 3D) */
@@ -574,6 +587,9 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted)
                 return -(1 + NITRO_GPUBG_REJECT_OBJBLEND);
             }
         }
+    }
+    if (blend != NULL) {
+        *blend = takeBlend;
     }
     return bg;
 }
@@ -4253,7 +4269,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         /* A BG the compositor draws itself (NitroRender2DSplit.gpuBgs):
          * left out, with what it needs to draw it. */
         if (split->has3d && split->gpuBgs) {
-            int gb = GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs);
+            int bgBlend = 1;
+            int gb = GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs, &bgBlend);
 
             if (gb >= 0 && kind[gb] == BG_TEXT) {
                 /* Slice S2a: the frame's key (computed once in setup). */
@@ -4266,6 +4283,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 split->gpuBgLeftOut = 1 << gb;
                 split->gpuBgEva = eva;
                 split->gpuBgEvb = evb;
+                /* S5b: the quad's map size and blend mode (the picture is
+                 * map-sized; the key already covers the size via BgKey). */
+                split->gpuBgW = sTextSizes[(bgcnt[gb] >> 14) & 3][0];
+                split->gpuBgH = sTextSizes[(bgcnt[gb] >> 14) & 3][1];
+                split->gpuBgBlend = bgBlend;
                 split->gpuBgHofs = Rd16(io, 0x10 + gb * 4) & 0x1FF;
                 split->gpuBgVofs = Rd16(io, 0x12 + gb * 4) & 0x1FF;
                 split->gpuBgKey = key;
@@ -4996,43 +5018,54 @@ int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out)
     SetUpEngine(&e, 0, &layout);
     dispcnt = Rd32(e.io, 0);
     bgcnt = Rd16(e.io, 8 + bg * 2);
-    if ((bgcnt >> 14) != 0 || BgKind(&e, bg, dispcnt) != BG_TEXT) {
+    if (BgKind(&e, bg, dispcnt) != BG_TEXT) {
         return 0;
     }
     bpp8 = (bgcnt & 0x80) != 0;
     charBase = CharBase(&e, bgcnt, dispcnt);
     screenBase = ScreenBase(&e, bgcnt, dispcnt);
-    for (ty = 0; ty < 32; ty++) {
-        for (tx = 0; tx < 32; tx++) {
-            u16 entry = Rd16(e.bgVram, (screenBase + (u32)(ty * 32 + tx) * 2) & e.bgMask);
-            u32 tile = entry & 0x3FF, pal = (u32)(entry >> 12) * 16;
-            int hflip = (entry >> 10) & 1, vflip = (entry >> 11) & 1;
+    /* S5b: any text map size (sTextSizes order: 256, 512x256, 256x512,
+     * 512x512). Tile (tx, ty) lives in the screen block its top-left 256
+     * pixels are in (each block 0x800 apart); within it, row-major. For
+     * 256x256 this reduces exactly to the old linear form. */
+    {
+        int mapW = sTextSizes[(bgcnt >> 14) & 3][0], mapH = sTextSizes[(bgcnt >> 14) & 3][1];
+        int tilesX = mapW >> 3, tilesY = mapH >> 3;
 
-            for (y = 0; y < 8; y++) {
-                int sy = vflip ? 7 - y : y;
-                uint16_t *row = out + (size_t)(ty * 8 + y) * 256 + tx * 8;
+        for (ty = 0; ty < tilesY; ty++) {
+            for (tx = 0; tx < tilesX; tx++) {
+                u32 entry = Rd16(e.bgVram, (screenBase +
+                    (u32)((tx >> 5) + (ty >> 5) * (tilesX >> 5)) * 0x800 +
+                    (u32)(((ty & 31) * 32) + (tx & 31)) * 2) & e.bgMask);
+                u32 tile = entry & 0x3FF, pal = (u32)(entry >> 12) * 16;
+                int hflip = (entry >> 10) & 1, vflip = (entry >> 11) & 1;
 
-                for (x = 0; x < 8; x++) {
-                    int sx = hflip ? 7 - x : x;
-                    u32 index;
-                    u16 c;
+                for (y = 0; y < 8; y++) {
+                    int sy = vflip ? 7 - y : y;
+                    uint16_t *row = out + (size_t)(ty * 8 + y) * (size_t)mapW + tx * 8;
 
-                    if (bpp8) {
-                        index = e.bgVram[(charBase + tile * 64 + (u32)(sy * 8 + sx)) & e.bgMask];
-                    } else {
-                        u8 b = e.bgVram[(charBase + tile * 32 + (u32)(sy * 4 + sx / 2)) & e.bgMask];
+                    for (x = 0; x < 8; x++) {
+                        int sx = hflip ? 7 - x : x;
+                        u32 index;
+                        u16 c;
 
-                        index = sx & 1 ? b >> 4 : b & 15;
-                        if (index != 0) {
-                            index += pal;
+                        if (bpp8) {
+                            index = e.bgVram[(charBase + tile * 64 + (u32)(sy * 8 + sx)) & e.bgMask];
+                        } else {
+                            u8 b = e.bgVram[(charBase + tile * 32 + (u32)(sy * 4 + sx / 2)) & e.bgMask];
+
+                            index = sx & 1 ? b >> 4 : b & 15;
+                            if (index != 0) {
+                                index += pal;
+                            }
                         }
+                        if (index == 0) {
+                            row[x] = 0;
+                            continue;
+                        }
+                        c = Rd16(e.bgPltt, index * 2);
+                        row[x] = (uint16_t)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1);
                     }
-                    if (index == 0) {
-                        row[x] = 0;
-                        continue;
-                    }
-                    c = Rd16(e.bgPltt, index * 2);
-                    row[x] = (uint16_t)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1);
                 }
             }
         }
@@ -5751,7 +5784,7 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         const State2D *st = &sState[0];
 
         gpuBg = GpuBgOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
-                        split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs);
+                        split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs, NULL);
     }
     small = EngineSmallSignature(e, split->snapshot, gpuBg);
     small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4)) * 16777619u;

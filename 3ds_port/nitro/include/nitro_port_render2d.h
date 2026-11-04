@@ -46,6 +46,9 @@ typedef struct NitroRender2DSplit {
      * NitroPort_Render2DBgPicture, when it changes). */
     int gpuBgLeftOut;
     int gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
+    /* S5b: the left-out BG's map size (pixels) and how the compositor draws
+     * it: 1 alpha-blended onto the 3D (eva, evb), 0 opaque (flat quad). */
+    int gpuBgW, gpuBgH, gpuBgBlend;
     uint64_t gpuBgKey;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
@@ -129,17 +132,18 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 
 /* Slice S5 reject reasons: why a text BG stays on the software path.
  * Indices into NitroRender2DProfile.gpuBgReject (GpuBgOf's checks, in
- * order). stdint types only: this header compiles on both sides of the
- * DS-ABI u64 alignment split, so the layout must not depend on it. */
+ * order). Any map size routes (the picture and the quad are map-sized);
+ * mosaic and ext palettes stay software. stdint types only: this header
+ * compiles on both sides of the DS-ABI u64 alignment split, so the
+ * layout must not depend on it. */
 enum NitroGpuBgReject {
     NITRO_GPUBG_REJECT_SETUP = 0, /* not wanted (cannot fire: caller guards) */
     NITRO_GPUBG_REJECT_HBLANK,    /* H-blank line regs live, or windows, or no 3D mode */
     NITRO_GPUBG_REJECT_OFF,       /* wanted BG not enabled */
     NITRO_GPUBG_REJECT_MODE,      /* not a text BG in this mode */
     NITRO_GPUBG_REJECT_MOSAIC,    /* mosaic set */
-    NITRO_GPUBG_REJECT_SIZE,      /* map bigger than 256x256 */
     NITRO_GPUBG_REJECT_EXT,       /* ext-palette 8bpp */
-    NITRO_GPUBG_REJECT_BLEND,     /* blend targets not (this BG, 3D) */
+    NITRO_GPUBG_REJECT_BLEND,     /* blended with another layer / brightened */
     NITRO_GPUBG_REJECT_BEHIND,    /* at or below the 3D */
     NITRO_GPUBG_REJECT_BETWEEN,   /* another BG between it and the 3D */
     NITRO_GPUBG_REJECT_OBJ,       /* an OBJ between it and the 3D */
@@ -166,22 +170,21 @@ typedef struct NitroRender2DProfile {
     uint64_t setupTicks;  /* per-frame setup: keys, art lookups, palettes, splits */
     uint32_t rowHits;     /* Slice B text-row cache hits */
     uint32_t rowMisses;   /* Slice B text-row cache misses (one row render each) */
-    /* Slice S5: why engine A's text BG stays on software. GpuBgOf runs once
-     * per frame when the compositor wants a BG; each reject below is a
-     * correctness condition of the bgTex path, and the counters say which
-     * one fires on the field -- that picks the next S5 slice. Cumulative
-     * since startup; the caller diffs per interval, like rowHits. */
-    uint32_t gpuBgTaken;  /* GpuBgOf took the BG (compositor draws the quad) */
+    /* Slice S5 reject attribution (port_render2d.c owns counting, shell
+     * reads). Cumulative since startup; the caller diffs per interval,
+     * like rowHits. gpuBgTaken counts quad-routed frames. */
+    uint32_t gpuBgTaken;
     uint32_t gpuBgReject[NITRO_GPU_BG_REJECTS];
 } NitroRender2DProfile;
 /* A copy of the accumulators (which keep running). */
 void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out);
 
-/* A BG of engine A's whole map (256 x 256 pixels: a text BG of that size;
- * 0 otherwise, nothing written) into out, a line of 256 after another, as
+/* A BG of engine A's whole map (a text BG of any size, from its BGCNT;
+ * 0 otherwise, nothing written) into out, a line of mapW after another, as
  * RGBA5551 (red in the top bits; 0 where the BG is clear): what the
  * compositor draws a BG left out of the picture from (gpuBgLeftOut). From
- * the state taken (snapshot: 1) or the live one; the VRAM as it is. */
+ * the state taken (snapshot: 1) or the live one; the VRAM as it is. out
+ * holds mapW x mapH pixels (up to 512 x 512). */
 int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
 /* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
 void NitroPort_Render2DBgOffsets(uint16_t out[8]);
