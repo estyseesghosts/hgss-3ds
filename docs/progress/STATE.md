@@ -273,9 +273,9 @@ Newest first. Each entry: what changed, what was run, what it proved.
   boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
   with setup % and rows hit/miss, `hb_*`, texture/settle counts,
   `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
-- **Staged for hardware (S5+S6 bundle, 2026-11-04):** HG `pokeheartgold-6886423-dirty.3dsx`
-  `5,799,628 B` `sha256 440e9bcf…305f56`, SS `pokesoulsilver-6886423-dirty.3dsx`
-  `5,799,684 B` `sha256 d263565d…f964a0` (`validate_3dsx` `[]`; in
+- **Staged for hardware (S5+S6 bundle fix, 2026-11-04):** HG `pokeheartgold-9acd7a8-dirty.3dsx`
+  `5,799,696 B` `sha256 66e8146a…d4d4a0`, SS `pokesoulsilver-9acd7a8-dirty.3dsx`
+  `5,799,752 B` `sha256 dcf29e83…67bb4f` (`validate_3dsx` `[]`; in
   `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/`,
   `~/hgss-private/sd-card/3ds/`). Supersedes all earlier pairs. Runs the
   Wave 0 benchmark: copy `benchmark/goldenrod-bench.txt` AND
