@@ -360,6 +360,14 @@ Newest first. Each entry: what changed, what was run, what it proved.
   **11 pre-existing toolchain errors**, 13 skips. Patch check **86/86**.
 - Native HG and SS builds: **1092/1092 compiled, 0 failed**, both linked;
   `validate_3dsx` **[]** on both. Fresh per-output SDK archives were built.
+- **Staged R1 candidate: clean build `908f84c`**, versioned binaries and build-info
+  sidecars in `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/` (SS), and
+  `~/hgss-private/sd-card/3ds/`. Launch the versioned candidate explicitly;
+  old binaries, unversioned launch files, saves and frozen configs are preserved.
+  - HG `pokeheartgold-908f84c.3dsx`, **5,802,712 B**,
+    SHA-256 `9f83ce4297d140c49ec1a9a69ee3803959e11fbc17b3060b04cbca53a99c5e14`.
+  - SS `pokesoulsilver-908f84c.3dsx`, **5,802,768 B**,
+    SHA-256 `653b290be04d9be085f7938641f441f6f603848da77d64265dcf3385c9d3b4a3`.
 - Hardware/goldens and measured FPS gain remain **pending**. W2 battle correctness
   is still open; this does not declare an entire playability wave complete.
 - Design, proof, test-only fixed-width host shim, exact commands and pending gates:
