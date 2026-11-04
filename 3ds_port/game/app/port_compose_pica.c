@@ -48,6 +48,7 @@
 #ifdef __3DS__
 #include "port_pica.h"
 #include <nitro_port_lowermenu.h>
+#include <nitro_port_render2d.h>
 #include <nitro_port_upscale.h>
 #include <math.h>
 #include <stdio.h>
@@ -130,12 +131,19 @@ typedef struct LayerSet {
     u32 flightSerial;     /* the last frame drawn with it (busy until sGpuDone reaches it) */
     NitroPublishTarget pub;   /* what its textures hold (publishing only what changed) */
     int pubOverRows;          /* (the 1x publisher's over rows its over texture holds: OVER_ROWS when written) */
-    /* (the upper screen's) A BG the compositor draws itself (the field's
-     * weather: ComposeLayers.gpuBg): its whole map, 2x2 texels a pixel
-     * (512 x 512 RGBA5551, tiled), and its key (bgValid: written). */
-    void *bgTex;
-    uint64_t bgKey;
-    int bgValid;
+    /* (the upper screen's) BGs the compositor draws itself (S5 bundle:
+     * up to NITRO_GPU_BG_SLOTS whole maps, 512 x 512 RGBA5551 tiled each,
+     * 2x2 texels a pixel for 256 maps, 1:1 for bigger ones), and their
+     * keys (bgValid: written). Slot ownership is per published set. */
+    void *bgTex[NITRO_GPU_BG_SLOTS];
+    uint64_t bgKey[NITRO_GPU_BG_SLOTS];
+    int bgValid[NITRO_GPU_BG_SLOTS];
+    /* S6 bundle: taken OBJs decoded once into this 512 x 512 RGBA5551
+     * tiled atlas (2x texels, transparent gutters), keyed by content;
+     * lazily allocated on first use. */
+    void *objAtlas;
+    uint64_t objAtlasKey;
+    int objAtlasValid;
 } LayerSet;
 
 /* BG pictures: 2x2 texels a pixel of a 256 x 256 map (and a row of tiles
@@ -660,13 +668,20 @@ static void free_sets(Screen *scr)
     int i;
 
     for (i = 0; i < SETS; i++) {
+        int s;
+
         if (scr->set[i].under) linearFree(scr->set[i].under);
         if (scr->set[i].over) linearFree(scr->set[i].over);
-        if (scr->set[i].bgTex) linearFree(scr->set[i].bgTex);
+        for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+            if (scr->set[i].bgTex[s]) linearFree(scr->set[i].bgTex[s]);
+            scr->set[i].bgTex[s] = NULL;
+            scr->set[i].bgValid[s] = 0;
+        }
+        if (scr->set[i].objAtlas) linearFree(scr->set[i].objAtlas);
         scr->set[i].under = NULL;
         scr->set[i].over = NULL;
-        scr->set[i].bgTex = NULL;
-        scr->set[i].bgValid = 0;
+        scr->set[i].objAtlas = NULL;
+        scr->set[i].objAtlasValid = 0;
     }
 }
 
@@ -1054,24 +1069,32 @@ static int compose_init(const ComposeConfig *config, int small)
             }
         }
     }
-    /* (last, as it can do without: the field's weather's BG drawn by the
-     * GPU, NitroPort_ComposeDrawsBgs) */
+    /* (last, as it can do without: BG quads on the GPU,
+     * NitroPort_ComposeDrawsBgs; the OBJ atlas allocates itself lazily) */
     sBgsAvailable = 1;
     for (i = 0; i < SETS && sBgsAvailable; i++) {
-        sScreens[0].set[i].bgTex = linearAlloc(BG_TEX_ALLOC);
-        sScreens[0].set[i].bgValid = 0;
-        if (!sScreens[0].set[i].bgTex) {
-            sBgsAvailable = 0;
+        int s;
+
+        for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+            sScreens[0].set[i].bgTex[s] = linearAlloc(BG_TEX_ALLOC);
+            sScreens[0].set[i].bgValid[s] = 0;
+            if (!sScreens[0].set[i].bgTex[s]) {
+                sBgsAvailable = 0;
+            }
         }
     }
     if (!sBgsAvailable) {
         for (i = 0; i < SETS; i++) {
-            if (sScreens[0].set[i].bgTex) {
-                linearFree(sScreens[0].set[i].bgTex);
-                sScreens[0].set[i].bgTex = NULL;
+            int s;
+
+            for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+                if (sScreens[0].set[i].bgTex[s]) {
+                    linearFree(sScreens[0].set[i].bgTex[s]);
+                    sScreens[0].set[i].bgTex[s] = NULL;
+                }
             }
         }
-        NitroPort_Log("[compose] not enough memory for the weather's BG on the GPU: drawn with the 2D");
+        NitroPort_Log("[compose] not enough memory for BGs on the GPU: drawn with the 2D");
     }
     NitroPort_LowerMenuSetClock(NitroPort_ComposeVBlanks);   /* (the panel's fades) */
     NitroPort_LowerMenuSetAvailable(sMenuTexData[0] != NULL);
@@ -1140,41 +1163,6 @@ void NitroPort_ComposeNoteBgOffsets(uint32_t stamp, const uint16_t ofs[8])
     sBgOfs[sBgOfsNext].valid = 1;
     sBgOfsNext = (sBgOfsNext + 1u) % BG_OFS_KEPT;
     LightLock_Unlock(&sBgOfsLock);
-}
-
-/* The scrolls the DS shows a scene of this stamp with: the first frame
- * handed over after it (its V-blank set them). Whether they're known. */
-static int bg_offsets_after(uint32_t stamp, uint16_t out[8])
-{
-    int i, found = -1;
-    uint32_t best = 0;
-
-    LightLock_Lock(&sBgOfsLock);
-    for (i = 0; i < BG_OFS_KEPT; i++) {
-        uint32_t d = sBgOfs[i].stamp - stamp;
-
-        if (sBgOfs[i].valid && d >= 1u && d <= 4u && (found < 0 || d < best)) {
-            found = i;
-            best = d;
-        }
-    }
-    if (found >= 0) {
-        memcpy(out, sBgOfs[found].ofs, sizeof(sBgOfs[0].ofs));
-    }
-    LightLock_Unlock(&sBgOfsLock);
-    return found >= 0;
-}
-
-/* Halfway from a to b (9-bit scrolls), the shorter way round a 512 map; a
- * jump of more than a quarter of it: b. */
-static int bg_offset_halfway(int a, int b)
-{
-    int d = (b - a) & 0x1FF;
-
-    if (d >= 256) {
-        d -= 512;
-    }
-    return d > 128 || d < -128 ? b : (a + d / 2) & 0x1FF;
 }
 
 uint32_t NitroPort_ComposePublished(int engine)
@@ -1517,18 +1505,57 @@ static int set_holds_picture(const LayerSet *set, const NitroPublishShadow *sh, 
 
 /* Whether a and b are the same display state but for when it was read and
  * how bright it is: what a fade's publish changes (main_3ds.c publishes
- * the untouched layers again for MASTER_BRIGHT alone). */
+ * the untouched layers again for MASTER_BRIGHT alone). Quads compare by
+ * count and bytes (back-to-front painter order); slot keys cover content,
+ * scroll rides the quads' UVs. */
 static int same_display_state(const ComposeLayers *a, const ComposeLayers *b)
 {
-    return a->width == b->width && a->height == b->height && a->top == b->top &&
-           a->stretch == b->stretch && a->has3d == b->has3d && a->scroll3d == b->scroll3d &&
-           a->tint3d == b->tint3d && a->eva == b->eva && a->evb == b->evb && a->evy == b->evy &&
-           a->backdrop == b->backdrop && a->displayOff == b->displayOff &&
-           a->scroll3dLines == b->scroll3dLines &&
-           (!a->scroll3dLines || memcmp(a->scroll3dLine, b->scroll3dLine, sizeof(a->scroll3dLine)) == 0) &&
-           a->gpuBg == b->gpuBg && a->gpuBgEva == b->gpuBgEva && a->gpuBgEvb == b->gpuBgEvb &&
-           a->gpuBgHofs == b->gpuBgHofs && a->gpuBgVofs == b->gpuBgVofs && a->gpuBgKey == b->gpuBgKey &&
-           a->gpuBgW == b->gpuBgW && a->gpuBgH == b->gpuBgH && a->gpuBgBlend == b->gpuBgBlend;
+    int s;
+
+    if (!(a->width == b->width && a->height == b->height && a->top == b->top &&
+          a->stretch == b->stretch && a->has3d == b->has3d && a->scroll3d == b->scroll3d &&
+          a->tint3d == b->tint3d && a->eva == b->eva && a->evb == b->evb && a->evy == b->evy &&
+          a->backdrop == b->backdrop && a->displayOff == b->displayOff &&
+          a->scroll3dLines == b->scroll3dLines &&
+          (!a->scroll3dLines || memcmp(a->scroll3dLine, b->scroll3dLine, sizeof(a->scroll3dLine)) == 0) &&
+          a->gpuQuads == b->gpuQuads && a->gpuQuadsBehind == b->gpuQuadsBehind &&
+          a->gpuObjAtlasKey == b->gpuObjAtlasKey)) {
+        return 0;
+    }
+    if (a->gpuQuads != 0 && memcmp(a->gpuQuad, b->gpuQuad, (size_t)a->gpuQuads * sizeof(a->gpuQuad[0])) != 0) {
+        return 0;
+    }
+    for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+        if (a->gpuBgSlotBg[s] != b->gpuBgSlotBg[s] || a->gpuBgKey[s] != b->gpuBgKey[s] ||
+            a->gpuBgW[s] != b->gpuBgW[s] || a->gpuBgH[s] != b->gpuBgH[s] || a->gpuBgWrap[s] != b->gpuBgWrap[s]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Whether a set's textures hold a frame's quad inputs (BG pictures per
+ * slot plus the OBJ atlas): slot keys and the atlas key must match, and
+ * the textures must exist (the atlas allocates itself lazily). */
+static int set_holds_quads(LayerSet *set, const ComposeLayers *l)
+{
+    int s;
+
+    for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+        if (l->gpuBgSlotBg[s] < 0) {
+            continue;
+        }
+        if (l->gpuBgPicture[s] == NULL || set->bgTex[s] == NULL ||
+            !set->bgValid[s] || set->bgKey[s] != l->gpuBgKey[s]) {
+            return 0;
+        }
+    }
+    if (l->gpuObjAtlasKey != 0 &&
+        (l->gpuObjAtlasPicture == NULL || set->objAtlas == NULL ||
+         !set->objAtlasValid || set->objAtlasKey != l->gpuObjAtlasKey)) {
+        return 0;
+    }
+    return 1;
 }
 
 /* A publish whose picture is already in one of the screen's textures: the
@@ -1556,9 +1583,7 @@ static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, 
             LayerSet *c = &scr->set[i];
 
             if (c->writing || c->held || c->seq == 0 ||
-                !set_holds_picture(c, sh, w, h, overH) ||
-                (l->gpuBg >= 0 && l->gpuBgPicture != NULL && c->bgTex != NULL &&
-                 (!c->bgValid || c->bgKey != l->gpuBgKey))) {
+                !set_holds_picture(c, sh, w, h, overH) || !set_holds_quads(c, l)) {
                 continue;
             }
             if (best == NULL || c->seq > best->seq) {
@@ -1566,11 +1591,16 @@ static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, 
             }
         }
         if (best != NULL) {
+            int s;
+
             best->info = *l;
             best->info.under = NULL;
             best->info.over = NULL;
             best->info.overAlpha = NULL;
-            best->info.gpuBgPicture = NULL;
+            for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+                best->info.gpuBgPicture[s] = NULL;
+            }
+            best->info.gpuObjAtlasPicture = NULL;
             best->info.height = h;
             best->filter2d = filter2d;
             best->seq = ++sSeq;
@@ -1649,7 +1679,10 @@ int NitroPort_ComposePublish(int engine, int screen)
     set->info.under = NULL;
     set->info.over = NULL;
     set->info.overAlpha = NULL;
-    set->info.gpuBgPicture = NULL;   /* (the drawer's: the set has its own, bgTex) */
+    for (int s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+        set->info.gpuBgPicture[s] = NULL;   /* (the drawer's: the set has its own, bgTex) */
+    }
+    set->info.gpuObjAtlasPicture = NULL;
     set->overEmpty = 1;
     set->info.height = h;
     set->underColor = l->displayOff ? -1 : uniform_color(l->under, w * h);
@@ -1675,20 +1708,46 @@ int NitroPort_ComposePublish(int engine, int screen)
             publish_whole(e, l, scr, set, w, h);
         }
     }
-    /* A BG drawn here (the field's weather): its picture, when the set
-     * doesn't hold it yet (made by the drawer as it read the game's state:
-     * l->gpuBgPicture). 256x256 maps upload doubled (2x2 texels a pixel, as
-     * before); bigger maps upload 1:1 -- all fit the 512x512 texture. */
-    if (!l->displayOff && l->gpuBg >= 0 && set->bgTex && l->gpuBgPicture &&
-        (!set->bgValid || set->bgKey != l->gpuBgKey)) {
-        if (l->gpuBgW == 256 && l->gpuBgH == 256) {
-            NitroPort_Double2xTiled16(l->gpuBgPicture, 256, 256, set->bgTex, BG_TEX_W);
-        } else {
-            NitroPort_Tile16(l->gpuBgPicture, l->gpuBgW, l->gpuBgH, set->bgTex, BG_TEX_W);
+    /* Taken BG pictures, when the set doesn't hold one yet (made by the
+     * drawer as it read the game's state: l->gpuBgPicture[s]). 256x256
+     * maps upload doubled (2x2 texels a pixel); bigger maps upload 1:1 --
+     * all fit the 512x512 texture. Slots upload independently. */
+    if (!l->displayOff) {
+        int s;
+
+        for (s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+            if (l->gpuBgSlotBg[s] < 0 || l->gpuBgPicture[s] == NULL || set->bgTex[s] == NULL) {
+                continue;
+            }
+            if (set->bgValid[s] && set->bgKey[s] == l->gpuBgKey[s]) {
+                continue;
+            }
+            if (l->gpuBgW[s] == 256 && l->gpuBgH[s] == 256) {
+                NitroPort_Double2xTiled16(l->gpuBgPicture[s], 256, 256, set->bgTex[s], BG_TEX_W);
+            } else {
+                NitroPort_Tile16(l->gpuBgPicture[s], l->gpuBgW[s], l->gpuBgH[s], set->bgTex[s], BG_TEX_W);
+            }
+            GSPGPU_FlushDataCache(set->bgTex[s], BG_TEX_BYTES);
+            set->bgKey[s] = l->gpuBgKey[s];
+            set->bgValid[s] = 1;
         }
-        GSPGPU_FlushDataCache(set->bgTex, BG_TEX_BYTES);
-        set->bgKey = l->gpuBgKey;
-        set->bgValid = 1;
+    }
+    /* The taken-OBJ atlas, once per content change (lazy allocation: menus
+     * and all-software frames never pay for it). */
+    if (!l->displayOff && l->gpuObjAtlasKey != 0 && l->gpuObjAtlasPicture != NULL) {
+        if (set->objAtlas == NULL) {
+            set->objAtlas = linearAlloc(BG_TEX_ALLOC);
+            set->objAtlasValid = 0;
+            if (set->objAtlas == NULL) {
+                NitroPort_Log("[compose] no room for the OBJ atlas: OBJs stay in software");
+            }
+        }
+        if (set->objAtlas != NULL && (!set->objAtlasValid || set->objAtlasKey != l->gpuObjAtlasKey)) {
+            NitroPort_Tile16(l->gpuObjAtlasPicture, 512, 512, set->objAtlas, BG_TEX_W);
+            GSPGPU_FlushDataCache(set->objAtlas, BG_TEX_BYTES);
+            set->objAtlasKey = l->gpuObjAtlasKey;
+            set->objAtlasValid = 1;
+        }
     }
     LightLock_Lock(&sSetLock);
     set->writing = 0;
@@ -1730,6 +1789,41 @@ static void quad(float x0, float y0, float x1, float y1, float z, float u0, floa
         v->color[3] = (uint8_t)rgba;
         v->uv[0] = corner[i][0] ? u1 : u0;
         v->uv[1] = corner[i][1] ? v1 : v0;
+    }
+    NitroPort_PicaBindVertices(sQuads);
+    C3D_DrawArrays(GPU_TRIANGLES, sQuadVertices, 6);
+    sQuadVertices += 6;
+}
+
+/* A compositor quad with four independent UV corners (S5/S6 bundle: affine
+ * maps need all four; axis-aligned quads repeat the diagonal). Same vertex
+ * budget check as quad(). */
+static void quad4(float x0, float y0, float x1, float y1, float z,
+                  float u0, float v0, float u1, float v1, float u2, float v2, u32 rgba)
+{
+    static const int tri[6] = { 0, 1, 2, 0, 2, 3 };
+    float xx[4] = { x0, x1, x1, x0 }, yy[4] = { y0, y0, y1, y1 };
+    float uu[4] = { u0, u2, u1, u0 + u1 - u2 }, vv[4] = { v0, v2, v1, v0 + v1 - v2 };
+    int i;
+
+    extern u32 gpuCmdBufSize, gpuCmdBufOffset;
+
+    if (sQuadVertices + 6 > MAX_QUAD_VERTICES || gpuCmdBufSize - gpuCmdBufOffset < 1024u) {
+        return;   /* (no room: in the quads, or in the command list) */
+    }
+    for (i = 0; i < 6; i++) {
+        NitroGx3dGpuVertex *v = &sQuads[sQuadVertices + i];
+
+        v->position[0] = xx[tri[i]];
+        v->position[1] = yy[tri[i]];
+        v->position[2] = z;
+        v->position[3] = 1.0f;
+        v->color[0] = (uint8_t)(rgba >> 24);
+        v->color[1] = (uint8_t)(rgba >> 16);
+        v->color[2] = (uint8_t)(rgba >> 8);
+        v->color[3] = (uint8_t)rgba;
+        v->uv[0] = uu[tri[i]];
+        v->uv[1] = vv[tri[i]];
     }
     NitroPort_PicaBindVertices(sQuads);
     C3D_DrawArrays(GPU_TRIANGLES, sQuadVertices, 6);
@@ -2777,6 +2871,65 @@ static void draw_menu(const Screen *scr, const LayerSet *set, float u1, float vT
 }
 
 /* One screen (one eye of it), into its render target. */
+static void draw_gpu_quads(const LayerSet *set, const ComposeLayers *info, const PicaRect *pic, float scale,
+                           int linear, int first, int last)
+{
+    /* Back-to-front painter-ordered quads (S5/S6 bundle): BG picture slots
+     * and the OBJ atlas, drawn with the software's exact pixels. DS rects
+     * map to the picture like the software layers do; UVs are
+     * texture-normalized already. flipV mirrors the destination. */
+    int i;
+
+    for (i = first; i < last; i++) {
+        const NitroGpuQuad *q = &info->gpuQuad[i];
+        float x0 = pic->x0 + (float)q->x0 * scale;
+        float y0 = pic->y0 + (float)q->y0 * scale;
+        float x1 = pic->x0 + (float)q->x1 * scale;
+        float y1 = pic->y0 + (float)q->y1 * scale;
+        u32 col;
+
+        if (q->kind == 0) {
+            int s = q->slot;
+
+            if (s < 0 || s >= NITRO_GPU_BG_SLOTS || set->bgTex[s] == NULL || !set->bgValid[s] ||
+                set->bgKey[s] != info->gpuBgKey[s]) {
+                continue;
+            }
+            make_texture(&sBgTex, set->bgTex[s], GPU_RGBA5551, BG_TEX_W, BG_TEX_W, linear,
+                         q->wrap == NITRO_GPU_WRAP_CLAMP ? GPU_CLAMP_TO_EDGE : GPU_REPEAT);
+        } else {
+            if (set->objAtlas == NULL || !set->objAtlasValid || set->objAtlasKey != info->gpuObjAtlasKey) {
+                continue;
+            }
+            make_texture(&sBgTex, set->objAtlas, GPU_RGBA5551, BG_TEX_W, BG_TEX_W, linear, GPU_CLAMP_TO_EDGE);
+        }
+        C3D_TexBind(0, &sBgTex);
+        quad_combiner_modulate();
+        if (q->blend) {
+            u32 a = (u32)q->eva * 255u / 16u, b = (u32)(16u - q->evb) * 255u / 16u;
+
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                           GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+            col = (a << 24) | (a << 16) | (a << 8) | b;
+        } else {
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                           GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+            col = 0xFFFFFFFFu;
+        }
+        if (sConfig.flipV) {
+            float t = y0;
+
+            y0 = y1;
+            y1 = t;
+        }
+        quad4(x0, y0, x1, y1, 0.0f, q->u0, q->v0, q->u1, q->v1, q->u2, q->v2, col);
+    }
+    if (last > first) {
+        NitroPort_PicaProfileMark("the 2D quads");
+    }
+}
+
+/* One screen (one eye of it), into its render target. */
 static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx3dScene *scene, float stereo,
                         int edges, int underCleared)
 {
@@ -2861,6 +3014,12 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         C3D_TexBind(0, &sUnderTex);
         quad_combiner(1);
         quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, 0, vTop, u1, vBottom, 0xFFFFFFFFu);
+    }
+    /* S5/S6 bundle: taken behind-3D layers as quads, before the scene (they
+     * touch no depth, and everything downstream is a pure function of
+     * identical pixels). */
+    if (has3d && info->gpuQuadsBehind > 0) {
+        draw_gpu_quads(set, info, &pic, scale, linear, 0, info->gpuQuadsBehind);
     }
     if (has3d) {
         uint16_t rearColor;
@@ -3013,62 +3172,10 @@ static void draw_screen(Screen *scr, int eye, const LayerSet *set, const NitroGx
         if (nruns == 1) {
             tint_3d(info, &rect3d);
         }
-        /* 4b. A BG drawn here, in front of the 3D and behind the rest (the
-         * field's weather: ComposeLayers.gpuBg), from its picture, repeated
-         * and scrolled as the 3D scene had it. Alpha-blended onto the 3D as
-         * the DS does (its colour x eva / 16 + the 3D's x evb / 16 where it
-         * isn't clear), or opaque (flat quad: the same 1-bit-alpha replace)
-         * when the DS blends nothing. The texture's colours are 0 where the
-         * map is clear: what's under stays. */
-        if (info->gpuBg >= 0 && set->bgTex && set->bgValid && set->bgKey == info->gpuBgKey) {
-            int hofs = scene->bg_ofs[info->gpuBg * 2], vofs = scene->bg_ofs[info->gpuBg * 2 + 1];
-            uint16_t now[8], before[8];
-
-            /* (the scrolls of the frame the DS shows the scene in; an
-             * in-between scene's halfway from the scene before's; the
-             * scene's own, a frame behind, when they aren't known) */
-            if (bg_offsets_after(scene->stamp, now)) {
-                hofs = now[info->gpuBg * 2];
-                vofs = now[info->gpuBg * 2 + 1];
-                if (scene->stamp_before != scene->stamp && bg_offsets_after(scene->stamp_before, before)) {
-                    hofs = bg_offset_halfway(before[info->gpuBg * 2], hofs);
-                    vofs = bg_offset_halfway(before[info->gpuBg * 2 + 1], vofs);
-                }
-            }
-            int origin = (canvasW - DS_W) / 2;
-            /* Texels per map pixel: 2 for 256x256 maps (doubled upload, as
-             * before), 1 for bigger maps (1:1 upload: all fit the 512x512
-             * texture). UV wraps at the texture's edge = the map's edge. */
-            int mapW = info->gpuBgW >= 256 ? info->gpuBgW : 256;
-            int mapH = info->gpuBgH >= 256 ? info->gpuBgH : 256;
-            int texel = (mapW == 256 && mapH == 256) ? 2 : 1;
-            float bu0 = (float)(hofs - origin) * (float)texel / (float)BG_TEX_W;
-            float bu1 = bu0 + (float)canvasW * (float)texel / (float)BG_TEX_W;
-            float bvTop = 1.0f - (float)(vofs - top) * (float)texel / (float)BG_TEX_W;
-            float bvBottom = bvTop - (float)rows * (float)texel / (float)BG_TEX_W;
-
-            if (sConfig.flipV) {
-                float t = bvTop;
-
-                bvTop = bvBottom;
-                bvBottom = t;
-            }
-            make_texture(&sBgTex, set->bgTex, GPU_RGBA5551, BG_TEX_W, BG_TEX_W, linear, GPU_REPEAT);
-            C3D_TexBind(0, &sBgTex);
-            quad_combiner_modulate();
-            if (info->gpuBgBlend) {
-                u32 a = (u32)(info->gpuBgEva * 255 / 16), b = (u32)((16 - info->gpuBgEvb) * 255 / 16);
-
-                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
-                               GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-                quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom,
-                     (a << 24) | (a << 16) | (a << 8) | b);
-            } else {
-                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
-                               GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
-                quad(pic.x0, pic.y0, pic.x1, pic.y1, 0.0f, bu0, bvTop, bu1, bvBottom, 0xFFFFFFFFu);
-            }
-            NitroPort_PicaProfileMark("the weather's BG");
+        /* 4b. Taken layers in front of the 3D as quads, painter-ordered
+         * (the rest draw in software into `over`, below). */
+        if (info->gpuQuads > info->gpuQuadsBehind) {
+            draw_gpu_quads(set, info, &pic, scale, linear, info->gpuQuadsBehind, info->gpuQuads);
         }
         /* 5. The layers in front, with their alpha (multiplied in). */
         if (!set->overEmpty && set->overTop < set->overBottom) {

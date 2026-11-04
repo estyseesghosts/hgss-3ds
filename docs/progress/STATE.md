@@ -159,8 +159,11 @@ packaged `.3dsx` would be rejected. The rebuilt artifact passes `3dsxdump`
    software picks the next slice). S5b in tree (validation build running):
    any text map size routes through the quad (map-sized picture/upload/UV;
    256 path bit-identical), plus the no-blend flat quad (opaque replace,
-   incl. the battles no-first-target case). No staging until Wave 2 lands
-   real GPU relief.
+   incl. the battles no-first-target case). S5+S6 bundled next (single
+   stage): multi-BG quad slots (2-slot pool, front + behind-3D flat),
+   affine-BG corner-UV quads, opaque-OBJ instanced quads from a lazy
+   atlas, painter-ordered by the software interleave rule, all-quad or
+   all-software per region. No staging until the bundle lands.
 2. **Audio to core 1 — tried, reverted.** Log 9 proved core 1 oversubscribed
    (display down to 0.0 composes/s); default is back to core 0 with
    `audiocore=` kept for A/B. The `[perf] audio:` drop counter stays.

@@ -490,67 +490,45 @@ static u32 ScreenBase(const Engine *e, u16 bgcnt, u32 dispcnt)
  * field's weather: the clouds' shadows, fog, sand); no windows and no
  * H-blank effect. Else -1. From the registers and OAM given (the state
  * taken, or the live one). */
-/* Which text BG the compositor can draw itself (bgTex quad with UV
- * scrolling), or why not. Returns the BG (1-3), or -(1 + reason) with a
- * NitroGpuBgReject reason (S5 attribution: the caller counts it). *blend
- * (NULL ok) reports how: 1 alpha-blended onto the 3D (the ADD quad), 0
- * opaque (the flat quad). All rejects are correctness conditions of the
- * quad path, not guesses. */
-static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blend)
+/* Slice S5/S6 bundle: how a layer draws as a quad. 1: alpha-blend onto
+ * what's under it (strict: sole first target with the 3D second), 0:
+ * opaque (nowhere in the blend at all: mode 0, or brightness it isn't a
+ * target of), -1: software (blending with another layer, or brightened).
+ * Taken layers can never be blend second targets (conservative, exact);
+ * brightness targeting a taken layer rejects it, other layers'
+ * brightness is independent. */
+static int GpuBgBlendMode(int bg, u16 bldcnt)
 {
-    u32 dispcnt = Rd32(io, 0);
-    u16 bldcnt = Rd16(io, 0x50);
-    int bg, k, i, key, key3d, mode = dispcnt & 7, takeBlend = 0;
+    int first = (bldcnt >> bg) & 1, second = (bldcnt >> (8 + bg)) & 1;
 
-    if (wanted == 0) {
-        return -(1 + NITRO_GPUBG_REJECT_SETUP);
+    if (((bldcnt >> 6) & 3) == 1 && first && (bldcnt & 0x3F) == (1u << bg) && (bldcnt & 0x100)) {
+        return 1;
     }
-    if (lines || (dispcnt & 0xE000) || (dispcnt & 0x108) != 0x108 || ((dispcnt >> 16) & 3) != 1) {
-        return -(1 + NITRO_GPUBG_REJECT_HBLANK);
+    if (!first && !second) {
+        return 0;
     }
-    for (bg = 1; bg < 4 && !((wanted >> bg) & 1); bg++) {
-    }
-    if (bg > 3 || !(dispcnt & (0x100u << bg))) {
-        return -(1 + NITRO_GPUBG_REJECT_OFF);
-    }
-    {
-        u16 bgcnt = Rd16(io, 8 + bg * 2);
-        /* (a text BG in this mode: BgKind's; any map size: the picture and
-         * the compositor's quad are map-sized, scrolled by UV) */
-        int text = mode == 0 || (mode == 1 && bg < 3) || (mode == 2 && bg < 2) || (mode == 3 && bg < 3) ||
-                   (mode >= 4 && mode <= 5 && bg < 2);
+    return -1;
+}
 
-        if (!text) {
-            return -(1 + NITRO_GPUBG_REJECT_MODE);
-        }
-        if (bgcnt & 0x40) {
-            return -(1 + NITRO_GPUBG_REJECT_MOSAIC);
-        }
-        if ((bgcnt & 0x80) && (dispcnt & 0x40000000u)) {
-            return -(1 + NITRO_GPUBG_REJECT_EXT);
-        }
-        key = (bgcnt & 3) * 4 + bg;
-    }
-    key3d = (Rd16(io, 8) & 3) * 4;
-    /* How the compositor draws it: alpha-blended onto the 3D alone (mode 1,
-     * this BG the only first target and the 3D a second one), or opaque
-     * (nowhere in the blend at all: mode 0, or brightness it isn't a
-     * target of -- battles set alpha blending with no first target, and
-     * an untargeted BG shows as-is). Blending it with any other layer, or
-     * brightening it, stays software. */
-    {
-        int first = (bldcnt >> bg) & 1, second = (bldcnt >> (8 + bg)) & 1;
+/* Shared z-order/OBJ validation for quad-taken BGs (S5 bundle). Returns 1
+ * and sets *behind (0 in front of the 3D, 1 behind it; behind quads draw
+ * before the scene and touch no depth, and every downstream blend is a
+ * pure function of identical pixels, so they are exact like the front
+ * ones), else 0 with *reason. Behind + blending has no quad path. */
+static int GpuBgOrderOk(const u8 *io, int bg, int key, int key3d, u32 dispcnt, const u8 *oam, int takeBlend,
+                        int *behind, int *reason)
+{
+    int k, i;
 
-        if (((bldcnt >> 6) & 3) == 1 && first && (bldcnt & 0x3F) == (1u << bg) && (bldcnt & 0x100)) {
-            takeBlend = 1;
-        } else if (!first && !second) {
-            takeBlend = 0;
-        } else {
-            return -(1 + NITRO_GPUBG_REJECT_BLEND);
-        }
-    }
     if (key >= key3d) {
-        return -(1 + NITRO_GPUBG_REJECT_BEHIND);   /* (behind the 3D) */
+        /* (behind the 3D) */
+        if (takeBlend) {
+            *reason = NITRO_GPUBG_REJECT_BEHIND;
+            return 0;
+        }
+        *behind = 1;
+    } else {
+        *behind = 0;
     }
     for (k = 1; k < 4; k++) {
         int kk;
@@ -560,7 +538,8 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blen
         }
         kk = (Rd16(io, 8 + k * 2) & 3) * 4 + k;
         if (kk > key && kk < key3d) {
-            return -(1 + NITRO_GPUBG_REJECT_BETWEEN);   /* (a BG between it and the 3D) */
+            *reason = NITRO_GPUBG_REJECT_BETWEEN;
+            return 0;   /* (a BG between it and the 3D) */
         }
     }
     if (dispcnt & 0x1000) {
@@ -578,20 +557,122 @@ static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blen
             }
             /* (an OBJ is in front of the BGs of its priority or lower) */
             if (prio > prioBg && prio <= prio3d) {
-                return -(1 + NITRO_GPUBG_REJECT_OBJ);   /* (an OBJ between it and the 3D) */
+                *reason = NITRO_GPUBG_REJECT_OBJ;
+                return 0;   /* (an OBJ between it and the 3D) */
             }
             /* (a semi-transparent or bitmap OBJ in front of it: the DS
              * blends it with what's under it, this BG; left out, it would
              * be blended with the 3D instead) */
             if (prio <= prioBg && ((a0 >> 10) & 3) != 0) {
-                return -(1 + NITRO_GPUBG_REJECT_OBJBLEND);
+                *reason = NITRO_GPUBG_REJECT_OBJBLEND;
+                return 0;
             }
         }
+    }
+    return 1;
+}
+/* Per-BG quad validation (S5 bundle): GpuBgOf's checks for one BG.
+ * Returns the BG, or -(1 + reason) with a NitroGpuBgReject reason.
+ * *blend: 1 alpha-blend onto the 3D, 0 opaque. *behind: 0 in front of the
+ * 3D, 1 behind it (flat only: behind + blending has no quad path).
+ * Frame checks (H-blank lines, windows, 3D mode) count per evaluated BG. */
+static int GpuBgValidBg(const u8 *io, const u8 *oam, int lines, int bg, int *blend, int *behind)
+{
+    u32 dispcnt = Rd32(io, 0);
+    u16 bldcnt = Rd16(io, 0x50), bgcnt;
+    int key, key3d, mode = dispcnt & 7, takeBlend, reason = 0;
+
+    if (lines || (dispcnt & 0xE000) || (dispcnt & 0x108) != 0x108 || ((dispcnt >> 16) & 3) != 1) {
+        return -(1 + NITRO_GPUBG_REJECT_HBLANK);
+    }
+    if (!(dispcnt & (0x100u << bg))) {
+        return -(1 + NITRO_GPUBG_REJECT_OFF);
+    }
+    bgcnt = Rd16(io, 8 + bg * 2);
+    {
+        /* (a text BG in this mode: BgKind's; any map size: the picture and
+         * the compositor's quad are map-sized, scrolled by UV) */
+        int text = mode == 0 || (mode == 1 && bg < 3) || (mode == 2 && bg < 2) || (mode == 3 && bg < 3) ||
+                   (mode >= 4 && mode <= 5 && bg < 2);
+
+        if (!text) {
+            return -(1 + NITRO_GPUBG_REJECT_MODE);
+        }
+        if (bgcnt & 0x40) {
+            return -(1 + NITRO_GPUBG_REJECT_MOSAIC);
+        }
+        if ((bgcnt & 0x80) && (dispcnt & 0x40000000u)) {
+            return -(1 + NITRO_GPUBG_REJECT_EXT);
+        }
+        key = (bgcnt & 3) * 4 + bg;
+    }
+    key3d = (Rd16(io, 8) & 3) * 4;
+    takeBlend = GpuBgBlendMode(bg, bldcnt);
+    if (takeBlend < 0) {
+        return -(1 + NITRO_GPUBG_REJECT_BLEND);
+    }
+    if (!GpuBgOrderOk(io, bg, key, key3d, dispcnt, oam, takeBlend, behind, &reason)) {
+        return -(1 + reason);
     }
     if (blend != NULL) {
         *blend = takeBlend;
     }
     return bg;
+}
+
+/* Slice S5 bundle: affine BG validation. Same z-order/blend rules as
+ * text (shared helpers); affine specifics: any power-of-two size up to
+ * the quad texture (1024 rejected), wrap flag required (overflow-off
+ * clamps to edge texels, the DS shows transparent), no mosaic, no
+ * ext-palette mode (the 256-colour palette is unresolved there). */
+static int GpuBgAffineBg(const u8 *io, const u8 *oam, int bg, u32 dispcnt, int *blend, int *behind)
+{
+    u16 bgcnt = Rd16(io, 8 + bg * 2), bldcnt = Rd16(io, 0x50);
+    int size = (bgcnt >> 14) & 3;
+    int key = (bgcnt & 3) * 4 + bg, key3d = (Rd16(io, 8) & 3) * 4;
+    int takeBlend, reason = 0;
+
+    if (bgcnt & 0x40) {
+        return -(1 + NITRO_GPUBG_REJECT_MOSAIC);
+    }
+    if (size == 3) {
+        return -(1 + NITRO_GPUBG_REJECT_SIZE);
+    }
+    if (!(bgcnt & 0x2000)) {
+        return -(1 + NITRO_GPUBG_REJECT_NOWRAP);
+    }
+    if (dispcnt & 0x40000000u) {
+        return -(1 + NITRO_GPUBG_REJECT_EXT);
+    }
+    takeBlend = GpuBgBlendMode(bg, bldcnt);
+    if (takeBlend < 0) {
+        return -(1 + NITRO_GPUBG_REJECT_BLEND);
+    }
+    if (!GpuBgOrderOk(io, bg, key, key3d, dispcnt, oam, takeBlend, behind, &reason)) {
+        return -(1 + reason);
+    }
+    if (blend != NULL) {
+        *blend = takeBlend;
+    }
+    return bg;
+}
+
+/* First quad-taken BG (S5 bundle, front or flat-behind): what
+ * SplitIfChanged hashes. The drawer evaluates each BG itself. */
+static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blend)
+{
+    u32 dispcnt = Rd32(io, 0);
+    int bg, behind = 0;
+
+    if (wanted == 0) {
+        return -(1 + NITRO_GPUBG_REJECT_SETUP);
+    }
+    for (bg = 1; bg < 4 && !((wanted >> bg) & 1); bg++) {
+    }
+    if (bg > 3 || !(dispcnt & (0x100u << bg))) {
+        return -(1 + NITRO_GPUBG_REJECT_OFF);
+    }
+    return GpuBgValidBg(io, oam, lines, bg, blend, &behind);
 }
 
 /* The extended palette slot a BG uses: its own number, or BG0/BG1 can
@@ -681,6 +762,8 @@ typedef struct Segment {
 #define MAX_SEGMENTS 24
 
 static const int sTextSizes[4][2] = { { 256, 256 }, { 512, 256 }, { 256, 512 }, { 512, 512 } };
+/* Affine BG maps are square powers of two (DrawAffineBg: 128 << size). */
+static const int sAffineSizes[4][2] = { { 128, 128 }, { 256, 256 }, { 512, 512 }, { 1024, 1024 } };
 
 /* One pixel of a text BG's map (map x, map row ty): colour | OPAQUE, or 0. */
 static u16 TextBgPixel(const Engine *e, int bg, u16 bgcnt, u32 dispcnt, int mapx, int ty)
@@ -2869,6 +2952,8 @@ typedef struct ObjFrame {
     ObjArt art[OBJ_ART_MAX];
     u8 onLine[HMAX][128];
     u8 lineCount[HMAX];
+    u8 taken[128];         /* S6: drawn as compositor quads, not here */
+    u8 nTaken;
 } ObjFrame;
 
 /* OAM entry i as an Obj (its left edge on the canvas): FALSE if it's
@@ -3101,6 +3186,43 @@ static u16 ObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, int tx, int ty
             return 0;
         }
         return PlttColor(e->objPltt, ((u32)obj->pal << 4) | index) | OPAQUE;
+    }
+}
+
+/* S6 bundle: taken OBJs' atlas (512 x 512 RGBA5551, 2 texels a pixel with
+ * transparent gutters; 3 x 3 cells of 64 x 64). Decoded once per content
+ * change with the same ObjPixel the software uses, so identical by
+ * construction; upload is a straight tile. */
+static uint16_t sGpuObjAtlas[512 * 512];
+static u64 sGpuObjAtlasKey;
+
+static void GpuObjAtlasFill(const Engine *e, u32 dispcnt, const ObjFrame *f, const int *takeObj, const int *takeCell,
+                            int nTake)
+{
+    int t, tx, ty;
+
+    memset(sGpuObjAtlas, 0, sizeof(sGpuObjAtlas));
+    for (t = 0; t < nTake; t++) {
+        const Obj *o = &f->obj[takeObj[t]];
+        int cx = (takeCell[t] % 3) * NITRO_GPU_ATLAS_PITCH + NITRO_GPU_ATLAS_GUTTER;
+        int cy = (takeCell[t] / 3) * NITRO_GPU_ATLAS_PITCH + NITRO_GPU_ATLAS_GUTTER;
+
+        for (ty = 0; ty < o->h; ty++) {
+            for (tx = 0; tx < o->w; tx++) {
+                int alpha;
+                u16 c = ObjPixel(e, o, dispcnt, tx, ty, &alpha);
+                u16 packed;
+
+                if (c == 0) {
+                    continue;
+                }
+                packed = (uint16_t)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1);
+                sGpuObjAtlas[(size_t)(cy + ty * 2) * 512 + cx + tx * 2] = packed;
+                sGpuObjAtlas[(size_t)(cy + ty * 2) * 512 + cx + tx * 2 + 1] = packed;
+                sGpuObjAtlas[(size_t)(cy + ty * 2 + 1) * 512 + cx + tx * 2] = packed;
+                sGpuObjAtlas[(size_t)(cy + ty * 2 + 1) * 512 + cx + tx * 2 + 1] = packed;
+            }
+        }
     }
 }
 
@@ -3381,6 +3503,10 @@ static BOOL DrawObjs(const Engine *e, const ObjFrame *f, u32 dispcnt, int y, Obj
 
     for (k = 0; k < f->lineCount[y]; k++) {
         const Obj *obj = &f->obj[f->onLine[y][k]];
+
+        if (f->taken[f->onLine[y][k]]) {
+            continue;   /* (S6: a compositor quad draws it) */
+        }
         int ly = e->top ? y - obj->oyTall : (y - obj->oy) & 0xFF;
         int sx = obj->ox < 0 ? -obj->ox : 0;
         int end = obj->ox + obj->boxW > e->width ? e->width - obj->ox : obj->boxW;
@@ -4264,6 +4390,16 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         DecideTallEdges(e, kind, bgcnt, dispcnt);
         DecideTallWindows(e, kind);
     }
+    /* S5/S6 bundle take stash (function scope: takes are evaluated in the
+     * split block, committed after SortObjs). Per taken BG: slot index =
+     * position here; blend/behind/scroll ride into the emitted quads.
+     * frameOk gates both BG and OBJ takes (H-blank windows/scrolls and
+     * no-3D-mode reject everything, counted once). */
+    int nBgTake = 0;
+    int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS];
+    int takeHofs[NITRO_GPU_BG_SLOTS], takeVofs[NITRO_GPU_BG_SLOTS];
+    int frameOk = split != NULL && split->has3d && split->gpuBgs && e->lines == NULL &&
+                  !(dispcnt & 0xE000) && (dispcnt & 0x108) == 0x108 && ((dispcnt >> 16) & 3) == 1;
     if (split != NULL) {
         split->has3d = e->isA && kind[0] == BG_3D;
         split->prio3d = bgcnt[0] & 3;
@@ -4274,6 +4410,15 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         split->evb = evb;
         split->blend3d = (bldcnt >> 8) & 0x3F;
         split->backdrop = backdrop;
+        /* S5/S6 bundle: quads and slots start empty every frame; takes
+         * below fill them. (A stale quad drawn over a menu would be a
+         * wrong picture, not just a slow one.) */
+        split->nGpuQuads = 0;
+        split->gpuQuadsBehind = 0;
+        for (int s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
+            split->gpuBgSlotBg[s] = -1;
+        }
+        split->gpuObjAtlasKey = 0;
         if (split->has3d) {
             /* Drawn without BG0: the layers in front of it are noted as
              * the line reaches it. */
@@ -4281,39 +4426,79 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         }
         /* A BG the compositor draws itself (NitroRender2DSplit.gpuBgs):
          * left out, with what it needs to draw it. */
+        /* S5/S6 bundle: take every eligible BG (up to the slot pool) for
+         * compositor quads, front or flat-behind. Slot arrays carry what
+         * the shell needs (picture per slot, made again when its key
+         * changes); blend/behind/scroll ride the function-scope take
+         * stash into the emitted quads at commit (after SortObjs and the
+         * region rule). Untaken BGs draw in software exactly as before. */
         if (split->has3d && split->gpuBgs) {
-            int bgBlend = 1;
-            int gb = GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs, &bgBlend);
+            int b;
 
-            if (gb >= 0 && kind[gb] == BG_TEXT) {
-                /* Slice S2a: the frame's key (computed once in setup). */
-                u64 key = frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);
+            if (!frameOk) {
+                /* Slice S5: H-blank-varying windows or scrolls, or no 3D
+                 * mode: every evaluation would reject, count it once. */
+                prof->gpuBgReject[NITRO_GPUBG_REJECT_HBLANK]++;
+            } else for (b = 1; b < 4 && nBgTake < NITRO_GPU_BG_SLOTS; b++) {
+                int bgBlend = 1, behind = 0, gb;
+                u64 key;
                 u32 i;
 
+                if (!((split->gpuBgs >> b) & 1) || !(dispcnt & (0x100u << b))) {
+                    continue;
+                }
+                if (kind[b] != BG_TEXT && kind[b] != BG_AFFINE) {
+                    prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                    continue;
+                }
+                if (kind[b] == BG_TEXT && (e->art[b] != NULL || ((e->partBgs >> b) & 1) || e->split[b] ||
+                                          e->anchorWindows || e->clip[b])) {
+                    /* The software wouldn't decode plain tiles here (wide
+                     * art, splits, window-shifted or tall-clipped runs):
+                     * a full-map quad can't reproduce those. */
+                    prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                    continue;
+                }
+                if (kind[b] == BG_AFFINE) {
+                    gb = GpuBgAffineBg(io, e->oam, b, dispcnt, &bgBlend, &behind);
+                } else {
+                    gb = GpuBgValidBg(io, e->oam, 0, b, &bgBlend, &behind);
+                }
+                if (gb < 0) {
+                    /* Slice S5: why it stays on software (-(1 + reason)). */
+                    prof->gpuBgReject[-1 - gb]++;
+                    continue;
+                }
+                if (kind[gb] != BG_TEXT && kind[gb] != BG_AFFINE) {
+                    /* The validator's mode test passed but BgKind
+                     * disagrees: same bucket as MODE, never silent. */
+                    prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                    continue;
+                }
+                /* Slice S2a: the frame's key (computed once in setup). */
+                key = frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, kind[gb], bgcnt[gb], dispcnt);
                 for (i = 0; i < 0x200; i += 4) {
                     key = (key ^ Rd32(e->bgPltt, i)) * 0x100000001B3ull;
                 }
-                split->gpuBgLeftOut = 1 << gb;
-                split->gpuBgEva = eva;
-                split->gpuBgEvb = evb;
-                /* S5b: the quad's map size and blend mode (the picture is
-                 * map-sized; the key already covers the size via BgKey). */
-                split->gpuBgW = sTextSizes[(bgcnt[gb] >> 14) & 3][0];
-                split->gpuBgH = sTextSizes[(bgcnt[gb] >> 14) & 3][1];
-                split->gpuBgBlend = bgBlend;
-                split->gpuBgHofs = Rd16(io, 0x10 + gb * 4) & 0x1FF;
-                split->gpuBgVofs = Rd16(io, 0x12 + gb * 4) & 0x1FF;
-                split->gpuBgKey = key;
-                kind[gb] = BG_NONE;
-                /* Slice S5: the BG left the picture for the GPU quad. */
-                prof->gpuBgTaken++;
-            } else if (gb < 0) {
-                /* Slice S5: why it stays on software (-(1 + reason)). */
-                prof->gpuBgReject[-1 - gb]++;
-            } else {
-                /* GpuBgOf's mode test passed but BgKind disagrees: same
-                 * bucket as MODE, never silent. */
-                prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                split->gpuBgSlotBg[nBgTake] = gb;
+                split->gpuBgKey[nBgTake] = key;
+                if (kind[gb] == BG_AFFINE) {
+                    split->gpuBgW[nBgTake] = sAffineSizes[(bgcnt[gb] >> 14) & 3][0];
+                    split->gpuBgH[nBgTake] = sAffineSizes[(bgcnt[gb] >> 14) & 3][1];
+                    /* Affine overflow off clamps to the map's edge
+                     * (transparent outside); on wraps like text. */
+                    split->gpuBgWrap[nBgTake] = (bgcnt[gb] & 0x2000) ?
+                        NITRO_GPU_WRAP_REPEAT : NITRO_GPU_WRAP_CLAMP;
+                } else {
+                    split->gpuBgW[nBgTake] = sTextSizes[(bgcnt[gb] >> 14) & 3][0];
+                    split->gpuBgH[nBgTake] = sTextSizes[(bgcnt[gb] >> 14) & 3][1];
+                    split->gpuBgWrap[nBgTake] = NITRO_GPU_WRAP_REPEAT;
+                }
+                takeBlend[nBgTake] = bgBlend;
+                takeBehind[nBgTake] = behind;
+                takeHofs[nBgTake] = Rd16(io, 0x10 + gb * 4) & 0x1FF;
+                takeVofs[nBgTake] = Rd16(io, 0x12 + gb * 4) & 0x1FF;
+                nBgTake++;
             }
         }
     } else if (e->isA && kind[0] == BG_3D) {
@@ -4323,6 +4508,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     }
     objFrame->blends = 0;
     objFrame->artCount = 0;
+    memset(objFrame->taken, 0, sizeof(objFrame->taken));
+    objFrame->nTaken = 0;
     if (dispcnt & 0x1000) {
         u64 t0 = R2D_NOW();
 
@@ -4330,6 +4517,307 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         prof->objTicks += R2D_NOW() - t0;
         if (fixedWidth == 0) {
             LookUpObjArt(e, objFrame, dispcnt, -1);
+        }
+    }
+    /* S5/S6 bundle commit: OBJ takes, the region rule, kind masking and
+     * quad emission. Runs when takes are possible; the region rule decides
+     * what actually draws as quads, so a frame with nothing taken draws in
+     * software exactly as before. */
+    if (frameOk && e->isA) {
+        /* (taken OBJs: OAM index order; cells assigned in that order) */
+        int takeObj[128], takeCell[128], nObjTake = 0;
+        int frontClean = 1, behindClean = 1;
+        int p, s, k;
+
+        if (e->squeeze) {
+            /* (the whole sprite field drawn narrower: software) */
+            for (k = 0; k < objFrame->count; k++) {
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_SQUEEZE]++;
+            }
+            frontClean = behindClean = 0;
+        } else for (k = 0; k < objFrame->count; k++) {
+            const Obj *o = &objFrame->obj[k];
+
+            if (o->mode == 2) {
+                continue;   /* (window OBJs draw no pixels) */
+            }
+            if (o->mode == 1) {
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_SEMI]++;
+                if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
+                continue;
+            }
+            if (o->mode == 3) {
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_BITMAP]++;
+                if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
+                continue;
+            }
+            if (o->affine) {
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_AFFINE]++;
+                if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
+                continue;
+            }
+            if (((bldcnt >> 6) & 3) != 0 && (bldcnt & 0x10)) {
+                /* (BLDCNT touches OBJs: brightness, or alpha blending
+                 * with them as first targets) */
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_BLEND]++;
+                if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
+                continue;
+            }
+            if (nObjTake >= NITRO_GPU_ATLAS_CELLS) {
+                prof->gpuObjReject[NITRO_GPUOBJ_REJECT_CAP]++;
+                if (o->prio <= split->prio3d) frontClean = 0; else behindClean = 0;
+                continue;
+            }
+            takeObj[nObjTake] = k;
+            takeCell[nObjTake] = nObjTake;
+            nObjTake++;
+        }
+        /* The region rule: every drawn layer of a region must be taken,
+         * else the whole region stays software (mixed regions can't
+         * interleave: software blends read taken layers wrong). Untaken
+         * text/affine BGs and exotic OBJs veto their region. */
+        {
+            int b;
+
+            for (b = 1; b < 4; b++) {
+                if (!(dispcnt & (0x100u << b)) || kind[b] == BG_NONE || kind[b] == BG_3D) {
+                    continue;
+                }
+                if (kind[b] != BG_TEXT && kind[b] != BG_AFFINE) {
+                    if ((bgcnt[b] & 3) < split->prio3d) {
+                        frontClean = 0;
+                    } else {
+                        behindClean = 0;
+                    }
+                    continue;
+                }
+                /* (a text/affine BG: taken above, or software below) */
+                {
+                    int taken = 0, s;
+
+                    for (s = 0; s < nBgTake; s++) {
+                        if (split->gpuBgSlotBg[s] == b) {
+                            taken = 1;
+                        }
+                    }
+                    if (!taken) {
+                        if ((bgcnt[b] & 3) < split->prio3d) {
+                            frontClean = 0;
+                        } else {
+                            behindClean = 0;
+                        }
+                    }
+                }
+            }
+        }
+        /* Commit or revert, per region: an all-quad region draws quads,
+         * a mixed region draws everything in software. Behind commits
+         * first (drawn first); front second. Untaken regions keep their
+         * software layers (kind masks and taken marks only where a
+         * region commits). */
+        if ((frontClean || behindClean) && (nBgTake > 0 || nObjTake > 0)) {
+            int s, k;
+            u64 atlasKey = KEY_START;
+            int c, u;
+            /* Committed takes: taken layers in clean regions. */
+            int commitBg[NITRO_GPU_BG_SLOTS], nCommitBg = 0;
+            int commitObj[128], commitCell[128], nCommitObj = 0;
+
+            for (s = 0; s < nBgTake; s++) {
+                if ((takeBehind[s] && behindClean) || (!takeBehind[s] && frontClean)) {
+                    commitBg[nCommitBg++] = s;
+                }
+            }
+            for (k = 0; k < nObjTake; k++) {
+                if ((objFrame->obj[takeObj[k]].prio > split->prio3d && behindClean) ||
+                    (objFrame->obj[takeObj[k]].prio <= split->prio3d && frontClean)) {
+                    commitObj[nCommitObj] = takeObj[k];
+                    commitCell[nCommitObj] = takeCell[k];
+                    nCommitObj++;
+                }
+            }
+            /* The atlas key covers the committed OBJs in commit order,
+             * their tile bytes and their palette colours: identical
+             * content reuses the upload, anything else redraws it. */
+            for (k = 0; k < nCommitObj; k++) {
+                const Obj *o = &objFrame->obj[commitObj[k]];
+                u32 used[8192 / 32];
+                u32 size = o->bpp8 ? 64u : 32u;
+
+                atlasKey = KeyAdd(KeyAdd(KeyAdd(KeyAdd(KeyAdd(atlasKey, (u32)o->tile),
+                    (u32)o->pal), (u32)o->bpp8), (u32)o->w), (u32)o->h);
+                memset(used, 0, sizeof(used));
+                for (c = 0; c < (int)(o->w * o->h / 64); c++) {
+                    int tx = (c * 8) % o->w, ty = (c * 8 / o->w) * 8;
+
+                    u = (ObjCharAddr(o, dispcnt, tx, ty) & e->objMask) >> 5;
+                    used[u >> 5] |= 1u << (u & 31);
+                }
+                for (u = 0; u < 8192u; u++) {
+                    if (used[u >> 5] & (1u << (u & 31))) {
+                        for (c = 0; c < (int)size; c += 4) {
+                            atlasKey = (atlasKey ^ Rd32(e->objVram, (u * 32 + (u32)c) & e->objMask)) *
+                                0x100000001b3ull;
+                        }
+                    }
+                }
+                if (o->bpp8) {
+                    for (c = 0; c < 256; c++) {
+                        atlasKey = (atlasKey ^ PlttColor(e->objPltt, (u32)c)) * 0x100000001b3ull;
+                    }
+                } else {
+                    for (c = 0; c < 16; c++) {
+                        atlasKey = (atlasKey ^ PlttColor(e->objPltt, ((u32)o->pal << 4) | (u32)c)) * 0x100000001b3ull;
+                    }
+                }
+            }
+            if (nCommitBg + nCommitObj > 0) {
+                if (nCommitObj > 0) {
+                atlasKey = atlasKey ? atlasKey : 1;
+                if (atlasKey != sGpuObjAtlasKey) {
+                    GpuObjAtlasFill(e, dispcnt, objFrame, commitObj, commitCell, nCommitObj);
+                    sGpuObjAtlasKey = atlasKey;
+                }
+                }
+            }
+            split->gpuObjAtlasPicture = sGpuObjAtlas;
+            split->gpuObjAtlasKey = nCommitObj > 0 ? atlasKey : 0;
+            /* Mask committed BGs out of the software picture. */
+            for (s = 0; s < nCommitBg; s++) {
+                kind[split->gpuBgSlotBg[commitBg[s]]] = BG_NONE;
+                prof->gpuBgTaken++;
+            }
+            /* Mark committed OBJs out of the software lines. */
+            for (s = 0; s < nCommitObj; s++) {
+                objFrame->taken[commitObj[s]] = 1;
+                prof->gpuObjTaken++;
+            }
+            objFrame->nTaken = (u8)(nCommitObj > 0);
+            /* Emit back-to-front within each region (painter's order):
+             * behind region first, then front. Inside a pass: prio passes
+             * high to low, BGs (slot order reversed = bg descending) then
+             * OBJs (commit order reversed = OAM descending). */
+            {
+                int p, prio, si, k2;
+                int nQuads = 0, nBehind = 0;
+
+                for (p = 1; p >= 0; p--) {
+                    int wantBehind = (p == 0);
+
+                    for (prio = 3; prio >= 0; prio--) {
+                        for (si = nCommitBg - 1; si >= 0; si--) {
+                            int slot = commitBg[si];
+                            int gb = (int)split->gpuBgSlotBg[slot];
+                            NitroGpuQuad *q;
+
+                            if (takeBehind[slot] != wantBehind) {
+                                continue;
+                            }
+                            if ((int)(bgcnt[gb] & 3) != prio) {
+                                continue;
+                            }
+                            q = &split->gpuQuads[nQuads++];
+                            q->kind = 0;
+                            q->blend = (u8)takeBlend[slot];
+                            q->slot = (u8)slot;
+                            q->eva = (u8)eva;
+                            q->evb = (u8)evb;
+                            q->wrap = (u8)split->gpuBgWrap[slot];
+                            q->pad[0] = q->pad[1] = 0;
+                            q->x0 = 0;
+                            q->y0 = 0;
+                            q->x1 = (u16)e->width;
+                            q->y1 = (u16)(e->top > 0 && e->height > 192 ? e->height : 192);
+                            /* UVs normalized to the texture below (map pixels
+                             * times texels-per-pixel over 512). */
+                            float texel = (split->gpuBgW[slot] == 256 && split->gpuBgH[slot] == 256) ? 2.0f : 1.0f;
+
+                            if (kind[gb] == BG_AFFINE) {
+                                u32 base = gb == 2 ? 0x20u : 0x30u;
+                                s32 pa = (s16)Rd16(io, base + 0), pb = (s16)Rd16(io, base + 2);
+                                s32 pc = (s16)Rd16(io, base + 4), pd = (s16)Rd16(io, base + 6);
+                                s32 refX = (s32)(Rd32(io, base + 8) << 4) >> 4;
+                                s32 refY = (s32)(Rd32(io, base + 12) << 4) >> 4;
+                                float x0 = (float)e->origin, y0 = (float)e->top;
+                                float x1 = x0 + (float)e->width, y1 = y0 + q->y1 - q->y0;
+
+                                q->u0 = (float)(refX + pa * (s32)(x0 - e->origin) + pb * (s32)(y0 - e->top)) * texel / 512.0f;
+                                q->v0 = (float)(refY + pc * (x0 - e->origin) + pd * (y0 - e->top)) * texel / 512.0f;
+                                q->u1 = (float)(refX + pa * (s32)(x1 - e->origin) + pb * (s32)(y1 - e->top)) * texel / 512.0f;
+                                q->v1 = (float)(refY + pc * (x1 - e->origin) + pd * (y1 - e->top)) * texel / 512.0f;
+                                q->u2 = (float)(refX + pa * (s32)(x1 - e->origin) + pb * (s32)(y0 - e->top)) * texel / 512.0f;
+                                q->v2 = (float)(refY + pc * (x1 - e->origin) + pd * (y0 - e->top)) * texel / 512.0f;
+                            } else {
+                                q->u0 = ((float)takeHofs[slot] - (float)e->origin) * texel / 512.0f;
+                                q->v0 = ((float)takeVofs[slot] - (float)e->top) * texel / 512.0f;
+                                q->u1 = q->u0 + (float)e->width * texel / 512.0f;
+                                q->v1 = q->v0 + (float)(q->y1 - q->y0) * texel / 512.0f;
+                                q->u2 = q->u1;
+                                q->v2 = q->v0;
+                            }
+                            if (wantBehind) {
+                                nBehind++;
+                            }
+                        }
+                        for (k2 = nCommitObj - 1; k2 >= 0; k2--) {
+                            const Obj *o = &objFrame->obj[commitObj[k2]];
+                            NitroGpuQuad *q;
+                            int cell = commitCell[k2];
+                            int cx = (cell % 3) * 132 + 2, cy = (cell / 3) * 132 + 2;
+                            float uu0 = (float)cx / 512.0f, uu1 = (float)(cx + o->w * 2) / 512.0f;
+                            float vv0 = 1.0f - (float)cy / 512.0f, vv1 = vv0 - (float)(o->h * 2) / 512.0f;
+
+                            if (o->prio != prio) {
+                                continue;
+                            }
+                            if ((o->prio > split->prio3d) != wantBehind) {
+                                continue;
+                            }
+                            q = &split->gpuQuads[nQuads++];
+                            q->kind = 1;
+                            q->blend = 0;
+                            q->slot = (u8)cell;
+                            q->eva = 16;
+                            q->evb = 0;
+                            q->wrap = (u8)NITRO_GPU_WRAP_CLAMP;
+                            q->pad[0] = q->pad[1] = 0;
+                            q->x0 = (u16)o->ox;
+                            q->y0 = (u16)(o->oy + e->top);
+                            q->x1 = (u16)(o->ox + o->w);
+                            q->y1 = (u16)(o->oy + e->top + o->h);
+                            if (o->hflip) {
+                                float t = uu0;
+
+                                uu0 = uu1;
+                                uu1 = t;
+                            }
+                            if (o->vflip) {
+                                float t = vv0;
+
+                                vv0 = vv1;
+                                vv1 = t;
+                            }
+                            q->u0 = uu0;
+                            q->v0 = vv0;
+                            q->u1 = uu1;
+                            q->v1 = vv1;
+                            q->u2 = uu1;
+                            q->v2 = vv0;
+                            if (wantBehind) {
+                                nBehind++;
+                            }
+                        }
+                    }
+                }
+                split->nGpuQuads = nQuads;
+                split->gpuQuadsBehind = nBehind;
+            }
+            if (frontClean) {
+                prof->gpuRegionClean[0]++;
+            }
+            if (behindClean) {
+                prof->gpuRegionClean[1]++;
+            }
         }
     }
     if (!anyWindow) {
@@ -5031,6 +5519,29 @@ int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out)
     SetUpEngine(&e, 0, &layout);
     dispcnt = Rd32(e.io, 0);
     bgcnt = Rd16(e.io, 8 + bg * 2);
+    if (BgKind(&e, bg, dispcnt) == BG_AFFINE && ((bgcnt >> 14) & 3) != 3) {
+        /* S5/S6 bundle: affine maps decode with AffineSample (same as the
+         * software path, so identical by construction). */
+        int mapW = 128 << ((bgcnt >> 14) & 3);
+        int mapH = mapW;
+
+        charBase = CharBase(&e, bgcnt, dispcnt);
+        screenBase = ScreenBase(&e, bgcnt, dispcnt);
+        for (y = 0; y < mapH; y++) {
+            uint16_t *row = out + (size_t)y * (size_t)mapW;
+
+            for (x = 0; x < mapW; x++) {
+                u16 c = AffineSample(&e, 0, NULL, charBase, screenBase, mapW, mapH, TRUE, x, y);
+
+                if (c == 0) {
+                    row[x] = 0;
+                    continue;
+                }
+                row[x] = (uint16_t)(((c & 31) << 11) | (((c >> 5) & 31) << 6) | (((c >> 10) & 31) << 1) | 1);
+            }
+        }
+        return 1;
+    }
     if (BgKind(&e, bg, dispcnt) != BG_TEXT) {
         return 0;
     }
@@ -5086,6 +5597,12 @@ int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out)
     return 1;
 }
 
+/* An affine BG's whole map (any size up to 512 x 512; 0 otherwise, nothing
+ * written) into out, a line of mapW after another, as RGBA5551 (red in the
+ * top bits; 0 where the BG is clear): what the compositor draws an affine
+ * BG left out of the picture from (gpuBgLeftOut). Same decode as the
+ * software path (AffineSample), so identical by construction. From the
+ * state taken (snapshot: 1) or the live one; the VRAM as it is. */
 int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout, u16 *out, uint64_t *key, int *hofs,
                             int *vofs, int *prio)
 {

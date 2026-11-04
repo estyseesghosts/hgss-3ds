@@ -915,30 +915,36 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     layers->tint3d = split.tint3d;
     layers->eva = split.eva;
     layers->evb = split.evb;
-    layers->gpuBg = split.gpuBgLeftOut ? __builtin_ctz((unsigned)split.gpuBgLeftOut) : -1;
-    layers->gpuBgEva = split.gpuBgEva;
-    layers->gpuBgEvb = split.gpuBgEvb;
-    layers->gpuBgHofs = split.gpuBgHofs;
-    layers->gpuBgVofs = split.gpuBgVofs;
-    layers->gpuBgKey = split.gpuBgKey;
-    /* S5b: canonical map size (the split always sets it with the BG; 256
-     * when it somehow doesn't, so the compositor never divides by zero). */
-    layers->gpuBgW = split.gpuBgW >= 256 ? split.gpuBgW : 256;
-    layers->gpuBgH = split.gpuBgH >= 256 ? split.gpuBgH : 256;
-    layers->gpuBgBlend = split.gpuBgBlend;
-    if (layers->gpuBg >= 0) {
-        /* S5b: the whole map (up to 512 x 512), made again when the key
-         * (map, tiles, colours: not the scroll) changes. */
-        static uint16_t picture[512 * 512];
-        static uint64_t pictureKey;
-        static int pictureValid;
-
-        if (!pictureValid || pictureKey != split.gpuBgKey) {
-            pictureValid = NitroPort_Render2DBgPicture(layers->gpuBg, 1, picture);
-            pictureKey = split.gpuBgKey;
+    layers->gpuQuads = split.nGpuQuads;
+    layers->gpuQuadsBehind = split.gpuQuadsBehind;
+    memcpy(layers->gpuQuad, split.gpuQuads,
+           (size_t)split.nGpuQuads * sizeof(layers->gpuQuad[0]));
+    for (int slot = 0; slot < NITRO_GPU_BG_SLOTS; slot++) {
+        layers->gpuBgSlotBg[slot] = split.gpuBgSlotBg[slot];
+        layers->gpuBgW[slot] = split.gpuBgW[slot];
+        layers->gpuBgH[slot] = split.gpuBgH[slot];
+        layers->gpuBgWrap[slot] = split.gpuBgWrap[slot];
+        layers->gpuBgKey[slot] = split.gpuBgKey[slot];
+        layers->gpuBgPicture[slot] = NULL;
+        if (split.gpuBgSlotBg[slot] < 0) {
+            continue;
         }
-        layers->gpuBgPicture = pictureValid ? picture : NULL;
+        /* S5/S6 bundle: the slot's whole map (up to 512 x 512), made again
+         * when its key (map, tiles, colours: not the scroll) changes. */
+        static uint16_t picture[NITRO_GPU_BG_SLOTS][512 * 512];
+        static uint64_t pictureKey[NITRO_GPU_BG_SLOTS];
+        static int pictureValid[NITRO_GPU_BG_SLOTS];
+
+        if (!pictureValid[slot] || pictureKey[slot] != split.gpuBgKey[slot]) {
+            pictureValid[slot] = NitroPort_Render2DBgPicture(split.gpuBgSlotBg[slot], 1, picture[slot]);
+            pictureKey[slot] = split.gpuBgKey[slot];
+        }
+        if (pictureValid[slot]) {
+            layers->gpuBgPicture[slot] = picture[slot];
+        }
     }
+    layers->gpuObjAtlasPicture = split.gpuObjAtlasPicture;
+    layers->gpuObjAtlasKey = split.gpuObjAtlasKey;
     layers->evy = split.evy;
     layers->masterBright = split.masterBright;
     layers->backdrop = split.backdrop;
@@ -1594,12 +1600,11 @@ static void PerfLog(u64 now)
                       (unsigned)((a->blendLines - sPerf2d[0].blendLines) +
                                  (b->blendLines - sPerf2d[1].blendLines)),
                       rowsHit, rows);
-        /* Slice S5: why text BGs stay on software (GpuBgOf rejects, engine
-         * A only; B never calls it). Cumulative counters, differenced per
-         * interval like rows; read before the snapshot below. The top
-         * reason picks the next S5 slice. */
-        NitroPort_Log("[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u",
-                      (unsigned)(a->gpuBgTaken - sPerf2d[0].gpuBgTaken),
+        /* Slice S5/S6 bundle: why layers stay on software (engine A only).
+         * Cumulative counters, differenced per interval like rows; read
+         * before the snapshot below. */
+        NitroPort_Log("[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u, obj %u/%u/%u/%u/%u/%u, region %u/%u",
+                      (unsigned)(a->gpuBgTaken - sPerf2d[0].gpuBgTaken + a->gpuObjTaken - sPerf2d[0].gpuObjTaken),
                       (unsigned)(a->gpuBgReject[0] - sPerf2d[0].gpuBgReject[0]),
                       (unsigned)(a->gpuBgReject[1] - sPerf2d[0].gpuBgReject[1]),
                       (unsigned)(a->gpuBgReject[2] - sPerf2d[0].gpuBgReject[2]),
@@ -1610,7 +1615,17 @@ static void PerfLog(u64 now)
                       (unsigned)(a->gpuBgReject[7] - sPerf2d[0].gpuBgReject[7]),
                       (unsigned)(a->gpuBgReject[8] - sPerf2d[0].gpuBgReject[8]),
                       (unsigned)(a->gpuBgReject[9] - sPerf2d[0].gpuBgReject[9]),
-                      (unsigned)(a->gpuBgReject[10] - sPerf2d[0].gpuBgReject[10]));
+                      (unsigned)(a->gpuBgReject[10] - sPerf2d[0].gpuBgReject[10]),
+                      (unsigned)(a->gpuBgReject[11] - sPerf2d[0].gpuBgReject[11]),
+                      (unsigned)(a->gpuBgReject[12] - sPerf2d[0].gpuBgReject[12]),
+                      (unsigned)(a->gpuObjReject[0] - sPerf2d[0].gpuObjReject[0]),
+                      (unsigned)(a->gpuObjReject[1] - sPerf2d[0].gpuObjReject[1]),
+                      (unsigned)(a->gpuObjReject[2] - sPerf2d[0].gpuObjReject[2]),
+                      (unsigned)(a->gpuObjReject[3] - sPerf2d[0].gpuObjReject[3]),
+                      (unsigned)(a->gpuObjReject[4] - sPerf2d[0].gpuObjReject[4]),
+                      (unsigned)(a->gpuObjReject[5] - sPerf2d[0].gpuObjReject[5]),
+                      (unsigned)(a->gpuRegionClean[0] - sPerf2d[0].gpuRegionClean[0]),
+                      (unsigned)(a->gpuRegionClean[1] - sPerf2d[0].gpuRegionClean[1]));
         sPerf2d[0] = *a;
         sPerf2d[1] = *b;
     }

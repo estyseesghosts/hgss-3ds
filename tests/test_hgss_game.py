@@ -1701,7 +1701,7 @@ class PerformanceSliceBTests(unittest.TestCase):
         self.assertIn("sTextKey[pe][bg] = kind[bg] == BG_TEXT ? FoldClearVariant(e, bg, frameKey[bg]) : 0;",
                       draw)
         self.assertIn("LookUpArt(e, kind, bgcnt, dispcnt, frameKey);", draw)
-        self.assertIn("frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, BG_TEXT, bgcnt[gb], dispcnt);",
+        self.assertIn("frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, kind[gb], bgcnt[gb], dispcnt);",
                       draw)
         # Captures set their own fresh keys (they run outside any DrawEngineT,
         # whose per-frame keys they must not reuse).
@@ -1896,30 +1896,34 @@ class GpuBgAttributionTests(unittest.TestCase):
     def test_reject_enum_covers_every_check(self):
         header = self.HEADER.read_text()
         for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC",
-                     "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
+                     "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND",
+                     "SIZE", "NOWRAP"):
             self.assertIn(f"NITRO_GPUBG_REJECT_{name}", header)
         self.assertIn("NITRO_GPU_BG_REJECTS", header)
-        # Any map size routes (the picture and the quad are map-sized);
-        # mosaic and ext palettes stay software.
-        self.assertNotIn("NITRO_GPUBG_REJECT_SIZE", header)
+        for name in ("SEMI", "BITMAP", "AFFINE", "SQUEEZE", "CAP", "BLEND"):
+            self.assertIn(f"NITRO_GPUOBJ_REJECT_{name}", header)
+        self.assertIn("NITRO_GPU_OBJ_REJECTS", header)
         # Profile counters ride the shared struct (stdint types only: the
         # DS-ABI u64 alignment split must not move them; see the hbirq fix).
         self.assertIn("uint32_t gpuBgTaken;", header)
         self.assertIn("uint32_t gpuBgReject[NITRO_GPU_BG_REJECTS];", header)
+        self.assertIn("uint32_t gpuObjTaken;", header)
+        self.assertIn("uint32_t gpuObjReject[NITRO_GPU_OBJ_REJECTS];", header)
+        self.assertIn("uint32_t gpuRegionClean[2];", header)
         self.assertNotIn("u64 gpuBg", header)
+        self.assertIn("NitroGpuQuad gpuQuads[NITRO_GPU_QUADS];", header)
+        self.assertIn("NITRO_GPU_BG_SLOTS 2", header)
 
     def test_every_reject_returns_its_reason(self):
         text = (self.NITRO / "port_render2d.c").read_text()
-        gpu = text[text.index("static int GpuBgOf("):text.index("/* The extended palette slot")]
-        self.assertEqual(gpu.count("return -(1 + NITRO_GPUBG_REJECT_"), 11)
+        gpu = text[text.index("static int GpuBgValidBg("):text.index("/* The extended palette slot")]
         for name in ("SETUP", "HBLANK", "OFF", "MODE", "MOSAIC",
-                     "EXT", "BLEND", "BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
+                     "EXT", "BLEND", "SIZE", "NOWRAP"):
             self.assertIn(f"return -(1 + NITRO_GPUBG_REJECT_{name});", gpu)
-        self.assertNotIn("return -1;", gpu)
-        # Blend mode reported out (NULL-tolerant: the change-detection
-        # caller doesn't need it).
-        self.assertIn("static int GpuBgOf(const u8 *io, const u8 *oam, int lines, int wanted, int *blend)", gpu)
-        self.assertIn("if (blend != NULL) {", gpu)
+        # The shared z-order helper reports through an out-param.
+        order = text[text.index("static int GpuBgOrderOk("):text.index("static int GpuBgValidBg(")]
+        for name in ("BEHIND", "BETWEEN", "OBJ", "OBJBLEND"):
+            self.assertIn(f"*reason = NITRO_GPUBG_REJECT_{name};", order)
 
     def test_draw_counts_taken_and_rejects(self):
         text = (self.NITRO / "port_render2d.c").read_text()
@@ -1937,7 +1941,8 @@ class GpuBgAttributionTests(unittest.TestCase):
     def test_shell_reports_rejects_before_the_snapshot(self):
         text = (self.APP / "main_3ds.c").read_text()
         perf = text[text.index("static void PerfLog"):text.index("static void WaitForFrameCap")]
-        self.assertIn('"[perf] gpubg: taken %u, reject ', perf)
+        self.assertIn('"[perf] gpubg: taken %u, reject setup/hblank/off/mode/mosaic/ext/blend/behind/between/obj/obl/size/nowr', perf)
+        self.assertIn("obj %u/%u/%u/%u/%u/%u, region %u/%u", perf)
         # Cumulative counters, differenced like rows -- and read before the
         # snapshot below overwrites them (always-zero otherwise).
         self.assertLess(perf.index("[perf] gpubg:"),
@@ -1973,12 +1978,12 @@ class GpuBgNominateTests(unittest.TestCase):
 
 
 class GpuBgMapSizeTests(unittest.TestCase):
-    """Wave 2 S5b: any text map size + the no-blend flat quad.
+    """Wave 2 S5: map-sized BG quads through per-slot pictures.
 
     The picture, upload and UV math are map-sized (256x256 path
     byte-identical); a BG nowhere in the blend draws opaque instead of
     staying software. Fallback (mosaic, ext palettes, windows, H-blank,
-    brightness-on-it) is unchanged.
+    brightening the taken layer) is unchanged.
     """
 
     APP = REPO / "hgss" / "game" / "app"
@@ -1987,54 +1992,119 @@ class GpuBgMapSizeTests(unittest.TestCase):
     PICA = REPO / "3ds_port" / "game" / "app" / "port_pica.h"
     COMPOSE = REPO / "3ds_port" / "game" / "app" / "port_compose_pica.c"
 
-    def test_split_and_layers_carry_size_and_blend(self):
+    def test_split_and_layers_carry_slots(self):
         header = self.HEADER.read_text()
-        self.assertIn("int gpuBgW, gpuBgH, gpuBgBlend;", header)
+        self.assertIn("const uint16_t *gpuBgPicture[NITRO_GPU_BG_SLOTS];", header)
+        self.assertIn("int gpuBgW[NITRO_GPU_BG_SLOTS], gpuBgH[NITRO_GPU_BG_SLOTS];", header)
+        self.assertIn("uint64_t gpuBgKey[NITRO_GPU_BG_SLOTS];", header)
         pica = self.PICA.read_text()
-        self.assertIn("int gpuBgW, gpuBgH, gpuBgBlend;", pica)
+        self.assertIn("const uint16_t *gpuBgPicture[NITRO_GPU_BG_SLOTS];", pica)
+        self.assertIn("NitroGpuQuad gpuQuad[NITRO_GPU_QUADS];", pica)
 
-    def test_drawer_sets_size_from_bgcnt_and_blend_from_gpubg(self):
+    def test_drawer_sets_size_from_bgcnt(self):
         text = (self.NITRO / "port_render2d.c").read_text()
-        draw = text[text.index("if (split->has3d && split->gpuBgs) {"):
-                     text.index("} else if (e->isA && kind[0] == BG_3D) {")]
-        self.assertIn("int bgBlend = 1;", draw)
-        self.assertIn("GpuBgOf(io, e->oam, e->lines != NULL, split->gpuBgs, &bgBlend)", draw)
-        self.assertIn("split->gpuBgW = sTextSizes[(bgcnt[gb] >> 14) & 3][0];", draw)
-        self.assertIn("split->gpuBgH = sTextSizes[(bgcnt[gb] >> 14) & 3][1];", draw)
-        self.assertIn("split->gpuBgBlend = bgBlend;", draw)
+        self.assertIn("split->gpuBgW[nBgTake] = sTextSizes[(bgcnt[gb] >> 14) & 3][0];", text)
+        self.assertIn("split->gpuBgW[nBgTake] = sAffineSizes[(bgcnt[gb] >> 14) & 3][0];", text)
+        self.assertIn("takeBlend[nBgTake] = bgBlend;", text)
 
     def test_picture_decode_is_size_general(self):
         text = (self.NITRO / "port_render2d.c").read_text()
-        pic = text[text.index("int NitroPort_Render2DBgPicture("):
-                     text.index("int NitroPort_Render2DLayer(")]
+        pic = text[text.index("int NitroPort_Render2DBgPicture("):text.index("int NitroPort_Render2DLayer(")]
         # Screen-block aware entries, map-stride rows; 256x256 reduces to
         # the old linear form (block offset 0, stride 256).
-        self.assertIn("int mapW = sTextSizes[(bgcnt >> 14) & 3][0], mapH = sTextSizes[(bgcnt >> 14) & 3][1];", pic)
         self.assertIn("(u32)((tx >> 5) + (ty >> 5) * (tilesX >> 5)) * 0x800", pic)
         self.assertIn("out + (size_t)(ty * 8 + y) * (size_t)mapW + tx * 8", pic)
         # Palette/pack paths untouched (test_render.c's 256 goldens hold).
         self.assertIn("c = Rd16(e.bgPltt, index * 2);", pic)
+        # Affine maps decode with the shared AffineSample helper.
+        self.assertIn("AffineSample(&e, 0, NULL, charBase, screenBase, mapW, mapH, TRUE, x, y)", pic)
 
     def test_compositor_upload_draw_and_equality_are_size_aware(self):
         text = self.COMPOSE.read_text()
-        self.assertIn("NitroPort_Tile16(l->gpuBgPicture, l->gpuBgW, l->gpuBgH, set->bgTex, BG_TEX_W);", text)
-        self.assertIn("NitroPort_Double2xTiled16(l->gpuBgPicture, 256, 256, set->bgTex, BG_TEX_W);", text)
-        self.assertIn("a->gpuBgW == b->gpuBgW && a->gpuBgH == b->gpuBgH && a->gpuBgBlend == b->gpuBgBlend;", text)
-        # Texels per map pixel (2 for doubled 256 maps, 1 for 1:1 bigger
-        # ones); UV wraps at the texture edge = the map edge either way.
-        self.assertIn("int texel = (mapW == 256 && mapH == 256) ? 2 : 1;", text)
-        self.assertIn("bu1 = bu0 + (float)canvasW * (float)texel / (float)BG_TEX_W;", text)
-        self.assertIn("bvTop = 1.0f - (float)(vofs - top) * (float)texel / (float)BG_TEX_W;", text)
-        # Flat quad: same 1-bit-alpha replace call, white vertex color.
-        self.assertIn("} else {", text)
-        self.assertIn("bu0, bvTop, bu1, bvBottom, 0xFFFFFFFFu);", text)
+        self.assertIn("NitroPort_Tile16(l->gpuBgPicture[s], l->gpuBgW[s], l->gpuBgH[s], set->bgTex[s], BG_TEX_W);", text)
+        self.assertIn("NitroPort_Double2xTiled16(l->gpuBgPicture[s], 256, 256, set->bgTex[s], BG_TEX_W);", text)
+        self.assertIn("a->gpuBgW[s] != b->gpuBgW[s]", text)
+        self.assertIn("draw_gpu_quads(set, info, &pic, scale, linear, 0, info->gpuQuadsBehind);", text)
+        self.assertIn("draw_gpu_quads(set, info, &pic, scale, linear, info->gpuQuadsBehind, info->gpuQuads);", text)
 
-    def test_shell_holds_a_whole_map_and_canonicalizes(self):
+    def test_shell_holds_a_whole_map_per_slot(self):
         text = (self.APP / "main_3ds.c").read_text()
-        self.assertIn("static uint16_t picture[512 * 512];", text)
-        self.assertIn("layers->gpuBgW = split.gpuBgW >= 256 ? split.gpuBgW : 256;", text)
-        self.assertIn("layers->gpuBgH = split.gpuBgH >= 256 ? split.gpuBgH : 256;", text)
-        self.assertIn("layers->gpuBgBlend = split.gpuBgBlend;", text)
+        self.assertIn("static uint16_t picture[NITRO_GPU_BG_SLOTS][512 * 512];", text)
+        self.assertIn("layers->gpuBgPicture[slot] = picture[slot];", text)
+
+
+class GpuBgMultiTests(unittest.TestCase):
+    """Wave 2 S5 bundle: every eligible text BG becomes a quad.
+
+    Up to two concurrent BG quads (memory cap, not architecture), front
+    and behind the 3D (flat only behind), painter-ordered with the OBJ
+    quads by the software's own rule (prio passes, OBJ-before-BG ties,
+    OAM/BG-number order, 3D behind OBJs of its priority). A region draws
+    quads only when every layer in it is quad-exact; otherwise the whole
+    region stays software.
+    """
+
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_render2d.h"
+    PICA = REPO / "3ds_port" / "game" / "app" / "port_pica.h"
+    COMPOSE = REPO / "3ds_port" / "game" / "app" / "port_compose_pica.c"
+
+    def test_slots_bound_concurrency(self):
+        header = self.HEADER.read_text()
+        self.assertIn("NITRO_GPU_BG_SLOTS 2", header)
+        self.assertIn("NitroGpuQuad gpuQuads[NITRO_GPU_QUADS];", header)
+
+    def test_drawer_takes_up_to_two(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        take = text[text.index("split->has3d && split->gpuBgs"):]
+        self.assertIn("for (b = 1; b < 4 && nBgTake < NITRO_GPU_BG_SLOTS; b++)", take)
+        self.assertIn("split->gpuBgSlotBg[nBgTake] = gb;", take)
+
+    def test_plain_tile_gate(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("if (kind[b] != BG_TEXT && kind[b] != BG_AFFINE) {", text)
+        self.assertIn("e->art[b] != NULL", text)
+
+    def test_behind_flat_takes(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("takeBehind[nBgTake] = behind;", text)
+        self.assertIn("if (takeBehind[slot] != wantBehind) {", text)
+
+    def test_region_rule_gates_commit(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("if ((frontClean || behindClean) && (nBgTake > 0 || nObjTake > 0)) {", text)
+        self.assertIn("objFrame->taken[commitObj[s]] = 1;", text)
+        self.assertIn("kind[split->gpuBgSlotBg[commitBg[s]]] = BG_NONE;", text)
+
+    def test_shell_copies_slots_and_quads(self):
+        text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        self.assertIn("layers->gpuQuads = split.nGpuQuads;", text)
+        self.assertIn("layers->gpuBgKey[slot] = split.gpuBgKey[slot];", text)
+        self.assertIn("layers->gpuObjAtlasPicture = split.gpuObjAtlasPicture;", text)
+
+    def test_compositor_draws_quads(self):
+        text = self.COMPOSE.read_text()
+        self.assertIn("draw_gpu_quads(set, info, &pic, scale, linear, 0, info->gpuQuadsBehind);", text)
+        self.assertIn("draw_gpu_quads(set, info, &pic, scale, linear, info->gpuQuadsBehind, info->gpuQuads);", text)
+        self.assertIn("set->bgValid[s] = 1;", text)
+        self.assertIn("set->objAtlasValid = 1;", text)
+
+
+class GpuObjQuadTests(unittest.TestCase):
+    """Wave 2 S6 bundle: opaque OBJs become instanced quads.
+
+    Mode-0, non-affine OBJs decode once into a lazy atlas (capacity-gated
+    fallback); semi-transparent, bitmap, affine and window OBJs stay
+    software, and with them their whole region (exactness outranks
+    coverage). Quad order mirrors the software interleave exactly.
+    """
+
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+
+    def test_opaque_quads_have_an_atlas(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        self.assertIn("sGpuObjAtlas[512 * 512]", text)
+        self.assertIn("GpuObjAtlasFill(e, dispcnt, objFrame, commitObj, commitCell", text)
 
 
 class OutputParsingTests(unittest.TestCase):

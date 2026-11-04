@@ -13,6 +13,30 @@
 extern "C" {
 #endif
 
+/* Slice S5/S6 bundle: one painter-ordered quad for each layer the GPU
+ * draws itself, back-to-front within its region (behind the 3D first,
+ * then in front). Order mirrors the software interleave exactly: prio
+ * passes high-to-low, BGs before OBJs inside a pass (software walks
+ * OBJ-then-BG front-to-back), BG number / OAM index descending, the 3D
+ * between the regions (behind OBJs of its priority, in front of its
+ * BGs). blend 0 replaces (1-bit alpha), 1 alpha-blends with eva/evb.
+ * (u2,v2) is corner B(x1,y0); D is the parallelogram completion. Wrap
+ * selects texture repeat vs clamp (affine overflow off needs clamp). */
+typedef struct NitroGpuQuad {
+    uint8_t kind;   /* 0 = BG picture slot, 1 = OBJ atlas cell */
+    uint8_t blend;  /* 0 replace, 1 alpha-blend */
+    uint8_t slot;   /* bgTex slot or atlas cell */
+    uint8_t eva, evb;
+    uint8_t wrap;   /* GPU_REPEAT or GPU_CLAMP_TO_EDGE */
+    uint8_t pad[2];
+    uint16_t x0, y0, x1, y1;   /* DS-pixel rect */
+    float u0, v0, u1, v1, u2, v2;   /* texture corners A B C */
+} NitroGpuQuad;
+#define NITRO_GPU_QUADS 132     /* 3 BGs + 128 OBJs + 1 spare */
+#define NITRO_GPU_BG_SLOTS 2    /* concurrent BG pictures (memory cap) */
+#define NITRO_GPU_ATLAS_CELLS 9 /* opaque sprites per frame (memory cap) */
+#define NITRO_GPU_ATLAS_PITCH 132 /* cell stride, texels (128 content + 2 + 2 gutter) */
+#define NITRO_GPU_ATLAS_GUTTER 2  /* transparent texels around each cell for LINEAR */
 /* NitroPort_Render2DSplit draws an engine's picture in two layers: under
  * gets what's behind the 3D (the picture without BG0), over the layers in
  * front of it: colour | 0x8000 where they cover the 3D, 0 elsewhere, and
@@ -39,17 +63,19 @@ typedef struct NitroRender2DSplit {
     int tint3d;
     int eva, evb, evy;
     int blend3d;       /* BLDCNT's second targets (bits 8-13): what 3D pixels of alpha 1-30 blend with */
-    /* (asked for with gpuBgs, below) The BG left out of the picture for the
-     * compositor to draw itself (a bit, or 0 none), and what it takes to:
-     * BLDALPHA's eva and evb (0-16) blending it onto the 3D, its scroll,
-     * and its picture's key (its map, tiles and colours: drawn again,
-     * NitroPort_Render2DBgPicture, when it changes). */
-    int gpuBgLeftOut;
-    int gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
-    /* S5b: the left-out BG's map size (pixels) and how the compositor draws
-     * it: 1 alpha-blended onto the 3D (eva, evb), 0 opaque (flat quad). */
-    int gpuBgW, gpuBgH, gpuBgBlend;
-    uint64_t gpuBgKey;
+    /* S5/S6 bundle: BG picture slots the taken layers' quads reference.
+     * Per slot: the BG's map picture (drawer's buffer, made again when the
+     * slot key changes), its size, wrap, and content key. Slots are a pool:
+     * taken BGs fill them in priority order, up to NITRO_GPU_BG_SLOTS. */
+    const uint16_t *gpuBgPicture[NITRO_GPU_BG_SLOTS];
+    int gpuBgW[NITRO_GPU_BG_SLOTS], gpuBgH[NITRO_GPU_BG_SLOTS];
+    int gpuBgWrap[NITRO_GPU_BG_SLOTS];
+    uint64_t gpuBgKey[NITRO_GPU_BG_SLOTS];
+    int gpuBgSlotBg[NITRO_GPU_BG_SLOTS];
+    /* S6 bundle: taken OBJs' atlas (drawer's buffer, decoded once per
+     * content change) and its content key. */
+    const uint16_t *gpuObjAtlasPicture;
+    uint64_t gpuObjAtlasKey;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
     uint16_t *over;    /* width x 192 (x height with top) */
@@ -99,15 +125,19 @@ typedef struct NitroRender2DSplit {
      * fill the screen, over the 3D at the screen's own size (its H-blank
      * scrolls stretched with it). Set by NitroPort_WideLayout; else 0. */
     int stretch;
-    /* (the remaster's compositor, which can draw a repeating BG itself
-     * from a picture of its whole map, scrolled on the GPU: the field's
-     * weather, NitroPort_RepeatingBgs) The BGs it may draw so (a bit each;
-     * 0 none). One that's in front of the 3D with nothing between and
-     * alpha-blended onto it alone is left out of the picture
-     * (gpuBgLeftOut, above), and its scroll doesn't count as a change
-     * (NitroPort_Render2DSplitIfChanged): the picture isn't drawn again
-     * as it scrolls. The caller's choice, kept by the call. */
+    /* S5/S6 bundle: the taken layers as quads (first gpuQuadsBehind drawn
+     * behind the 3D, the rest in front), back-to-front within each region
+     * by the software interleave rule. All-quad or all-software per
+     * region: any software layer in a region empties its quads. The BGs
+     * the compositor may draw are nominated by bit (gpuBgs, a bit each;
+     * 0 none); nomination is never a correctness claim (per-BG validation
+     * still proves each one). A taken BG's scroll doesn't count as a
+     * change (NitroPort_Render2DSplitIfChanged): the picture isn't drawn
+     * again as it scrolls. */
     int gpuBgs;
+    int nGpuQuads;
+    int gpuQuadsBehind;
+    NitroGpuQuad gpuQuads[NITRO_GPU_QUADS];
 } NitroRender2DSplit;
 #define NITRO_RENDER2D_MAX_H 256
 /* (the game's thread, when it hands a frame to a drawing thread) Take the
@@ -144,11 +174,28 @@ enum NitroGpuBgReject {
     NITRO_GPUBG_REJECT_MOSAIC,    /* mosaic set */
     NITRO_GPUBG_REJECT_EXT,       /* ext-palette 8bpp */
     NITRO_GPUBG_REJECT_BLEND,     /* blended with another layer / brightened */
-    NITRO_GPUBG_REJECT_BEHIND,    /* at or below the 3D */
+    NITRO_GPUBG_REJECT_BEHIND,    /* at or below the 3D, blending */
     NITRO_GPUBG_REJECT_BETWEEN,   /* another BG between it and the 3D */
     NITRO_GPUBG_REJECT_OBJ,       /* an OBJ between it and the 3D */
     NITRO_GPUBG_REJECT_OBJBLEND,  /* semi-transparent/bitmap OBJ over it */
+    NITRO_GPUBG_REJECT_SIZE,      /* map bigger than the quad texture */
+    NITRO_GPUBG_REJECT_NOWRAP,    /* affine without wraparound */
     NITRO_GPU_BG_REJECTS
+};
+/* Slice S6: why an OBJ stays on software (per evaluated OBJ). */
+enum NitroGpuObjReject {
+    NITRO_GPUOBJ_REJECT_SEMI = 0, /* semi-transparent (mode 1) */
+    NITRO_GPUOBJ_REJECT_BITMAP,   /* bitmap (mode 3) */
+    NITRO_GPUOBJ_REJECT_AFFINE,   /* affine (rotation/scale/double-size) */
+    NITRO_GPUOBJ_REJECT_SQUEEZE,  /* engine squeeze effect active */
+    NITRO_GPUOBJ_REJECT_CAP,      /* atlas full */
+    NITRO_GPUOBJ_REJECT_BLEND,    /* BLDCNT touches OBJs */
+    NITRO_GPU_OBJ_REJECTS
+};
+/* Quad texture wrap (per BG slot; text always repeats). */
+enum NitroGpuWrap {
+    NITRO_GPU_WRAP_REPEAT = 0,
+    NITRO_GPU_WRAP_CLAMP = 1
 };
 /* Slice-A instruments: where a drawn frame's 2D time goes, per engine.
  * Ticks are ARM11 ticks on a 3DS (0 in host builds, where there is no tick
@@ -173,18 +220,22 @@ typedef struct NitroRender2DProfile {
     /* Slice S5 reject attribution (port_render2d.c owns counting, shell
      * reads). Cumulative since startup; the caller diffs per interval,
      * like rowHits. gpuBgTaken counts quad-routed frames. */
-    uint32_t gpuBgTaken;
+    uint32_t gpuBgTaken;  /* quad-routed BGs (cumulative, diffed per interval) */
     uint32_t gpuBgReject[NITRO_GPU_BG_REJECTS];
+    uint32_t gpuObjTaken; /* quad-routed OBJs (cumulative, diffed per interval) */
+    uint32_t gpuObjReject[NITRO_GPU_OBJ_REJECTS];
+    uint32_t gpuRegionClean[2]; /* all-quad front / behind region frames */
 } NitroRender2DProfile;
 /* A copy of the accumulators (which keep running). */
 void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out);
 
-/* A BG of engine A's whole map (a text BG of any size, from its BGCNT;
- * 0 otherwise, nothing written) into out, a line of mapW after another, as
- * RGBA5551 (red in the top bits; 0 where the BG is clear): what the
- * compositor draws a BG left out of the picture from (gpuBgLeftOut). From
- * the state taken (snapshot: 1) or the live one; the VRAM as it is. out
- * holds mapW x mapH pixels (up to 512 x 512). */
+/* A BG of engine A's whole map (a text BG of any size, or an affine BG up
+ * to 512 x 512, from its BGCNT; 0 otherwise, nothing written) into out, a
+ * line of mapW after another, as RGBA5551 (red in the top bits; 0 where
+ * the BG is clear): what the compositor draws a BG left out of the
+ * picture from (gpuBgLeftOut). Affine maps decode with AffineSample, the
+ * same as the software path. From the state taken (snapshot: 1) or the
+ * live one; the VRAM as it is. out holds mapW x mapH pixels. */
 int NitroPort_Render2DBgPicture(int bg, int snapshot, uint16_t *out);
 /* Engine A's BG scrolls now (BG0-3's HOFS and VOFS, 9 bits each). */
 void NitroPort_Render2DBgOffsets(uint16_t out[8]);

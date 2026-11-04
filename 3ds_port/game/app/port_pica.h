@@ -10,6 +10,7 @@
 #include <citro3d.h>
 #include <nitro_port_gx3d.h>
 #include <nitro_port_gx3d_vertex.h>
+#include <nitro_port_render2d.h>
 
 /* ---------------------------------------------------- the polygon drawer */
 
@@ -267,19 +268,25 @@ typedef struct ComposeLayers {
     short scroll3dLine[192];
     int displayOff;          /* nothing drawn (the engine is off) */
     uint32_t stamp;          /* the V-blank count when the game's display state was read */
-    /* A BG left out of the picture for the compositor to draw itself
-     * (NitroRender2DSplit.gpuBgLeftOut: the field's weather), or -1: its
-     * blending onto the 3D (eva, evb: 0-16), its scroll when the picture
-     * was drawn (the 3D scene's are newer: NitroGx3dScene.bg_ofs), and its
-     * picture's key (NitroPort_Render2DBgPicture made again when it
-     * changes). gpuBgW/H are the map's size in pixels; gpuBgBlend is 1
-     * when the quad alpha-blends (eva, evb) and 0 when it draws opaque. */
-    int gpuBg, gpuBgEva, gpuBgEvb, gpuBgHofs, gpuBgVofs;
-    int gpuBgW, gpuBgH, gpuBgBlend;
-    uint64_t gpuBgKey;
-    /* (the drawer's) its picture (NitroPort_Render2DBgPicture: 256 x 256
-     * RGBA5551), made as the game's state was read, when the key changed */
-    const uint16_t *gpuBgPicture;
+    /* S5/S6 bundle: taken layers as quads (first gpuQuadsBehind drawn
+     * behind the 3D, the rest in front), back-to-front within each region
+     * by the software interleave rule. All-quad or all-software per
+     * region: any software layer in a region empties its quads. */
+    int gpuQuads;
+    int gpuQuadsBehind;
+    NitroGpuQuad gpuQuad[NITRO_GPU_QUADS];
+    /* Per-BG pictures for the slots the quads reference (the drawer's
+     * buffers, made again when the slot key changes). Wrap is per slot
+     * (REPEAT, or CLAMP for wrapless affine). */
+    const uint16_t *gpuBgPicture[NITRO_GPU_BG_SLOTS];
+    int gpuBgW[NITRO_GPU_BG_SLOTS], gpuBgH[NITRO_GPU_BG_SLOTS];
+    int gpuBgWrap[NITRO_GPU_BG_SLOTS];
+    uint64_t gpuBgKey[NITRO_GPU_BG_SLOTS];
+    int gpuBgSlotBg[NITRO_GPU_BG_SLOTS];
+    /* S6 bundle: taken OBJs' atlas (drawer's buffer, decoded once per
+     * content change) and its content key. */
+    const uint16_t *gpuObjAtlasPicture;
+    uint64_t gpuObjAtlasKey;
 } ComposeLayers;
 /* Whether the compositor can draw a BG itself (its picture's textures
  * made: NitroRender2DSplit.gpuBgs). Any thread. */
