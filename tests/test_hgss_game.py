@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from tools import hgss_game as hg  # noqa: E402
+from tools import stage_3ds as st  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -2017,6 +2018,115 @@ class ThreeDsxTests(unittest.TestCase):
                     os.environ["DEVKITPRO"] = old
             self.assertEqual(dsx, root / "pokeheartgold.3dsx")
             self.assertEqual(dsx.read_bytes(), MINIMAL_3DSX)
+
+
+class BuildIdTests(unittest.TestCase):
+    """Commit identity: every binary and staged file traces to its commit."""
+
+    def test_git_build_info_matches_the_checkout(self):
+        short, full, dirty, status = hg.git_build_info()
+        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             cwd=REPO, capture_output=True, text=True)
+        if rev.returncode != 0:
+            self.assertEqual((short, full), ("unknown", "unknown"))
+            return
+        self.assertEqual(short, rev.stdout.strip())
+        porcelain = subprocess.run(["git", "status", "--porcelain"],
+                                   cwd=REPO, capture_output=True, text=True)
+        self.assertEqual(dirty, bool(porcelain.stdout.strip()))
+        self.assertEqual(status, porcelain.stdout)
+
+    def test_build_id_string_marks_dirty_trees(self):
+        self.assertEqual(hg.build_id_string("abc1234", False), "abc1234")
+        self.assertEqual(hg.build_id_string("abc1234", True), "abc1234-dirty")
+
+    def test_header_written_only_on_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = Path(tmp)
+            info = ("abc1234", "f" * 40, True, "")
+            self.assertEqual(hg.write_build_id_header(gen, info), "abc1234-dirty")
+            header = gen / "build_id.h"
+            self.assertIn('#define HGSS_BUILD_ID "abc1234-dirty"', header.read_text())
+            mtime = header.stat().st_mtime_ns
+            self.assertEqual(hg.write_build_id_header(gen, info), "abc1234-dirty")
+            self.assertEqual(header.stat().st_mtime_ns, mtime)
+            self.assertEqual(hg.write_build_id_header(gen, ("def5678", "e" * 40, False, "")),
+                             "def5678")
+            self.assertIn('#define HGSS_BUILD_ID "def5678"', header.read_text())
+
+    def test_build_info_sidecar_pairs_artifact_with_commit(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            dsx = Path(tmp) / "pokeheartgold.3dsx"
+            dsx.write_bytes(MINIMAL_3DSX)
+            manifest = hg.write_build_info(dsx, "heartgold", "3ds",
+                                           ("abc1234", "f" * 40, True, " M x\n"))
+            self.assertEqual(manifest, Path(tmp) / "pokeheartgold.build-info.txt")
+            text = manifest.read_text()
+            self.assertIn("build: abc1234-dirty\n", text)
+            self.assertIn("sha: " + "f" * 40 + "\n", text)
+            self.assertIn("sha256: " + hashlib.sha256(MINIMAL_3DSX).hexdigest() + "\n",
+                          text)
+
+    def test_boot_banner_logs_the_build(self):
+        text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        self.assertIn('starting (build %s)", HGSS_BUILD_ID', text)
+        self.assertIn('__has_include("build_id.h")', text)
+        # Host-tool builds without the generated header still compile.
+        self.assertIn('#define HGSS_BUILD_ID "unknown"', text)
+
+
+class StageTests(unittest.TestCase):
+    """Unique staged names: two builds never share a filename."""
+
+    def test_staged_base_names_carry_the_commit(self):
+        self.assertEqual(st.staged_base("pokeheartgold", "abc1234", False),
+                         "pokeheartgold-abc1234")
+        self.assertEqual(st.staged_base("pokesoulsilver", "abc1234", True),
+                         "pokesoulsilver-abc1234-dirty")
+
+    def test_pick_staged_path_skips_identical_dedupes_divergent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp)
+            path, already = st.pick_staged_path(dest, "pokeheartgold-abc1234", "d")
+            self.assertEqual((path.name, already), ("pokeheartgold-abc1234.3dsx", False))
+            path.write_bytes(b"one")
+            same, already = st.pick_staged_path(dest, "pokeheartgold-abc1234",
+                                                st.sha256_of(path))
+            self.assertEqual((same, already), (path, True))
+            other, already = st.pick_staged_path(dest, "pokeheartgold-abc1234",
+                                                 "different")
+            self.assertEqual((other.name, already),
+                             ("pokeheartgold-abc1234-2.3dsx", False))
+
+    def test_source_build_info_prefers_the_build_time_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "pokeheartgold.3dsx"
+            src.write_bytes(MINIMAL_3DSX)
+            (Path(tmp) / "pokeheartgold.build-info.txt").write_text(
+                "build: abc1234-dirty\nsha: " + "f" * 40 + "\nstatus:\n M x\n")
+            short, full, dirty, status, inferred = st.source_build_info(src)
+            self.assertEqual((short, full, dirty, inferred),
+                             ("abc1234", "f" * 40, True, False))
+            self.assertIn("M x", status)
+
+    def test_stage_file_validates_names_manifests_and_skips(self):
+        import stat as statmod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "pokeheartgold.3dsx"
+            src.write_bytes(MINIMAL_3DSX)
+            (Path(tmp) / "pokeheartgold.build-info.txt").write_text(
+                "build: abc1234\nsha: " + "f" * 40 + "\nstatus:\n")
+            dest = Path(tmp) / "sd"
+            path, already = st.stage_file(src, dest)
+            self.assertEqual((path.name, already),
+                             ("pokeheartgold-abc1234.3dsx", False))
+            self.assertEqual(st.sha256_of(path), st.sha256_of(src))
+            self.assertEqual(statmod.S_IMODE(path.stat().st_mode), 0o666)
+            sidecar = dest / "pokeheartgold-abc1234.build-info.txt"
+            self.assertIn("sha256: " + st.sha256_of(src), sidecar.read_text())
+            _, already = st.stage_file(src, dest)
+            self.assertTrue(already)
 
 
 class ThreeDsxValidationTests(unittest.TestCase):

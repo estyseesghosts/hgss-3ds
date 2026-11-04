@@ -43,6 +43,17 @@
 
 #include "3ds_input.h"
 #include "heartgold.h"
+/* Build identity (gen/build_id.h, written by tools/hgss_game.py): the
+ * commit + dirty flag, so every log traces to the binary that wrote it.
+ * Builds without the generated header (host tools) report "unknown". */
+#ifdef __has_include
+#if __has_include("build_id.h")
+#include "build_id.h"
+#endif
+#endif
+#ifndef HGSS_BUILD_ID
+#define HGSS_BUILD_ID "unknown"
+#endif
 #include "port_pica.h"
 /* The scene type and the geometry thread's ops. Unlike nitro_port.h this
  * header is standalone (stdint/stddef only), so it can sit next to libctru's. */
@@ -2619,7 +2630,7 @@ int main(int argc, char **argv)
         sLogLastFlush = svcGetSystemTick();
     }
 
-    NitroPort_Log(HEARTGOLD_APP_NAME " starting");
+    NitroPort_Log(HEARTGOLD_APP_NAME " starting (build %s)", HGSS_BUILD_ID);
     {
         bool isNew3ds = false;
 

@@ -238,6 +238,22 @@ The full toolchain/build reference is [wiki/Build-Reference.md](../wiki/Build-Re
 
 Newest first. Each entry: what changed, what was run, what it proved.
 
+### Build identity + staging (standing rule, 2026-11-04)
+
+- **Two builds never share a filename.** `tools/hgss_game.py` keeps the
+  canonical `build/<out>/pokeheartgold.3dsx` (tests + HBL run path) and
+  writes `build-info.txt` + `gen/build_id.h` (commit + `-dirty`) beside
+  it; the boot banner logs `starting (build <id>)`, so any `log.txt`
+  traces to its commit. `tools/stage_3ds.py` stages as
+  `<base>-<shortsha>[-dirty].3dsx` (`-2`, `-3`, … on content collision,
+  skip on identical bits) + `.build-info.txt` sidecar, `chmod 666`,
+  `validate_3dsx`-gated. HG → `dist/sd-card/3ds/`; SS → both
+  `dist/sd-card/3ds/` and `dist/soulsilver-sd-card/3ds/` (+ `--also`
+  dirs). Stage command:
+  `python3 tools/stage_3ds.py --hg build/game-3ds/pokeheartgold.3dsx --ss build/game-3ds-ss/pokesoulsilver.3dsx --also ~/hgss-private/sd-card/3ds`.
+  Old same-named pairs are superseded — delete stale `.3dsx` from the
+  console folder before copying the new pair.
+
 ### 2026-11-04 — wave 0 freeze (benchmark declaration; hardware runs pending owner)
 
 - **Frozen:** `~/hgss-private/benchmark/goldenrod-bench.txt` (`sha256
