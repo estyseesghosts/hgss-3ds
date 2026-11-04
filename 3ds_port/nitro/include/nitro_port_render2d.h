@@ -168,7 +168,7 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
  * layout must not depend on it. */
 enum NitroGpuBgReject {
     NITRO_GPUBG_REJECT_SETUP = 0, /* not wanted (cannot fire: caller guards) */
-    NITRO_GPUBG_REJECT_HBLANK,    /* H-blank line regs live, or windows, or no 3D mode */
+    NITRO_GPUBG_REJECT_HBLANK,    /* H-blank line regs live (per-line scrolls/windows) */
     NITRO_GPUBG_REJECT_OFF,       /* wanted BG not enabled */
     NITRO_GPUBG_REJECT_MODE,      /* not a text BG in this mode */
     NITRO_GPUBG_REJECT_MOSAIC,    /* mosaic set */
@@ -180,6 +180,8 @@ enum NitroGpuBgReject {
     NITRO_GPUBG_REJECT_OBJBLEND,  /* semi-transparent/bitmap OBJ over it */
     NITRO_GPUBG_REJECT_SIZE,      /* map bigger than the quad texture */
     NITRO_GPUBG_REJECT_NOWRAP,    /* affine without wraparound */
+    NITRO_GPUBG_REJECT_STRETCH,   /* stretched transition frame (frame gate only) */
+    NITRO_GPUBG_REJECT_DISP,      /* DISPCNT not in 3D-graphics mode (frame gate only) */
     NITRO_GPU_BG_REJECTS
 };
 /* Slice S6: why an OBJ stays on software (per evaluated OBJ). */

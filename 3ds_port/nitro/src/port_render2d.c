@@ -4436,9 +4436,12 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             int b;
 
             if (!frameOk) {
-                /* Slice S5: H-blank-varying windows or scrolls, or no 3D
-                 * mode: every evaluation would reject, count it once. */
-                prof->gpuBgReject[NITRO_GPUBG_REJECT_HBLANK]++;
+                /* Slice S5: the frame gate failed with 3D + nominations live:
+                 * exactly one of stretch, per-line H-blank regs, or DISPCNT
+                 * out of 3D-graphics mode. Split so the log says which. */
+                prof->gpuBgReject[split->stretch ? NITRO_GPUBG_REJECT_STRETCH
+                                  : e->lines != NULL ? NITRO_GPUBG_REJECT_HBLANK
+                                                     : NITRO_GPUBG_REJECT_DISP]++;
             } else for (b = 1; b < 4 && nBgTake < NITRO_GPU_BG_SLOTS; b++) {
                 int bgBlend = 1, behind = 0, gb;
                 u64 key;
