@@ -1536,6 +1536,22 @@ class PerformanceWaveThreeTests(unittest.TestCase):
                       stage)
         self.assertIn("for(p=0;p<6;p++){", stage)
 
+    def test_o3dsched_defaults_to_display_first_on_old_3ds(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        parse = text[text.index('if (IniValue("o3dsched", value, sizeof(value))) {'):
+                      text.index("if (sIniLower30 < 0) {")]
+        # Explicit keys keep working (default stays chewable, N3DS guard stays).
+        self.assertIn('strcmp(value, "default") == 0', parse)
+        self.assertIn("sIniSched = 0;", parse)
+        self.assertIn('o3dsched=display-first (geometry demoted below the display on core 1)', parse)
+        self.assertIn("o3dsched is Old-3DS-only; ignoring it on a New 3DS", parse)
+        # No key (the frozen benchmark port.ini has none): Old 3DS gets
+        # display-first, New 3DS keeps default. Log-23 ran the old default.
+        self.assertIn("} else if (!sNew3ds) {", parse)
+        self.assertIn("o3dsched default is display-first on Old 3DS", parse)
+        # The geometry priority follows the flag (demoted under the display).
+        self.assertIn("s32 geoPriority = sIniSched ? priority + 3 : priority - 1;", text)
+
     def test_lower_screen_is_30hz_on_old_3ds(self):
         text = (self.APP / "main_3ds.c").read_text()
         self.assertIn('IniValue("lower30"', text)

@@ -354,10 +354,11 @@ static int sAudioCore;
 static int sIniAudioCore = -1;
 static int sIniLower30 = -1;
 /* `o3dsched=display-first`: on an Old 3DS only, demote the always-ready
- * geometry worker below the event-driven display thread on core 1 (0 by
- * default: today's order). Same-core threads don't time-slice: whichever
- * is lower never runs while the higher is ready, and log-9's 0.0
- * composes/s under a saturated core 1 is that starvation. */
+ * geometry worker below the event-driven display thread on core 1 (1 by
+ * default on Old 3DS, 0 with `o3dsched=default`: today's order). Same-core
+ * threads don't time-slice: whichever is lower never runs while the higher
+ * is ready, and log-9's 0.0 composes/s under a saturated core 1 is that
+ * starvation. */
 static int sIniSched = 0;
 
 static Thread sGeoThread;
@@ -558,7 +559,7 @@ static bool GpuStartGeometry(s32 priority)
          * started on core 1 (RequestCore1Share below); this only reads it
          * back. */
         if (sCore1ShareAsked) {
-            /* Slice S5 experiment (o3dsched=display-first): demote the
+            /* o3dsched=display-first (the Old 3DS default): demote the
              * always-ready geometry worker below the event-driven display
              * thread on this core (0x33 under the display's 0x32). Same-core
              * threads don't time-slice: a lower thread never runs while a
@@ -2352,6 +2353,14 @@ static void ReadDisplayOptions(void)
             NitroPort_Log("[perf] o3dsched is Old-3DS-only; ignoring it on a New 3DS");
             sIniSched = 0;
         }
+    } else if (!sNew3ds) {
+        /* No key (the frozen benchmark port.ini has none): Old 3DS defaults
+         * to display-first. Same-core threads don't time-slice, so with
+         * geometry above, the display starves outright under saturation
+         * (log-9's and log-23's 0.0 composes/s) instead of slowing down;
+         * the event-driven display still yields to geometry when idle. */
+        sIniSched = 1;
+        NitroPort_Log("[perf] o3dsched default is display-first on Old 3DS (geometry demoted below the display on core 1)");
     }
     if (sIniLower30 < 0) {
         /* The agreed profile: an Old 3DS draws the lower screen's 2D at
