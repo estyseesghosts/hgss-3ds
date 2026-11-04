@@ -1921,11 +1921,22 @@ class GpuBgAttributionTests(unittest.TestCase):
         # Total: with 3D + nominations live, exactly one of stretch,
         # per-line H-blank regs, windows, BG0 undisplayed, or DISPCNT
         # display mode fails (see frameOk, in its check order).
-        self.assertIn("split->stretch ? NITRO_GPUBG_REJECT_STRETCH", gate)
+        self.assertIn("int reason = split->stretch ? NITRO_GPUBG_REJECT_STRETCH", gate)
         self.assertIn("e->lines != NULL ? NITRO_GPUBG_REJECT_HBLANK", gate)
         self.assertIn("(dispcnt & 0xE000) ? NITRO_GPUBG_REJECT_WIN", gate)
         self.assertIn("((dispcnt & 0x108) != 0x108) ? NITRO_GPUBG_REJECT_BG0", gate)
-        self.assertIn(": NITRO_GPUBG_REJECT_DISP", gate)
+        self.assertIn(": NITRO_GPUBG_REJECT_DISP;", gate)
+        self.assertIn("prof->gpuBgReject[reason]++;", gate)
+
+    def test_gate_logs_its_dispcnt_once(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        gate = text[text.index("if (split->has3d && split->gpuBgs) {"):
+                     text.index("} else for (b = 1; b < 4 && nBgTake < NITRO_GPU_BG_SLOTS; b++) {")]
+        # The actual register value decides the next fix (windows vs BG0
+        # display vs display mode); one shot per boot, DISP only.
+        self.assertIn("static int sGpuGateDspLogged = 0;", text)
+        self.assertIn("reason == NITRO_GPUBG_REJECT_DISP && !sGpuGateDspLogged", gate)
+        self.assertIn('"[2d] gate dsp: dispcnt=%08x powcnt=%04x isA=%d snapshot=%d gpuBgs=%x"', gate)
 
     def test_every_reject_returns_its_reason(self):
         text = (self.NITRO / "port_render2d.c").read_text()

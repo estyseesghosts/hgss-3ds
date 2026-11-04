@@ -3195,6 +3195,9 @@ static u16 ObjPixel(const Engine *e, const Obj *obj, u32 dispcnt, int tx, int ty
  * construction; upload is a straight tile. */
 static uint16_t sGpuObjAtlas[512 * 512];
 static u64 sGpuObjAtlasKey;
+/* Slice S5: the frame gate's DISPCNT value, logged once (it decides the
+ * next fix: windows, BG0 display, or display mode keep takes off). */
+static int sGpuGateDspLogged = 0;
 
 static void GpuObjAtlasFill(const Engine *e, u32 dispcnt, const ObjFrame *f, const int *takeObj, const int *takeCell,
                             int nTake)
@@ -4439,12 +4442,22 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 /* Slice S5: the frame gate failed with 3D + nominations live:
                  * exactly one of stretch, per-line H-blank regs, windows,
                  * BG0 undisplayed, or DISPCNT display mode. Split so the log
-                 * says which (in frameOk's own check order). */
-                prof->gpuBgReject[split->stretch ? NITRO_GPUBG_REJECT_STRETCH
-                                  : e->lines != NULL ? NITRO_GPUBG_REJECT_HBLANK
-                                  : (dispcnt & 0xE000) ? NITRO_GPUBG_REJECT_WIN
-                                  : ((dispcnt & 0x108) != 0x108) ? NITRO_GPUBG_REJECT_BG0
-                                                                 : NITRO_GPUBG_REJECT_DISP]++;
+                 * says which (in frameOk's own check order). The dispcnt
+                 * value is logged once: it decides the next fix. */
+                int reason = split->stretch ? NITRO_GPUBG_REJECT_STRETCH
+                             : e->lines != NULL ? NITRO_GPUBG_REJECT_HBLANK
+                             : (dispcnt & 0xE000) ? NITRO_GPUBG_REJECT_WIN
+                             : ((dispcnt & 0x108) != 0x108) ? NITRO_GPUBG_REJECT_BG0
+                                                            : NITRO_GPUBG_REJECT_DISP;
+
+                prof->gpuBgReject[reason]++;
+                if (reason == NITRO_GPUBG_REJECT_DISP && !sGpuGateDspLogged) {
+                    sGpuGateDspLogged = 1;
+                    NitroPort_Log("[2d] gate dsp: dispcnt=%08x powcnt=%04x isA=%d snapshot=%d gpuBgs=%x",
+                                  dispcnt, (unsigned)Rd16(e->ioAll, 0x304),
+                                  e->isA ? 1 : 0, e->taken != NULL ? 1 : 0,
+                                  (unsigned)split->gpuBgs);
+                }
             } else for (b = 1; b < 4 && nBgTake < NITRO_GPU_BG_SLOTS; b++) {
                 int bgBlend = 1, behind = 0, gb;
                 u64 key;
