@@ -346,17 +346,16 @@ Newest first. Each entry: what changed, what was run, what it proved.
   have split DISP fully the first time; (c) emulator rig had no boot check and
   the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
   session — always target exact PIDs.
-- **Staged for hardware (S8 backface pre-cull, 2026-11-04):** HG `pokeheartgold-6aca216-dirty.3dsx`
-  `5,801,556 B` `sha256 f5b96379…128cc4981`, SS `pokesoulsilver-6aca216-dirty.3dsx`
-  `5,801,548 B` `sha256 b8980533…c830c8c0` (`validate_3dsx` `[]`; in
+- **Staged for hardware (o3dsched display-first default, 2026-11-04):** HG `pokeheartgold-9228982-dirty.3dsx`
+  `5,801,668 B` `sha256 6b54784f…51eaf9`, SS `pokesoulsilver-9228982-dirty.3dsx`
+  `5,801,724 B` `sha256 1f451256…cf28a10` (`validate_3dsx` `[]`; in
   `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/`,
-  `~/hgss-private/sd-card/3ds/`). Supersedes all earlier pairs. Same
-  Wave 0 benchmark procedure on o3DS (N3DS optional); Wave 3 S8 hoists
-  the per-polygon backface verdict above projection/clip (pixel-identical
-  by construction, shadow-keep preserved). Expect geometry ms/scene down
-  with `clipped` down and `culled` counting per-polygon; report `[gx3d]`
-  lines plus the full `gpubg`/`display`/`2d`/`geometry` set, texture
-  counts, `linear_free`, `[gpu] clears`.
+  `~/hgss-private/sd-card/3ds/`). Supersedes all earlier pairs. Same Wave 0
+  benchmark procedure (frozen port.ini carries no o3dsched key, so Old 3DS
+  now defaults to display-first; N3DS keeps its profile). Confirm the banner
+  reads `o3dsched display-first`, then look for composes/s holding up where
+  log-23 showed 0.0–0.4 with drops. Report the full `gpubg`/`display`/`2d`/
+  `geometry` set, texture counts, `linear_free`, `[gpu] clears`.
 - **Staged (current):** same pair, in `dist/sd-card/3ds/`,
   `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`.
 - **Pending (owner-gated, not marked done):** the two 600-frame hardware
