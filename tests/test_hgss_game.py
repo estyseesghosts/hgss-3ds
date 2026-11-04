@@ -2096,7 +2096,11 @@ class GpuBgMultiTests(unittest.TestCase):
     def test_plain_tile_gate(self):
         text = (self.NITRO / "port_render2d.c").read_text()
         self.assertIn("if (kind[b] != BG_TEXT && kind[b] != BG_AFFINE) {", text)
-        self.assertIn("e->art[b] != NULL", text)
+        # Only per-column variations veto (wide art, part shifts, splits);
+        # clip widens with the same scroll and anchorWindows needs enabled
+        # windows (frameOk vetoed those), so both take quads.
+        self.assertIn("if (kind[b] == BG_TEXT && (e->art[b] != NULL || ((e->partBgs >> b) & 1) || e->split[b])) {", text)
+        self.assertNotIn("e->anchorWindows || e->clip[b]", text[text.index("/* S5/S6 bundle: take every eligible BG"):])
 
     def test_behind_flat_takes(self):
         text = (self.NITRO / "port_render2d.c").read_text()

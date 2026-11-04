@@ -4476,11 +4476,13 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                     prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
                     continue;
                 }
-                if (kind[b] == BG_TEXT && (e->art[b] != NULL || ((e->partBgs >> b) & 1) || e->split[b] ||
-                                          e->anchorWindows || e->clip[b])) {
+                if (kind[b] == BG_TEXT && (e->art[b] != NULL || ((e->partBgs >> b) & 1) || e->split[b])) {
                     /* The software wouldn't decode plain tiles here (wide
-                     * art, splits, window-shifted or tall-clipped runs):
-                     * a full-map quad can't reproduce those. */
+                     * art, splits, part-shifted runs): a full-map quad can't
+                     * reproduce those. clip only widens the canvas with the
+                     * same scroll (DecideBandFills) and anchorWindows only
+                     * shifts enabled windows (frameOk already vetoed those,
+                     * so EngineWindows yields none): both are quad-exact. */
                     prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
                     continue;
                 }
