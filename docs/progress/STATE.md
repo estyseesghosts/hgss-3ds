@@ -346,6 +346,25 @@ Newest first. Each entry: what changed, what was run, what it proved.
   have split DISP fully the first time; (c) emulator rig had no boot check and
   the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
   session — always target exact PIDs.
+### 2026-11-04 — R1: committed GPU-scroll software-pixel reuse (hardware pending)
+
+- Actual work-avoidance slice, not another diagnostic-only build: both committed
+  text BGs may scroll without rerunning CPU scanlines. Existing setup/validation
+  rebuilds current quad metadata; no cached split output or new UV math. Narrow
+  all-text-GPU/no-sprite field gate, conservative hashes and buffer identities;
+  other content retains full redraw. Scheduler/audio/game clock unchanged.
+- Lead-authored replacement; the cancelled implementer's untested cached-metadata
+  draft remains isolated in `../hgss-r1-gpu-scroll` and is NOT integrated.
+- Native synthetic actual-renderer fixture: **757 checks, 0 failed**, including
+  ASan/UBSan. Full native Python suite **461 tests**, **0 assertion failures**,
+  **11 pre-existing toolchain errors**, 13 skips. Patch check **86/86**.
+- Native HG and SS builds: **1092/1092 compiled, 0 failed**, both linked;
+  `validate_3dsx` **[]** on both. Fresh per-output SDK archives were built.
+- Hardware/goldens and measured FPS gain remain **pending**. W2 battle correctness
+  is still open; this does not declare an entire playability wave complete.
+- Design, proof, test-only fixed-width host shim, exact commands and pending gates:
+  [o3ds-r1-gpu-scroll-reuse.md](agent-notes/o3ds-r1-gpu-scroll-reuse.md).
+
 ### 2026-11-04 — session: o3dsched display-first default, log-24 phase change, S8 assessed
 
 - **o3dsched display-first is now the Old 3DS default (build `9228982-dirty`,

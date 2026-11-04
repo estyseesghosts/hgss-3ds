@@ -2002,13 +2002,15 @@ class GpuBgAttributionTests(unittest.TestCase):
         self.assertIn("prof->gpuBgTaken++;", text)
         self.assertIn("prof->gpuBgReject[-1 - gb]++;", text)
         self.assertIn("prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;", text)
-        # The change-detection caller mirrors the old -1 contract (its hash
-        # only gets more precise per reason) and counts nothing.
+        # Change detection counts nothing; only authoritative draw validation
+        # counts takes/rejects. R1 hashes a committed mask, not a negative
+        # preliminary GpuBgOf result (executable coverage: gpu_scroll_reuse.c).
         split = text[text.index("int NitroPort_Render2DSplitIfChanged("):]
         self.assertNotIn("gpuBgTaken", split)
         self.assertNotIn("gpuBgReject", split)
-        # Both downstream uses still guard >= 0, so reasons stay negative.
-        self.assertIn("if (isA && gpuBg >= 0) {", text)
+        self.assertNotIn("GpuBgOf(", split)
+        self.assertIn("if (gpuBgMask & (1u << bg)) {", text)
+        self.assertIn("sCommittedTextOnly[pe] = committedText;", text)
 
     def test_shell_reports_rejects_before_the_snapshot(self):
         text = (self.APP / "main_3ds.c").read_text()

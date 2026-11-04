@@ -91,6 +91,22 @@ extern u64 svcGetSystemTick(void);
  * tear mid-draw, which is fine for a diagnostic read once per interval. */
 static NitroRender2DProfile sProfile[2];
 
+/* R1: only the previous software picture's identity/dependencies, never cached
+ * split output or texture pointers. Metadata is rebuilt by the real draw setup.
+ * One writer per engine, like sWork and the existing IfChanged records. */
+typedef struct SplitReuse {
+    u16 *under, *over;
+    u8 *alpha;
+    u32 small, vram, mask, scroll[4];
+    int valid;
+} SplitReuse;
+static SplitReuse sSplitReuse[2];
+static u32 sCommittedTextOnly[2];
+static u32 sSplitPictureSerial[2];
+static u32 SplitLayoutSignature(int engine, const NitroRender2DSplit *split);
+static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *split,
+                         u32 layout, int snapshot);
+
 static inline u16 Rd16(const u8 *p, u32 off)
 {
     return *(const u16a *)(p + off);
@@ -176,6 +192,7 @@ static State2D sState[2];
 #define WIDE_PICS_MAX 16   /* pictures a layout draws (NITRO_WIDE_PICTURE) */
 
 typedef struct Engine {
+    u32 reusePixels;       /* requested committed-text mask; revalidated below */
     const u8 *ioAll;       /* all the registers (live, or a State2D's) */
     const u8 *io;          /* the engine's registers (A: +0, B: +0x1000) */
     /* (an H-blank effect) its first NITRO_LINE_REGS bytes on each line, or
@@ -4399,6 +4416,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
      * frameOk gates both BG and OBJ takes (H-blank windows/scrolls and
      * no-3D-mode reject everything, counted once). */
     int nBgTake = 0;
+    u32 committedText = 0;
     int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS];
     int takeHofs[NITRO_GPU_BG_SLOTS], takeVofs[NITRO_GPU_BG_SLOTS];
     if (split != NULL) {
@@ -4717,6 +4735,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             split->gpuObjAtlasKey = nCommitObj > 0 ? atlasKey : 0;
             /* Mask committed BGs out of the software picture. */
             for (s = 0; s < nCommitBg; s++) {
+                int b = split->gpuBgSlotBg[commitBg[s]];
+
+                if (kind[b] == BG_TEXT) {
+                    committedText |= 1u << b;
+                }
                 kind[split->gpuBgSlotBg[commitBg[s]]] = BG_NONE;
                 prof->gpuBgTaken++;
             }
@@ -4851,6 +4874,19 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             if (behindClean) {
                 prof->gpuRegionClean[1]++;
             }
+        }
+    }
+    /* The first reuse slice is deliberately field-only: every displayed 2D
+     * BG must have actually committed as text, with no sprites, windows or
+     * per-line effects. Mixed regions and affine takes keep the full renderer.
+     * Re-run all setup/validation/quad emission above even on reuse: scroll can
+     * affect layout eligibility, and fresh metadata must reach the compositor. */
+    if (frameOk && committedText && committedText == ((dispcnt >> 8) & 0xEu) &&
+        objFrame->count == 0 && !e->circles[0].on && !e->circles[1].on) {
+        sCommittedTextOnly[pe] = committedText;
+        if (e->reusePixels == committedText) {
+            split->scroll3dLines = 0;
+            return;
         }
     }
     if (!anyWindow) {
@@ -5468,13 +5504,21 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     }
 }
 
-static void Render(int engine, u16 *out, NitroRender2DSplit *split)
+static void Render(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePixels)
 {
     Engine e;
     u32 dispcnt;
     u16 powcnt;
+    u32 layout = split ? SplitLayoutSignature(engine, split) : 0;
+    int snapshot = split ? split->snapshot : 0;
 
+    /* Invalidate before all early returns, including display-off/forced blank.
+     * Forced draws also establish a new record, never inherit a stale one. */
+    sSplitReuse[engine ? 1 : 0].valid = 0;
+    sCommittedTextOnly[engine ? 1 : 0] = 0;
+    sSplitPictureSerial[engine ? 1 : 0]++;
     SetUpEngine(&e, engine, split);
+    e.reusePixels = reusePixels;
     if (split != NULL) {
         memset(split, 0, offsetof(NitroRender2DSplit, over));
         split->masterBright = Rd16(e.io, 0x6C);
@@ -5524,6 +5568,8 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split)
     }
     if (split == NULL) {
         MasterBrightness(out, Rd16(e.io, 0x6C), e.width * e.height);
+    } else {
+        RememberSplit(engine, out, split, layout, snapshot);
     }
 }
 
@@ -6172,12 +6218,12 @@ int NitroPort_Render2DShareArt(int engine)
 
 void NitroPort_Render2D(int engine, u16 *out)
 {
-    Render(engine, out, NULL);
+    Render(engine, out, NULL, 0);
 }
 
 void NitroPort_Render2DSplit(int engine, u16 *under, NitroRender2DSplit *split)
 {
-    Render(engine, under, split);
+    Render(engine, under, split, 0);
 }
 
 BOOL NitroPort_EngineAOnTop(void)
@@ -6239,7 +6285,7 @@ void NitroPort_Render2DTakeState(int engine)
 /* What an engine's picture is drawn from, in two parts: the small ones
  * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
  * engine A, read in full to work it out). */
-static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
+static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask)
 {
     BOOL isA = engine == 0;
     const State2D *st = &sState[isA ? 0 : 1];
@@ -6264,8 +6310,12 @@ static u32 EngineSmallSignature(int engine, int snapshot, int gpuBg)
     regs[0x6C / 4] = 0;
     /* (a BG the compositor draws itself: its scroll isn't in the picture,
      * which needn't be drawn again as it scrolls) */
-    if (isA && gpuBg >= 0) {
-        regs[(0x10 + gpuBg * 4) / 4] = 0;
+    if (isA) {
+        for (int bg = 1; bg < 4; bg++) {
+            if (gpuBgMask & (1u << bg)) {
+                regs[(0x10 + bg * 4) / 4] = 0;
+            }
+        }
     }
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
@@ -6311,8 +6361,54 @@ static u32 EngineVramSignature(int engine, const u8 *io)
 
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, -1) * 31u) ^
+    return (EngineSmallSignature(engine, 0, 0) * 31u) ^
            EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0));
+}
+
+static u32 SplitLayoutSignature(int engine, const NitroRender2DSplit *split)
+{
+    int e = engine ? 1 : 0;
+    const WindowCircle *circles = split->snapshot ? sState[e].circles : sCircles[e];
+    u32 words[16] = {
+        (u32)split->width, (u32)split->origin,
+        split->clip[0], split->clip[1], split->clip[2], split->clip[3],
+        (u32)split->anchorWindows, (u32)split->windowsToEdge,
+        (u32)split->snapshot, (u32)split->height, (u32)split->top,
+        (u32)split->stretch, (u32)split->gpuBgs,
+        (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE),
+        split->snapshot ? sState[e].winSerial : NitroPort_WideWindowsSerial(),
+        NitroPort_WideArtSerial()
+    };
+    u32 h = HashWords((const u8 *)words, sizeof(words), 2166136261u);
+
+    for (int w = 0; w < 2; w++) {
+        const WindowCircle *c = &circles[w];
+        h = (h ^ (u32)(c->on ? 1 + c->cx * 7 + c->cy * 131 + c->r * 4099 : 0)) * 16777619u;
+    }
+    return h;
+}
+
+static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *split,
+                         u32 layout, int snapshot)
+{
+    int e = engine ? 1 : 0;
+    SplitReuse *r = &sSplitReuse[e];
+    const u8 *io = snapshot ? sState[e].io : NitroPort_IoReg;
+    u32 mask = sCommittedTextOnly[e];
+
+    if (!mask || e != 0) {
+        return;
+    }
+    r->under = under;
+    r->over = split->over;
+    r->alpha = split->overAlpha;
+    r->mask = mask;
+    r->small = (EngineSmallSignature(e, snapshot, mask) * 31u) ^ layout;
+    r->vram = EngineVramSignature(e, io);
+    for (int bg = 1; bg < 4; bg++) {
+        r->scroll[bg] = Rd32(io, 0x10 + bg * 4);
+    }
+    r->valid = 1;
 }
 
 /* Slice A: a copy of the per-engine draw profile (which keeps running).
@@ -6336,54 +6432,45 @@ void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out)
 int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit *split)
 {
     /* (its own record: the 3D doesn't come into these layers) */
-    static struct { u32 small, vram; int valid, vramValid; } last[2];
+    static struct { u32 small, vram, serial; int valid, vramValid; } last[2];
     int e = engine ? 1 : 0;
-    /* (a BG the compositor would draw itself now: GpuBgOf, as drawing
-     * would find; drawn when that changes) */
-    int gpuBg = -1;
+    SplitReuse *r = &sSplitReuse[e];
+    int force = r->valid || last[e].serial != sSplitPictureSerial[e];
     u32 small, vram;
 
-    if (e == 0 && split->gpuBgs) {
-        const State2D *st = &sState[0];
+    if (r->valid && r->under == under && r->over == split->over && r->alpha == split->overAlpha) {
+        const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
+        u32 candidate = (EngineSmallSignature(e, split->snapshot, r->mask) * 31u) ^
+                        SplitLayoutSignature(e, split);
 
-        gpuBg = GpuBgOf(split->snapshot ? st->io : NitroPort_IoReg, split->snapshot ? st->oam : NitroPort_Oam,
-                        split->snapshot ? st->lines : NitroPort_LineRegs.active, split->gpuBgs, NULL);
-    }
-    small = EngineSmallSignature(e, split->snapshot, gpuBg);
-    small = (small ^ (u32)(gpuBg + 1) ^ ((u32)split->gpuBgs << 4)) * 16777619u;
-
-    /* the canvas, and where the windows are */
-    small = (small ^ (u32)split->width ^ ((u32)split->origin << 9) ^
-             ((u32)split->anchorWindows << 18) ^ ((u32)(split->windowsToEdge != 0) << 19) ^ ((u32)split->clip[0] << 20) ^
-             ((u32)split->clip[1] << 21) ^ ((u32)split->clip[2] << 22) ^
-             ((u32)split->clip[3] << 23)) * 16777619u;
-    small = (small ^ (u32)split->height ^ ((u32)split->top << 12)) * 16777619u;   /* (a tall picture) */
-    {
-        /* (a circle fade's windows) */
-        const WindowCircle *c = split->snapshot ? sState[e].circles : sCircles[e];
-        int w;
-
-        for (w = 0; w < 2; w++) {
-            small = (small ^ (u32)(c[w].on ? 1 + c[w].cx * 7 + c[w].cy * 131 + c[w].r * 4099 : 0)) * 16777619u;
+        if (candidate == r->small && EngineVramSignature(e, io) == r->vram) {
+            int moved = 0;
+            for (int bg = 1; bg < 4; bg++) {
+                if ((r->mask & (1u << bg)) && Rd32(io, 0x10 + bg * 4) != r->scroll[bg]) {
+                    moved = 1;
+                }
+            }
+            if (!moved) {
+                return 0;   /* brightness-only is handled by the shell */
+            }
+            u32 mask = r->mask;
+            Render(engine, under, split, mask);
+            return 1;       /* current quads must be published, pixels reused */
         }
     }
-    small = (small ^ (u32)__atomic_load_n(&sSmoothObjs[e], __ATOMIC_ACQUIRE)) * 16777619u;
-    if (split->width > W) {
-        /* (the windows decide the edges' look, and where the anchored ones
-         * are; hand-drawn pictures loaded again) */
-        small = (small ^ (split->snapshot ? sState[e].winSerial : NitroPort_WideWindowsSerial())) * 16777619u;
-        small = (small ^ NitroPort_WideArtSerial()) * 16777619u;
-    }
+    small = (EngineSmallSignature(e, split->snapshot, 0) * 31u) ^
+            SplitLayoutSignature(e, split);
     /* The small parts changed (a scroll, a sprite, a colour: most frames of
      * anything moving): drawn, without reading the VRAM through to find
      * out about that as well. Only when they're the same is the VRAM
      * compared (once it's known: the first time after a change it's just
      * noted, and drawn). */
-    if (!last[e].valid || small != last[e].small) {
+    if (force || !last[e].valid || small != last[e].small) {
         last[e].small = small;
         last[e].valid = 1;
         last[e].vramValid = 0;
-        Render(engine, under, split);
+        Render(engine, under, split, 0);
+        last[e].serial = sSplitPictureSerial[e];
         return 1;
     }
     vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0));
@@ -6392,7 +6479,8 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     }
     last[e].vram = vram;
     last[e].vramValid = 1;
-    Render(engine, under, split);
+    Render(engine, under, split, 0);
+    last[e].serial = sSplitPictureSerial[e];
     return 1;
 }
 

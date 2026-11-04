@@ -151,8 +151,10 @@ void NitroPort_Render2DTakeState(int engine);
  * the lower menu's panel: its bag 1.25 times as big). */
 void NitroPort_Render2DSmoothObjs(int engine, int on);
 void NitroPort_Render2DSplit(int engine, uint16_t *under, NitroRender2DSplit *split);
-/* The same, unless nothing it draws from changed since the last call for
- * that engine (returns 0 then, 1 when drawn). */
+/* Returns 1 when output must be published: pixels redrawn, or current GPU
+ * quad metadata rebuilt while unchanged CPU pixels were reused. Returns 0
+ * when neither changed (master brightness can still be read separately).
+ * Reuse requires the same under/over/overAlpha buffers. */
 int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DSplit *split);
 /* An engine's master brightness (its MASTER_BRIGHT register), from the
  * state taken when the frame was handed over (snapshot: 1) or as it is: for
