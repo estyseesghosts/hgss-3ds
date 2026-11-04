@@ -273,18 +273,17 @@ Newest first. Each entry: what changed, what was run, what it proved.
   boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
   with setup % and rows hit/miss, `hb_*`, texture/settle counts,
   `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
-- **Staged for hardware (clip/anchor take, 2026-11-04):** HG `pokeheartgold-9434629-dirty.3dsx`
-  `5,801,532 B` `sha256 3e12407d…46be8d3d`, SS `pokesoulsilver-9434629-dirty.3dsx`
-  `5,801,524 B` `sha256 a7884f68…c5353d8c` (`validate_3dsx` `[]`; in
+- **Staged for hardware (S8 backface pre-cull, 2026-11-04):** HG `pokeheartgold-6aca216-dirty.3dsx`
+  `5,801,556 B` `sha256 f5b96379…128cc4981`, SS `pokesoulsilver-6aca216-dirty.3dsx`
+  `5,801,548 B` `sha256 b8980533…c830c8c0` (`validate_3dsx` `[]`; in
   `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/`,
   `~/hgss-private/sd-card/3ds/`). Supersedes all earlier pairs. Same
-  Wave 0 benchmark procedure on o3DS (N3DS optional); this build narrows
-  the plain-tile veto to true per-column variations, so text BGs under
-  mere clip/anchorWindows should now take. Expect `taken` nonzero and/or
-  genuine per-BG/obj reject reasons. Report the full `gpubg` line plus
-  `[perf] display/2d` (`rows hit/total`, `text %`, `setup %`),
-  `[perf] hbirq`, `hb_*`, texture/settle counts, `linear_free`,
-  `[gpu] clears`.
+  Wave 0 benchmark procedure on o3DS (N3DS optional); Wave 3 S8 hoists
+  the per-polygon backface verdict above projection/clip (pixel-identical
+  by construction, shadow-keep preserved). Expect geometry ms/scene down
+  with `clipped` down and `culled` counting per-polygon; report `[gx3d]`
+  lines plus the full `gpubg`/`display`/`2d`/`geometry` set, texture
+  counts, `linear_free`, `[gpu] clears`.
 - **Staged (current):** same pair, in `dist/sd-card/3ds/`,
   `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`.
 - **Pending (owner-gated, not marked done):** the two 600-frame hardware
