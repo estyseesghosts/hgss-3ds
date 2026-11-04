@@ -1679,6 +1679,11 @@ class PerformanceSliceBTests(unittest.TestCase):
         # T_LAYER only; row test decides; layerOf kept), general path kept.
         self.assertIn("int wideOk = flags == 0 || flags == T_LAYER;", draw)
         self.assertIn("*(u32a *)(row + x + i) = pair;", draw)
+        # Four transparent cached pixels write nothing under PUT's pc_
+        # test, so they skip as one word-pair (log-14: 100% rows hit with
+        # ~40% text on empty lines -- the loop overhead, not the decode).
+        self.assertIn("u32 tz0 = *(const u32a *)(cachedRow + tx + i);", draw)
+        self.assertIn("if ((tz0 | tz1) != 0) {", draw)
         # Without a cached row the old tile loop runs as before (captures
         # drawn without a key, or a failed malloc): still present verbatim.
         self.assertIn("u32 entryAddr = rowAddr + (u32)(tx >> 8) * 0x800 + (u32)((tx & 255) >> 3) * 2;",

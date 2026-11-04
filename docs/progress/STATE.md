@@ -270,12 +270,17 @@ Newest first. Each entry: what changed, what was run, what it proved.
   boot, and send back `log.txt` (needs ≥4200 frames: `[perf] display/2d`
   with setup % and rows hit/miss, `hb_*`, texture/settle counts,
   `linear_free`, `[gpu] clears`). Same on N3DS with the HG folder/save.
-- **Baseline artifacts for the benchmark runs:** HG `5,784,436 B` `sha256
-  82c1ab05…400ba87`, SS `5,784,492 B` `sha256 2e8862d0…f21eb91`
-  (`validate_3dsx` `[]`). Supersedes all earlier pairs — do not run those.
-  Runs the same Wave 0 benchmark (`script.txt` + `port.ini` + save);
-  report `[perf] display/2d` with `rows hit/total`, `setup %`, `hbirq`,
-  `hb_*`, texture/settle counts, `linear_free`, `[gpu] clears`.
+- **Staged for hardware (S5b, 2026-11-04):** HG `pokeheartgold-2dcc7d1-dirty.3dsx`
+  `5,785,896 B` `sha256 55d88ecd…cfb93`, SS `pokesoulsilver-2dcc7d1-dirty.3dsx`
+  `5,785,888 B` `sha256 a870de30…e4372` (`validate_3dsx` `[]`; in
+  `dist/sd-card/3ds/`, `dist/soulsilver-sd-card/3ds/`,
+  `~/hgss-private/sd-card/3ds/`). Supersedes all earlier pairs. Runs the
+  Wave 0 benchmark: copy `benchmark/goldenrod-bench.txt` AND
+  `benchmark/port.ini` under their own names next to the save
+  (`port.ini` says `script=goldenrod-bench.txt`; renaming breaks it) on
+  o3DS and N3DS; report `[perf] display/2d` with `rows hit/total`,
+  `text %`, `setup %`, fixed `[perf] hbirq`, new `[perf] gpubg` (taken +
+  rejects), `hb_*`, texture/settle counts, `linear_free`, `[gpu] clears`.
 - **Staged (current):** same pair, in `dist/sd-card/3ds/`,
   `dist/soulsilver-sd-card/3ds/` and `~/hgss-private/sd-card/3ds/`.
 - **Pending (owner-gated, not marked done):** the two 600-frame hardware

@@ -1887,6 +1887,19 @@ static inline __attribute__((always_inline)) void DrawTextBgT(const Engine *e, i
                     n = xe - x;
                 }
                 if (wideOk && ((((uintptr_t)(row + x)) | ((uintptr_t)(cachedRow + tx))) & 3) == 0) {
+                    /* Slice S2d: four transparent cached pixels write nothing
+                     * under the PUT this path allows (its pc_ test), so skip
+                     * them as one word-pair. Empty text lines (the field's
+                     * log-14: 100% rows hit, still ~40% text) cost 64 loads
+                     * instead of 256 PUTs. */
+                    for (; i + 3 < n; i += 4) {
+                        u32 tz0 = *(const u32a *)(cachedRow + tx + i);
+                        u32 tz1 = *(const u32a *)(cachedRow + tx + i + 2);
+
+                        if ((tz0 | tz1) != 0) {
+                            break;
+                        }
+                    }
                     /* Two opaque cached pixels over two empty screen pixels
                      * copy as one word; anything else falls to the pixel
                      * path, which decides each. */
