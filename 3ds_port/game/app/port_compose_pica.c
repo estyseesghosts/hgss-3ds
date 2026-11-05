@@ -1473,6 +1473,7 @@ static int picture_holds(int e, const ComposeLayers *l, int w, int h)
     }
     if (NitroPort_FlatShadowMatches(l->flatCpuPlanes, sShadowFlat[e], l->backdrop, sShadowFlatColor[e],
                                     w, h, sh->width, sh->height, l->has3d && l->over != NULL, sh->overValid)) {
+        __atomic_fetch_add(&sPublishProfile[e].flatProof, 1u, __ATOMIC_RELAXED);
         return 1;
     }
     if (memcmp(l->under, sh->under, (size_t)w * (size_t)h * 2u) != 0) {
@@ -4190,6 +4191,7 @@ void NitroPort_ComposeStats(ComposeStats *stats)
         dst->unchanged = __atomic_load_n(&src->unchanged, __ATOMIC_RELAXED);
         dst->noBuffer = __atomic_load_n(&src->noBuffer, __ATOMIC_RELAXED);
         dst->invalid = __atomic_load_n(&src->invalid, __ATOMIC_RELAXED);
+        dst->flatProof = __atomic_load_n(&src->flatProof, __ATOMIC_RELAXED);
         dst->wallTicks = __atomic_load_n(&src->wallTicks, __ATOMIC_RELAXED);
         dst->checkTicks = __atomic_load_n(&src->checkTicks, __ATOMIC_RELAXED);
         dst->lockWaitTicks = __atomic_load_n(&src->lockWaitTicks, __ATOMIC_RELAXED);

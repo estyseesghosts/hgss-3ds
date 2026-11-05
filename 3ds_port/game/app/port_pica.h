@@ -340,7 +340,7 @@ int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
  * how many were late, the scenes never shown (overtaken), and the frames
  * drawn in stereo. Counts since the start. */
 typedef struct ComposePublishProfile {
-    u32 calls, unchanged, noBuffer, invalid;
+    u32 calls, unchanged, noBuffer, invalid, flatProof;
     u64 wallTicks, checkTicks, lockWaitTicks, convertTicks, bgTicks;
 } ComposePublishProfile;
 

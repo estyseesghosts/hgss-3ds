@@ -16,6 +16,8 @@ class PublishProfileTests(unittest.TestCase):
             subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-Wall", "-Werror",
                             *shlex.split(os.environ.get("HGSS_FLAT_TEST_CFLAGS", "")),
                             "-I" + str(ROOT / "3ds_port/game/app"),
+                            "-I" + str(ROOT / "3ds_port/nitro/include"),
+                            str(ROOT / "3ds_port/nitro/src/port_upscale.c"),
                             str(ROOT / "tests/fixtures/compose_flat.c"), "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 

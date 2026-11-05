@@ -1420,13 +1420,14 @@ static void PerfLog(u64 now)
         const ComposePublishProfile *p = &st.publish[i], *last = &sPerfPublish[i];
         u32 calls = p->calls - last->calls;
         NitroPort_Log("[perf] publish-%c wall/call %.2f ms, check %.2f, lockwait %.2f, "
-                      "convert+flush %.2f, bg+obj %.2f; calls %u reuse %u no-buffer %u invalid %u (wall, check includes wait)",
+                      "convert+flush %.2f, bg+obj %.2f; calls %u reuse %u flat %u no-buffer %u invalid %u (wall, check includes wait)",
                       'A' + i, PerfMsPer(p->wallTicks - last->wallTicks, calls),
                       PerfMsPer(p->checkTicks - last->checkTicks, calls),
                       PerfMsPer(p->lockWaitTicks - last->lockWaitTicks, calls),
                       PerfMsPer(p->convertTicks - last->convertTicks, calls),
                       PerfMsPer(p->bgTicks - last->bgTicks, calls), (unsigned)calls,
-                      (unsigned)(p->unchanged - last->unchanged), (unsigned)(p->noBuffer - last->noBuffer),
+                      (unsigned)(p->unchanged - last->unchanged), (unsigned)(p->flatProof - last->flatProof),
+                      (unsigned)(p->noBuffer - last->noBuffer),
                       (unsigned)(p->invalid - last->invalid));
     }
     memcpy(sPerfPublish, st.publish, sizeof(sPerfPublish));
