@@ -157,6 +157,28 @@ static void multiply(Matrix *out, const Matrix *lhs, const Matrix *rhs)
     }
     *out=result;
 }
+/* Position x projection is frequent between model batches. The field's
+ * projection (also ordinary orthographic projections) has only these six
+ * possible nonzero entries. Check the actual shape, never the scene identity.
+ * Removing zero products preserves the signed 64-bit sum, its single >> 12
+ * and saturation exactly; oblique/arbitrary projections use multiply(). */
+static void multiply_clip(Matrix *out,const Matrix *lhs,const Matrix *rhs)
+{
+    if(rhs->a[1]|rhs->a[2]|rhs->a[3]|rhs->a[4]|rhs->a[6]|rhs->a[7]|
+       rhs->a[8]|rhs->a[9]|rhs->a[12]|rhs->a[13]){
+        multiply(out,lhs,rhs);
+        return;
+    }
+    Matrix result;
+    for(int i=0;i<4;i++){
+        int64_t x=lhs->a[i*4],y=lhs->a[i*4+1],z=lhs->a[i*4+2],w=lhs->a[i*4+3];
+        result.a[i*4]=saturation((x*rhs->a[0])>>12);
+        result.a[i*4+1]=saturation((y*rhs->a[5])>>12);
+        result.a[i*4+2]=saturation((z*rhs->a[10]+w*rhs->a[14])>>12);
+        result.a[i*4+3]=saturation((z*rhs->a[11]+w*rhs->a[15])>>12);
+    }
+    *out=result;
+}
 /* MTX_SCALE's product (diag(x, y, z, 1) x m): rows 0-2 scaled, row 3 as it
  * was (1.0 x v >> 12 is v). As multiply() would make it. */
 static void scale_rows(Matrix *m,const uint32_t *p)
@@ -507,7 +529,7 @@ static void ensure_clip(GeoState *g)
     unsigned j;
     if(!g->clipDirty)return;
     g->clipDirty=0;
-    multiply(&g->clip,&g->pos,&g->proj);
+    multiply_clip(&g->clip,&g->pos,&g->proj);
     g->xf=g->clip;
     if(g->wideNum!=g->wideDen && ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
         for(j=0;j<4;j++){
