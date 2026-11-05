@@ -2199,11 +2199,48 @@ static inline int scan_op(VertexScan *v,unsigned op,const uint32_t *p)
     default:return -1;
     }
 }
+
+enum { HIDDEN_BOX_OK, HIDDEN_BOX_RANGE, HIDDEN_BOX_INTERSECT, HIDDEN_BOX_MIXED };
+/* Classify the same eight affine box corners without constructing each one.
+ * Any coordinate reaching the old saturation guard falls back. Checking
+ * each edge before addition bounds every later sum well inside int64_t. */
+static int hidden_box_extrema(const int64_t base[4],const int64_t edge[3][4],
+                              unsigned *out,int *behind)
+{
+    const int64_t limit=(int64_t)1<<42;
+    int64_t lo[4],hi[4];
+    unsigned j,k,mask=0;
+    for(j=0;j<4;j++){
+        lo[j]=hi[j]=base[j];
+        if(lo[j]<=-limit || hi[j]>=limit)return HIDDEN_BOX_RANGE;
+        for(k=0;k<3;k++){
+            int64_t e=edge[k][j];
+            if(e<=-2*limit || e>=2*limit)return HIDDEN_BOX_RANGE;
+            if(e<0)lo[j]+=e;else hi[j]+=e;
+            if(lo[j]<=-limit || hi[j]>=limit)return HIDDEN_BOX_RANGE;
+        }
+    }
+    for(j=0;j<3;j++){
+        int64_t maxPlus=base[j]+base[3],minMinus=base[j]-base[3];
+        for(k=0;k<3;k++){
+            int64_t plus=edge[k][j]+edge[k][3],minus=edge[k][j]-edge[k][3];
+            if(plus>0)maxPlus+=plus;
+            if(minus<0)minMinus+=minus;
+        }
+        if(maxPlus<0)mask|=1u<<(j*2);
+        if(minMinus>=4096)mask|=2u<<(j*2);
+    }
+    if(!mask)return HIDDEN_BOX_INTERSECT;
+    if(lo[3]<4096 && hi[3]>=4096)return HIDDEN_BOX_MIXED;
+    *out=mask;*behind=hi[3]<4096;
+    return HIDDEN_BOX_OK;
+}
 static int skip_hidden_vertices(StreamCursor *sc)
 {
     StreamCursor scan=*sc,end;
     VertexScan v;
-    unsigned op,n,polys,k,j,outside=0x3fu,behind=0,front=0;
+    unsigned op,n,polys,k,j,outside=0x3fu;
+    int behind=0;
     unsigned mode=(s.texparam>>30)&3u;
     const uint32_t *p;
     int32_t *xyz=v.xyz,*lo=v.lo,*hi=v.hi;
@@ -2261,25 +2298,11 @@ found:
                     (int64_t)lo[2]*s.xf.a[8+j]+s.xfTrans[j];
             for(k=0;k<3;k++)edge[k][j]=((int64_t)hi[k]-lo[k])*s.xf.a[k*4+j];
         }
-        for(k=0;k<8;k++){
-            int64_t c[4];
-            for(j=0;j<4;j++){
-                c[j]=base[j]+((k&1)?edge[0][j]:0)+((k&2)?edge[1][j]:0)+((k&4)?edge[2][j]:0);
-                /* Far from saturation() for every point of the box. */
-                if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42)){sHiddenDiag.saturated++;return 0;}
-            }
-            if(!(c[0]+c[3]<0))outside&=~1u;
-            if(!(c[0]-c[3]>=4096))outside&=~2u;
-            if(!(c[1]+c[3]<0))outside&=~4u;
-            if(!(c[1]-c[3]>=4096))outside&=~8u;
-            if(!(c[2]+c[3]<0))outside&=~16u;
-            if(!(c[2]-c[3]>=4096))outside&=~32u;
-            /* w <= 0 (behind the camera; a [gx3d] count): all or none. */
-            if(c[3]<4096)behind++;else front++;
-            if(!outside){sHiddenDiag.intersects++;return 0;}
-        }
+        int result=hidden_box_extrema(base,edge,&outside,&behind);
+        if(result==HIDDEN_BOX_RANGE){sHiddenDiag.saturated++;return 0;}
+        if(result==HIDDEN_BOX_INTERSECT){sHiddenDiag.intersects++;return 0;}
+        if(result==HIDDEN_BOX_MIXED){sHiddenDiag.mixed++;return 0;}
     }
-    if(behind&&front){sHiddenDiag.mixed++;return 0;}
     /* polygon_hidden deliberately keeps side-offscreen geometry for sun
      * shadows. The list shortcut must defer to that same path; only a shared
      * near/far rejection is guaranteed not to cast a retained shadow. */

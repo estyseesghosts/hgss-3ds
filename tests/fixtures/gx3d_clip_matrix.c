@@ -229,6 +229,109 @@ static void hidden_list_shadow_case(void)
     sShadowCapture = 0; sDest->shadow_triangles = NULL; sDest = NULL;
 }
 
+/* Independent original eight-corner test, with 128-bit intermediates in
+ * the fixture so even deliberately extreme synthetic inputs cannot overflow. */
+#ifndef GX3D_NO_EXTREMA
+static int reference_hidden_box(const int64_t base[4], const int64_t edge[3][4],
+                                unsigned *out, int *behind)
+{
+    unsigned mask = 0x3f, b = 0, f = 0;
+    const __int128 limit = (__int128)1 << 42;
+    for (unsigned k = 0; k < 8; k++) {
+        __int128 c[4];
+        for (unsigned j = 0; j < 4; j++) {
+            c[j] = base[j];
+            for (unsigned i = 0; i < 3; i++) if (k & (1u << i)) c[j] += edge[i][j];
+            if (c[j] <= -limit || c[j] >= limit) return 0;
+        }
+        for (unsigned j = 0; j < 3; j++) {
+            if (!(c[j] + c[3] < 0)) mask &= ~(1u << (j * 2));
+            if (!(c[j] - c[3] >= 4096)) mask &= ~(2u << (j * 2));
+        }
+        if (c[3] < 4096) b++; else f++;
+        if (!mask) return 0;
+    }
+    if (b && f) return 0;
+    *out = mask; *behind = b != 0;
+    return 1;
+}
+
+static void hidden_box_extrema_cases(void)
+{
+    static const int64_t special[] = {INT64_MIN, INT64_MAX, -((int64_t)1 << 42),
+        -((int64_t)1 << 42) + 1, -8192, -4096, -1, 0, 1, 4095, 4096, 8192,
+        ((int64_t)1 << 42) - 1, (int64_t)1 << 42};
+    unsigned accepted = 0, rejected = 0;
+    rng = 0x1256ac79;
+    for (int n = 0; n < 200000; n++) {
+        int64_t base[4], edge[3][4];
+        for (int j = 0; j < 4; j++) {
+            base[j] = n % 13 == 0 ? special[(unsigned)value() % (sizeof(special) / sizeof(special[0]))]
+                                  : value() / 16;
+            for (int k = 0; k < 3; k++)
+                edge[k][j] = n % 17 == 0 ? special[(unsigned)value() % (sizeof(special) / sizeof(special[0]))]
+                                         : value() / 32;
+        }
+        unsigned expected = 0, actual = 0;
+        int expBehind = -1, actBehind = -1;
+        int ref = reference_hidden_box(base, edge, &expected, &expBehind);
+        int result = hidden_box_extrema(base, edge, &actual, &actBehind);
+        CHECK((result == HIDDEN_BOX_OK) == ref);
+        if (ref) {
+            accepted++;
+            CHECK(actual == expected);
+            CHECK(actBehind == expBehind);
+        } else rejected++;
+    }
+    CHECK(accepted > 0 && rejected > 0);
+}
+#endif
+
+/* The real packed-stream shortcut: compare its accepted/fallback decision,
+ * cursor and emulated final state with the pre-extrema implementation. */
+static uint64_t hidden_stream_trace(void)
+{
+    uint64_t h = UINT64_C(1469598103934665603);
+    unsigned accepted = 0, rejected = 0;
+    rng = 0x5a17344b;
+    for (int n = 0; n < 5000; n++) {
+        uint32_t words[10] = {0};
+        StreamCursor c = {0};
+        memset(&s, 0, sizeof(s)); memset(&sDiag, 0, sizeof(sDiag));
+        identity(&s.xf); identity(&s.tex); s.xfTrans[3] = (int64_t)4096 * 4096;
+        s.primitive = n & 3; s.texparam = (uint32_t)((n >> 2) & 1) << 30;
+        sShadowCapture = (n >> 3) & 1;
+        words[0] = (uint32_t)value(); words[1] = (uint32_t)value(); words[2] = (uint32_t)value();
+        words[5] = 0x412323; /* two more vertices followed by END */
+        for (int i = 0; i < 3; i++) {
+            int x = n % 3 == 0 ? 5000 + (value() & 1023) : value() / 128;
+            int y = value() / 256, z = value() / 256;
+            int at = i == 0 ? 3 : 6 + (i - 1) * 2;
+            words[at] = (uint16_t)x | ((uint32_t)(uint16_t)y << 16);
+            words[at + 1] = (uint16_t)z;
+        }
+        c.c.w = words; c.c.count = 10; c.c.word = 0x23222120;
+        int result = skip_hidden_vertices(&c);
+        accepted += result != 0; rejected += result == 0;
+        h = trace_bytes(h, &result, sizeof(result));
+        h = trace_bytes(h, s.coord, sizeof(s.coord));
+        h = trace_bytes(h, s.texcoord, sizeof(s.texcoord));
+        h = trace_bytes(h, s.resolvedTexcoord, sizeof(s.resolvedTexcoord));
+        h = trace_bytes(h, s.normal, sizeof(s.normal));
+        h = trace_bytes(h, &s.normalValue, sizeof(s.normalValue));
+        h = trace_bytes(h, &s.rgb, sizeof(s.rgb));
+        h = trace_bytes(h, &s.rgbPending, sizeof(s.rgbPending));
+        h = trace_bytes(h, &s.nverts, sizeof(s.nverts));
+        h = trace_bytes(h, &c.r, sizeof(c.r));
+        h = trace_bytes(h, &c.c.i, sizeof(c.c.i));
+        h = trace_bytes(h, &c.c.word, sizeof(c.c.word));
+        h = trace_bytes(h, &sDiag, sizeof(sDiag));
+    }
+    CHECK(accepted > 0 && rejected > 0);
+    sShadowCapture = 0;
+    return h;
+}
+
 static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
                         Matrix *a, const Matrix *p, uint32_t *digest)
 {
@@ -256,6 +359,12 @@ int main(int argc, char **argv)
     CHECK(trace == UINT64_C(0x7679d7b60433e5d0)); /* pre-change translator */
     hidden_list_profile_cases();
     hidden_list_shadow_case();
+#ifndef GX3D_NO_EXTREMA
+    hidden_box_extrema_cases();
+#endif
+    uint64_t hiddenTrace = hidden_stream_trace();
+    printf("gx3d hidden stream trace: %016llx\n", (unsigned long long)hiddenTrace);
+    CHECK(hiddenTrace == UINT64_C(0xf4a323df14a02e1b)); /* pre-extrema translator */
     for (int n = 0; n < 100006; n++) {
         static const int32_t edge[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -4096};
         (void)value();
