@@ -361,6 +361,7 @@ static u32 sFrames, sLate, sTimed, sSkipped;
 static u64 sGpuTicks, sCpuTicks;
 static volatile u32 sPublished;
 static volatile u64 sPublishTicks;
+static ComposePublishProfile sPublishProfile[2];
 static uint32_t sPreparedScene;
 static int sScenePrepared;
 static float sSceneConvergence = 1.0f;
@@ -1574,7 +1575,8 @@ static int set_holds_quads(LayerSet *set, const ComposeLayers *l)
  * untouched layers for it), so this is most of what a fade costs. Only a
  * set no frame is drawing from is touched (held): the display reads a
  * set's info outside the lock. */
-static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, int h, int filter2d)
+static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, int h, int filter2d,
+                             u64 *lockWait)
 {
     NitroPublishShadow *sh = &sShadow[e];
     int withOver = l->has3d && l->over != NULL, overH = withOver ? OVER_ROWS(l) : 0;
@@ -1584,7 +1586,9 @@ static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, 
         !same_display_state(l, &sLastPublished[e]) || !picture_holds(e, l, w, h)) {
         return 0;
     }
+    u64 lockStart = svcGetSystemTick();
     LightLock_Lock(&sSetLock);
+    *lockWait += svcGetSystemTick() - lockStart;
     {
         LayerSet *best = NULL;
 
@@ -1622,6 +1626,23 @@ static int publish_unchanged(int e, const ComposeLayers *l, Screen *scr, int w, 
     return done;
 }
 
+/* These are elapsed wall ticks, not CPU utilization. The unchanged check is
+ * inclusive of its lock wait; conversion includes cache flushes/preemption.
+ * Aggregate only; never log on the drawer's per-frame path. */
+static void record_publish(int e, int result, u64 wall, u64 check, u64 wait, u64 convert, u64 bg)
+{
+    ComposePublishProfile *p = &sPublishProfile[e];
+    __atomic_fetch_add(&p->wallTicks, wall, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&p->checkTicks, check, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&p->lockWaitTicks, wait, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&p->convertTicks, convert, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&p->bgTicks, bg, __ATOMIC_RELAXED);
+    if (result == 1) __atomic_fetch_add(&p->unchanged, 1u, __ATOMIC_RELAXED);
+    if (result == 2) __atomic_fetch_add(&p->noBuffer, 1u, __ATOMIC_RELAXED);
+    if (result == 3) __atomic_fetch_add(&p->invalid, 1u, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&p->calls, 1u, __ATOMIC_RELAXED);
+}
+
 int NitroPort_ComposePublish(int engine, int screen)
 {
     int e = engine ? 1 : 0, i, buf = -1;
@@ -1629,12 +1650,14 @@ int NitroPort_ComposePublish(int engine, int screen)
     ComposeLayers *l = &sWork[e];
     LayerSet *set;
     u64 start = svcGetSystemTick();
+    u64 check = 0, lockWait = 0, convert = 0, bg = 0, t;
     int w = l->width > 0 ? l->width : DS_W;
     int h = l->height > DS_H ? l->height : DS_H;
     int filter2d;
 
     if (!sReady || w > CANVAS_MAX || w * scr->texScale > scr->texW || w * h > WORK_PIXELS ||
         h * scr->texScale + 8 > scr->texH) {
+        record_publish(e, 3, svcGetSystemTick() - start, 0, 0, 0, 0);
         return 1;
     }
     /* (one read: the whole picture is made with this filter, and the frame
@@ -1643,14 +1666,20 @@ int NitroPort_ComposePublish(int engine, int screen)
     /* A picture already in one of the screen's textures (a fade publishes
      * the same layers again for its MASTER_BRIGHT): the set needs only the
      * new display state, no conversion, tiling or flush. */
-    if (!l->displayOff && publish_unchanged(e, l, scr, w, h, filter2d)) {
+    t = svcGetSystemTick();
+    int unchanged = !l->displayOff && publish_unchanged(e, l, scr, w, h, filter2d, &lockWait);
+    check = svcGetSystemTick() - t;
+    if (unchanged) {
         __atomic_fetch_add(&sPublished, 1u, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sPublishTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
+        record_publish(e, 1, svcGetSystemTick() - start, check, lockWait, 0, 0);
         return 1;
     }
     /* The oldest set not held by the compositor, not the newest, and not
      * being written. */
+    t = svcGetSystemTick();
     LightLock_Lock(&sSetLock);
+    lockWait += svcGetSystemTick() - t;
     {
         uint32_t newest = 0;
 
@@ -1680,6 +1709,7 @@ int NitroPort_ComposePublish(int engine, int screen)
         /* (both engines publishing to one screen as they swap; or one set
          * drawn by the GPU, one by the frame being built, the third the
          * newest: the caller draws it all again next time) */
+        record_publish(e, 2, svcGetSystemTick() - start, check, lockWait, 0, 0);
         return 0;
     }
     set = &scr->set[buf];
@@ -1700,6 +1730,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     if (!l->displayOff && l->has3d && l->over) {
         over_rows(l->over, w, OVER_ROWS(l), &set->overTop, &set->overBottom);
     }
+    t = svcGetSystemTick();
     if (!l->displayOff && filter2d != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         /* over_rows() has already emptied overBottom when the front layer
          * has nothing in it: the texture is not rescaled or uploaded then
@@ -1717,10 +1748,12 @@ int NitroPort_ComposePublish(int engine, int screen)
             publish_whole(e, l, scr, set, w, h);
         }
     }
+    convert = svcGetSystemTick() - t;
     /* Taken BG pictures, when the set doesn't hold one yet (made by the
      * drawer as it read the game's state: l->gpuBgPicture[s]). 256x256
      * maps upload doubled (2x2 texels a pixel); bigger maps upload 1:1 --
      * all fit the 512x512 texture. Slots upload independently. */
+    t = svcGetSystemTick();
     if (!l->displayOff) {
         int s;
 
@@ -1769,7 +1802,10 @@ int NitroPort_ComposePublish(int engine, int screen)
             set->objAtlasValid = 1;
         }
     }
+    bg = svcGetSystemTick() - t;
+    t = svcGetSystemTick();
     LightLock_Lock(&sSetLock);
+    lockWait += svcGetSystemTick() - t;
     set->writing = 0;
     set->seq = ++sSeq;
     LightLock_Unlock(&sSetLock);
@@ -1777,6 +1813,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     sLastPublishedValid[e] = 1;
     __atomic_fetch_add(&sPublished, 1u, __ATOMIC_RELAXED);
     __atomic_fetch_add(&sPublishTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
+    record_publish(e, 0, svcGetSystemTick() - start, check, lockWait, convert, bg);
     return 1;
 }
 
@@ -4133,6 +4170,18 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->cpuTicks = sCpuTicks;
     stats->published = __atomic_load_n(&sPublished, __ATOMIC_RELAXED);
     stats->publishTicks = __atomic_load_n(&sPublishTicks, __ATOMIC_RELAXED);
+    for (int e = 0; e < 2; e++) {
+        ComposePublishProfile *dst = &stats->publish[e], *src = &sPublishProfile[e];
+        dst->calls = __atomic_load_n(&src->calls, __ATOMIC_RELAXED);
+        dst->unchanged = __atomic_load_n(&src->unchanged, __ATOMIC_RELAXED);
+        dst->noBuffer = __atomic_load_n(&src->noBuffer, __ATOMIC_RELAXED);
+        dst->invalid = __atomic_load_n(&src->invalid, __ATOMIC_RELAXED);
+        dst->wallTicks = __atomic_load_n(&src->wallTicks, __ATOMIC_RELAXED);
+        dst->checkTicks = __atomic_load_n(&src->checkTicks, __ATOMIC_RELAXED);
+        dst->lockWaitTicks = __atomic_load_n(&src->lockWaitTicks, __ATOMIC_RELAXED);
+        dst->convertTicks = __atomic_load_n(&src->convertTicks, __ATOMIC_RELAXED);
+        dst->bgTicks = __atomic_load_n(&src->bgTicks, __ATOMIC_RELAXED);
+    }
     stats->bgFullUploads = __atomic_load_n(&sBgFullUploads, __ATOMIC_RELAXED);
     stats->bgDeltaUpdates = __atomic_load_n(&sBgDeltaUpdates, __ATOMIC_RELAXED);
     stats->bgDirtyTiles = __atomic_load_n(&sBgDirtyTiles, __ATOMIC_RELAXED);

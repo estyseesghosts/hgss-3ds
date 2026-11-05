@@ -338,6 +338,11 @@ int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial);
  * from a scene's making to its showing (lag), of the 3D frames (timed)
  * how many were late, the scenes never shown (overtaken), and the frames
  * drawn in stereo. Counts since the start. */
+typedef struct ComposePublishProfile {
+    u32 calls, unchanged, noBuffer, invalid;
+    u64 wallTicks, checkTicks, lockWaitTicks, convertTicks, bgTicks;
+} ComposePublishProfile;
+
 typedef struct ComposeStats {
     u32 frames, published, timed, late, dropped, stereo;
     u32 underFills;          /* screens drawn whose picture behind the 3D was all one colour (the clear) */
@@ -349,6 +354,7 @@ typedef struct ComposeStats {
     u32 midLate;             /* of them, late for their V-blank (shown at their scene's, or left out) */
     u64 gpuTicks, cpuTicks, publishTicks;
     u32 bgFullUploads, bgDeltaUpdates, bgDirtyTiles, bgFlushedBytes;
+    ComposePublishProfile publish[2]; /* per engine; wall time includes preemption */
     int lag;
 } ComposeStats;
 void NitroPort_ComposeStats(ComposeStats *stats);

@@ -1299,6 +1299,7 @@ static u32 sPerfAudioDropped;
 static u32 sPerfAudioFrames;
 /* Slice A: the 2D draw profile baselines (NitroPort_Render2DProfile). */
 static NitroRender2DProfile sPerf2d[2];
+static ComposePublishProfile sPerfPublish[2];
 /* Slice S4: H-blank attribution baselines (cumulative counters only; the
  * per-IRQ-bit table is last-walk state and is read as-is). */
 static u64 sPerfSyncCalls, sPerfSyncTicks, sPerfPumpTicks;
@@ -1377,6 +1378,7 @@ static void PerfLog(u64 now)
         sPerfGeometry.wakeups = wakeups;
         NitroPort_Render2DProfile(0, &sPerf2d[0]);
         NitroPort_Render2DProfile(1, &sPerf2d[1]);
+        memcpy(sPerfPublish, st.publish, sizeof(sPerfPublish));
         for (i = 0; i < sDrawerCount; i++) {
             Drawer *d = &sDrawers[i];
 
@@ -1394,6 +1396,21 @@ static void PerfLog(u64 now)
     if (seconds < 0.001) {
         seconds = 0.001;   /* (a clock that did not move: no huge rates) */
     }
+
+    for (i = 0; i < 2; i++) {
+        const ComposePublishProfile *p = &st.publish[i], *last = &sPerfPublish[i];
+        u32 calls = p->calls - last->calls;
+        NitroPort_Log("[perf] publish-%c wall/call %.2f ms, check %.2f, lockwait %.2f, "
+                      "convert+flush %.2f, bg+obj %.2f; calls %u reuse %u no-buffer %u invalid %u (wall, check includes wait)",
+                      'A' + i, PerfMsPer(p->wallTicks - last->wallTicks, calls),
+                      PerfMsPer(p->checkTicks - last->checkTicks, calls),
+                      PerfMsPer(p->lockWaitTicks - last->lockWaitTicks, calls),
+                      PerfMsPer(p->convertTicks - last->convertTicks, calls),
+                      PerfMsPer(p->bgTicks - last->bgTicks, calls), (unsigned)calls,
+                      (unsigned)(p->unchanged - last->unchanged), (unsigned)(p->noBuffer - last->noBuffer),
+                      (unsigned)(p->invalid - last->invalid));
+    }
+    memcpy(sPerfPublish, st.publish, sizeof(sPerfPublish));
 
     {
         u32 frames = st.frames - sPerfDisplay.frames;
