@@ -98,7 +98,7 @@ typedef struct SplitReuse {
     u16 *under, *over;
     u8 *alpha;
     u32 small, vram, mask, scroll[4];
-    int valid;
+    int valid, flat;
 } SplitReuse;
 static SplitReuse sSplitReuse[2];
 static u32 sCommittedTextOnly[2];
@@ -4922,8 +4922,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             }
         }
     }
-    /* The first reuse slice is deliberately field-only: every displayed 2D
-     * BG must have actually committed as text, with no sprites, windows or
+    /* The reuse slice is deliberately field-only: every displayed 2D BG must
+     * have committed as text or been proven transparent, with no sprites, windows or
      * per-line effects. Mixed regions and affine takes keep the full renderer.
      * Re-run all setup/validation/quad emission above even on reuse: scroll can
      * affect layout eligibility, and fresh metadata must reach the compositor. */
@@ -4932,7 +4932,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         sCommittedTextOnly[pe] = committedText;
         if ((e->reusePixels & R2D_TRY_FLAT) && e->height == H && e->top == 0 &&
             !(bldcnt & 0x20) && split->over != NULL) {
-            /* All 2D layers are actual GPU takes, not nominations. Each CPU
+            /* Every nontransparent 2D layer is an actual GPU take, not a
+             * nomination. Each CPU
              * row therefore has t.filled == 0 (untaken text maps have just
              * been proven transparent): SnapshotOver clears over and
              * leaves its unused alpha alone; resolve writes the backdrop.
@@ -4941,10 +4942,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
              * 192 row setups, OBJ/priority walks, clears and timed finishes.
              * Refill on EVERY call: content changes and new buffers are safe;
              * there is no new unchanged-memory or writer-coverage assumption. */
-            Fill(out, backdrop, width * H);
-            memset(split->over, 0, (size_t)width * H * sizeof(u16));
-            split->scroll3dLines = 0;
-            return;
+             Fill(out, backdrop, width * H);
+             memset(split->over, 0, (size_t)width * H * sizeof(u16));
+             split->scroll3dLines = 0;
+             sSplitReuse[pe].flat = 1;
+             return;
         }
         if ((e->reusePixels & ~R2D_TRY_FLAT) == committedText) {
             split->scroll3dLines = 0;
@@ -5577,6 +5579,7 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePix
     /* Invalidate before all early returns, including display-off/forced blank.
      * Forced draws also establish a new record, never inherit a stale one. */
     sSplitReuse[engine ? 1 : 0].valid = 0;
+    sSplitReuse[engine ? 1 : 0].flat = 0;
     sCommittedTextOnly[engine ? 1 : 0] = 0;
     sSplitPictureSerial[engine ? 1 : 0]++;
     SetUpEngine(&e, engine, split);
@@ -6465,6 +6468,13 @@ static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *spli
     r->over = split->over;
     r->alpha = split->overAlpha;
     r->mask = mask;
+    if (r->flat) {
+        /* The next call will freshly validate/resolve this picture, NOT
+         * reuse its pixels or infer that VRAM is unchanged. No full-VRAM
+         * signature is needed to certify an unchanged-memory claim here. */
+        r->valid = 1;
+        return;
+    }
     r->small = (EngineSmallSignature(e, snapshot, mask) * 31u) ^ layout;
     r->vram = EngineVramSignature(e, io);
     for (int bg = 1; bg < 4; bg++) {
@@ -6500,6 +6510,14 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     int force = r->valid || last[e].serial != sSplitPictureSerial[e];
     u32 small, vram;
 
+    if (r->valid && r->flat) {
+        /* Always rebuild current metadata and refill the software planes.
+         * New text, OAM, layout, windows, effects or buffer identities go
+         * through the full current validators; if flat admission fails the
+         * normal scanlines run. Never skip using last frame's emptiness. */
+        Render(engine, under, split, R2D_TRY_FLAT);
+        return 1;
+    }
     if (r->valid && r->under == under && r->over == split->over && r->alpha == split->overAlpha) {
         const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
         u32 candidate = (EngineSmallSignature(e, split->snapshot, r->mask) * 31u) ^

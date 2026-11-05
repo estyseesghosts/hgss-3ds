@@ -2,6 +2,8 @@
  * so existing line counters can prove CPU pixel work was skipped without a
  * production test API. External services below have no game/art/3D image. */
 #include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include RENDER_SOURCE
 
 _Static_assert(sizeof(u32) == 4 && sizeof(s32) == 4, "DS register widths");
@@ -142,7 +144,7 @@ static void sequence_case(int snapshot, int mapSize)
             CHECK(quad->u2 == quad->u1 && quad->v2 == v);
         }
         candidate = layout(over, alpha); candidate.snapshot = snapshot;
-        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &candidate) == 0);
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &candidate) == 1);
         CHECK(sProfile[0].lines == lines);
     }
     /* A fresh full render must produce the exact same canonical final UVs. */
@@ -159,7 +161,9 @@ static void fallback_case(enum Change change)
 {
     reset(1);
     NitroRender2DSplit initial = layout(over, alpha);
-    NitroPort_Render2DSplit(0, under, &initial);
+    /* Establish the freshly resolved flat path before every invalidation:
+     * each change must be revalidated, never trusted from the previous frame. */
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &initial) == 1);
     unsigned lines = sProfile[0].lines;
     NitroRender2DSplit candidate = layout(over, alpha);
     int engine = 0;
@@ -344,11 +348,13 @@ static void empty_front_bg_case(int snapshot, int bpp8, int size)
     wr16(14, (3 << 8) | (2 << 2) | size | (bpp8 ? 0x80 : 0));
     /* Larger maps must not overlap the two nonempty field maps. */
     memset(NitroPort_BgVram + 0x1800, 0, 0x2000);
-    for (int phase = 0; phase < 5; phase++) {
+    for (int phase = 0; phase < 7; phase++) {
         if (phase == 1) NitroPort_BgVram[0x1800] = 1; /* still a zero tile */
         if (phase == 2) NitroPort_BgVram[0x8000 + (bpp8 ? 64 : 32)] = 0x11;
         if (phase == 3) NitroPort_BgVram[0x8000 + (bpp8 ? 64 : 32)] = 0;
         if (phase == 4) NitroPort_BgVram[0x1800] = 0;
+        if (phase == 5) NitroPort_BgVram[0x8000] = 0x11; /* tile zero is NOT inherently empty */
+        if (phase == 6) NitroPort_BgVram[0x8000] = 0;
         wr16(0x14, phase * 7); wr16(0x18, phase * 11);
         NitroPort_Render2DTakeState(0);
         NitroRender2DSplit field = layout(over, alpha);
@@ -359,7 +365,7 @@ static void empty_front_bg_case(int snapshot, int bpp8, int size)
         unsigned lines = sProfile[0].lines;
         CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
         CHECK(field.nGpuQuads == 2);
-        CHECK(phase == 2 ? sProfile[0].lines > lines : sProfile[0].lines == lines);
+        CHECK(phase == 2 || phase == 5 ? sProfile[0].lines > lines : sProfile[0].lines == lines);
         NitroRender2DSplit ref = layout(refOver, refAlpha);
         ref.snapshot = snapshot;
         ref.anchorWindows = 1;
@@ -371,6 +377,36 @@ static void empty_front_bg_case(int snapshot, int bpp8, int size)
         CHECK(field.nGpuQuads == ref.nGpuQuads);
         CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
     }
+}
+
+static void flat_no_full_vram_hash_case(void)
+{
+    reset(1);
+    NitroRender2DSplit field = layout(over, alpha);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
+    unsigned lines = sProfile[0].lines;
+    u64 key = field.gpuBgKey[0];
+    /* Active maps/tiles remain readable. A full EngineVramSignature or
+     * RememberSplit hash would touch this unused page and fault. This tests
+     * actual reads, not a source-string assertion or a production counter. */
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    uintptr_t address = ((uintptr_t)(NitroPort_BgVram + 0x60000) + page - 1) & ~(uintptr_t)(page - 1);
+    CHECK(address + page <= (uintptr_t)(NitroPort_BgVram + sizeof(NitroPort_BgVram)));
+    CHECK(mprotect((void *)address, page, PROT_NONE) == 0);
+    NitroPort_BgVram[32] ^= 1; /* GPU picture content must still refresh */
+    wr16(0x14, 13); wr16(0x18, 29);
+    field = layout(over, alpha);
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
+    CHECK(sProfile[0].lines == lines);
+    CHECK(field.gpuBgKey[0] != key);
+    CHECK(mprotect((void *)address, page, PROT_READ | PROT_WRITE) == 0);
+    NitroRender2DSplit ref = layout(refOver, refAlpha);
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+    CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+    CHECK(field.nGpuQuads == ref.nGpuQuads);
+    CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
+    CHECK(memcmp(field.gpuBgKey, ref.gpuBgKey, sizeof(ref.gpuBgKey)) == 0);
 }
 
 static void load_capture(const char *dir, const char *name, void *out, size_t n)
@@ -438,6 +474,7 @@ int main(int argc, char **argv)
             empty_front_bg_case(snapshot, bpp8, 0xC000);
         }
     }
+    flat_no_full_vram_hash_case();
     if (argc == 2) captured_field_case(argv[1]);
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;
