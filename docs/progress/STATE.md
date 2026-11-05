@@ -1,5 +1,11 @@
 # Current state
 
+**Latest candidate (2026-11-04): `b93c6ad` — W3 live-field work avoidance and W4
+exact matrix optimizations.** Both native builds and final Azahar field/title
+smokes pass; artifacts are staged. Real Old 3DS improvement, the 16-ms geometry
+budget and full W3/W4 closure remain pending. See the dated W3/W4 entry below;
+the older verification tables are historical, not newly rerun host32/DS gates.
+
 Last verified: **2026-11-03 (session 19: Old 3DS performance waves W0-W2)**, natively on macOS
 (`DEVKITPRO=/opt/devkitpro`, venv `/Users/terezi/hgss/bin/python`), with the tree at **86 patches**
 (`NitroSDK` 16, `NitroSystem` 4, `pokeheartgold` 64). The last container run was 2026-11-02
@@ -363,11 +369,29 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - **bcad322 + 2013709 + fe8e7d1 (W4):** checked sparse clip-matrix product (24 vs 64
   products, general fallback) and no invalidation for texture/PUSH/STORE commands
   that cannot change clip/vector results; exact 4/5 view scaling avoids the
-  default wide view's per-row 64-bit divisions. **740216 numerical/invalidation checks
+  default wide view's per-row 64-bit divisions. **740217 numerical/invalidation checks
   pass**, including ASan/UBSan. No geometry rejection/order/shader changes.
 - Native suite **462 tests**, no assertion failures, **11 known toolchain
-  errors**, 13 skips; patch check **86/86**. Final clean builds/emulator smoke
-  in progress; do not deploy intermediate artifacts.
+  errors**, 13 skips; patch check **86/86**. Clean **b93c6ad** HG/SS builds each
+  **1092/1092**, linked, fresh SDK archives, `validate_3dsx []`.
+- Extended **1dc11dc** Azahar suite completed SS Goldenrod Old/New (5400),
+  HG Old intro/title (6600), HG New new-game-to-bedroom (19800), no logged
+  assertions/exceptions. Final **b93c6ad** separately completes SS Old/New
+  Goldenrod (5400) and HG Old intro/title (6600), no logged assertions/exceptions.
+  Both final field runs show **0 CPU scanlines and 0 row copies** at 5400.
+  The final Old-profile captured bytes also pass the **1438-check** renderer
+  fixture under ASan/UBSan. Ho-oh and field/lower UI inspected; no full golden
+  comparison claimed. Emulator saves/scripts/config restored byte-for-byte,
+  no test emulator left running. DSP audio and APT lifecycle remain untested.
+- **Staged clean pair `b93c6ad`**, final game sources unchanged by later
+  test-only saturation coverage (`7cf4761`). Binaries/sidecars in the normal
+  `dist` destinations and `~/hgss-private/sd-card/3ds/`; old binaries and frozen
+  inputs preserved. Candidate for a matched hardware measurement, not a proven
+  speedup or completed wave:
+  - HG `pokeheartgold-b93c6ad.3dsx`, **5,804,288 B**, SHA-256
+    `c904edb23f3d2d1796aaf8ba4fdd7f0f954c86e8044a9494ef54c3180dc25645`.
+  - SS `pokesoulsilver-b93c6ad.3dsx`, **5,804,344 B**, SHA-256
+    `e8c779a751fab4d410dfb7abc25414cd775748ffb3368047a4af3c349e2ff921`.
 - The established flat path now freshly revalidates/resolves each call instead
   of scanning whole VRAM for unchanged pixels. A protected-page test proves the
   full-region reads are absent, including after GPU tile writes and scrolling.

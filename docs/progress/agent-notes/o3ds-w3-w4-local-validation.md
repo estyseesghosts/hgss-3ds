@@ -93,7 +93,7 @@ All other ratios keep the original 64-bit path. The shell explicitly requests
 the 320-wide geometry view, so this is a real default-path operation, not a
 scene-name guess or an approximation to projection math.
 
-Actual translator fixture: **740216 checks pass**, also ASan/UBSan. It compares
+Actual translator fixture: **740217 checks pass**, also ASan/UBSan. It compares
 20,000 matrices with an independent scalar reference, including every sparse
 guard violation, both aliases, signs, saturation, perspective and orthographic
 shapes; checks full-range/random/boundary view scaling against the original
@@ -104,6 +104,39 @@ preceding source. A host-only 500,000-product microbenchmark gives roughly
 **3.2 ms general vs 2.2 ms specialized**, with identical checksums. This is ONLY
 the matrix kernel on the Mac, not 3DS geometry CPU time or a scene-rate claim.
 
+Test-only follow-up **7cf4761** forces genuinely saturated matrix outputs
+(larger operands with all sums still inside signed 64-bit range), and asserts
+that saturation actually occurred. The release game sources are unchanged.
+ARM disassembly (`build/w3-w4-release-validation/scale-view-arm.txt`) confirms
+the 4/5 branch uses UMULL/remainder/table lookup and returns without calling
+`__aeabi_ldivmod`; only the general-ratio fallback calls that helper.
+
+### Extended emulator checks
+
+The pre-final-scaling build **1dc11dc** completed all four serial scenarios:
+
+| Game/profile | Script | Last checked log frame | Visual observation |
+| --- | --- | ---: | --- |
+| SS / Old | frozen Goldenrod | 5400 | field and lower menu present; zero scanlines in static interval |
+| SS / New | frozen Goldenrod | 5400 | field and lower menu present |
+| HG / Old | boot-title | 6600 | Ho-oh/title, no camera-plane fan |
+| HG / New | newgame-buttons, emulator-only save removed/restored | 19800 | Oak/dialogue/naming sequence reaches bedroom |
+
+No assertions/exceptions were found in those logs. These are functional/visual
+smokes, not full golden comparisons or hardware performance claims. The final
+**b93c6ad** artifacts add the independently bit-exact view-scaling optimization;
+their field/title smoke matrix completed separately under `build/w3-w4-release-*`:
+SS Old/New Goldenrod to 5400, HG Old intro/title to 6600. Both final field
+profiles show zero CPU scanlines/row copies in the static 5400 interval; their
+field/lower UI and the title's Ho-oh were inspected. No logged assertions or
+exceptions. Final Old-profile capture replay passes **1438 checks**, including
+ASan/UBSan. Do not conflate the two binary identities or call screenshots with
+different animation phases a pixel-exact golden comparison.
+
+All final probe saves, script files and configuration were checked restored
+byte-for-byte; no test-owned emulator remains running. No save round-trip,
+DSP playback, HOME/sleep or actual hardware regression is claimed by these runs.
+
 ## Validation procedure and remaining gates
 
 - Native toolchain only: devkitPro/devkitARM, no Docker or new dependencies.
@@ -111,9 +144,10 @@ the matrix kernel on the Mac, not 3DS geometry CPU time or a scene-rate claim.
   toolchain errors**, 13 skips. `check_patches.py`: **86/86**, 0 missing.
 - Renderer and geometry standalone harnesses pass ASan/UBSan; log/capture replay
   paths are under `build/` and are private local data, not new goldens.
-- Fresh-archive final HG/SS build identities/hashes and final emulator smoke are
-  recorded in STATE once complete. No intermediate or dirty candidate is a
-  hardware recommendation.
+- Fresh-output final HG/SS build **b93c6ad**: both **1092/1092 compiled, 0 failed**,
+  clean links, fresh SDK archives, `validate_3dsx []`. Final emulator smoke and
+  staging/full hashes are recorded in STATE. Only the versioned b93c6ad pair
+  is the new hardware candidate, never an intermediate/dirty build.
 - Azahar must be launched via `open -W -n <Azahar.app> --args <binary>`: direct
   execution presents its terminal-launch warning and blocks before boot. RPC is
   enabled in the existing config. The probe has a 90-second boot deadline.
