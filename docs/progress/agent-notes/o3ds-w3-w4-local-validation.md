@@ -85,10 +85,20 @@ position×projection result. They cannot change position/projection/vector resul
 their own matrix/stack operations still execute. POP/RESTORE and actual matrix
 mutations retain invalidation, and an already-dirty result is never cleared.
 
-Actual translator fixture: **180192 checks pass**, also ASan/UBSan. It compares
+**fe8e7d1:** the shipped 256/320 wide-view scale (and 192/240 tall scale)
+uses an exact unsigned quotient/remainder 4/5 calculation rather than signed
+64-bit multiplication/division for each matrix row. It handles INT32_MIN
+without signed absolute-value overflow; fifths never hit a rounding half.
+All other ratios keep the original 64-bit path. The shell explicitly requests
+the 320-wide geometry view, so this is a real default-path operation, not a
+scene-name guess or an approximation to projection math.
+
+Actual translator fixture: **740216 checks pass**, also ASan/UBSan. It compares
 20,000 matrices with an independent scalar reference, including every sparse
 guard violation, both aliases, signs, saturation, perspective and orthographic
-shapes; tests mutation/invalidation across all four matrix modes and stack/load/
+shapes; checks full-range/random/boundary view scaling against the original
+64-bit formula and the actual wide/tall `ensure_clip` outputs; tests mutation/
+invalidation across all four matrix modes and stack/load/
 multiply/scale/translate commands. The invalidation extension fails against the
 preceding source. A host-only 500,000-product microbenchmark gives roughly
 **3.2 ms general vs 2.2 ms specialized**, with identical checksums. This is ONLY

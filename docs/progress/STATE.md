@@ -360,9 +360,10 @@ Newest first. Each entry: what changed, what was run, what it proved.
   Captured-state replay is pixel/metadata exact versus forced full rendering.
   **1428 synthetic renderer checks**, plus **10 private capture checks**, pass;
   sanitizer runs pass. Emulator rate is not Old 3DS performance evidence.
-- **bcad322 + 2013709 (W4):** checked sparse clip-matrix product (24 vs 64
+- **bcad322 + 2013709 + fe8e7d1 (W4):** checked sparse clip-matrix product (24 vs 64
   products, general fallback) and no invalidation for texture/PUSH/STORE commands
-  that cannot change clip/vector results. **180192 numerical/invalidation checks
+  that cannot change clip/vector results; exact 4/5 view scaling avoids the
+  default wide view's per-row 64-bit divisions. **740216 numerical/invalidation checks
   pass**, including ASan/UBSan. No geometry rejection/order/shader changes.
 - Native suite **462 tests**, no assertion failures, **11 known toolchain
   errors**, 13 skips; patch check **86/86**. Final clean builds/emulator smoke
