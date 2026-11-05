@@ -55,7 +55,10 @@ class GpuScrollReuseTests(unittest.TestCase):
         subprocess.run([os.environ.get("CC", "cc"), *flags,
                         str(SUPPORT / "fixtures/gpu_scroll_reuse.c"), "-lm", "-o", str(exe)],
                        check=True)
-        subprocess.run([str(exe)], check=True)
+        args = [str(exe)]
+        if os.environ.get("HGSS_RENDER_CAPTURE_DIR"):
+            args.append(os.environ["HGSS_RENDER_CAPTURE_DIR"])
+        subprocess.run(args, check=True)
 
 
 if __name__ == "__main__":

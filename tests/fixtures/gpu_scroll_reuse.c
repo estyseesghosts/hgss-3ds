@@ -373,7 +373,48 @@ static void empty_front_bg_case(int snapshot, int bpp8, int size)
     }
 }
 
-int main(void)
+static void load_capture(const char *dir, const char *name, void *out, size_t n)
+{
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/%s.bin", dir, name);
+    FILE *f = fopen(path, "rb");
+    if (f == NULL || fread(out, 1, n, f) != n) {
+        fprintf(stderr, "cannot read %s\n", path); exit(2);
+    }
+    fclose(f);
+}
+
+static void captured_field_case(const char *dir)
+{
+    reset(1);
+    load_capture(dir, "io", NitroPort_IoReg, sizeof(NitroPort_IoReg));
+    load_capture(dir, "bg", NitroPort_BgVram, sizeof(NitroPort_BgVram));
+    load_capture(dir, "obj", NitroPort_ObjVram, sizeof(NitroPort_ObjVram));
+    load_capture(dir, "oam", NitroPort_Oam, sizeof(NitroPort_Oam));
+    load_capture(dir, "pltt", NitroPort_Pltt, sizeof(NitroPort_Pltt));
+    load_capture(dir, "lcdc", NitroPort_LcdcVram, sizeof(NitroPort_LcdcVram));
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit field = layout(over, alpha);
+    field.snapshot = 1; field.gpuBgs = 14; field.anchorWindows = 1;
+    for (int b = 0; b < 4; b++) field.clip[b] = 1;
+    unsigned lines = sProfile[0].lines;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
+    CHECK(field.nGpuQuads == 2);
+    CHECK(sProfile[0].lines == lines);
+    NitroRender2DSplit ref = layout(refOver, refAlpha);
+    ref.snapshot = 1; ref.gpuBgs = 14; ref.anchorWindows = 1;
+    for (int b = 0; b < 4; b++) ref.clip[b] = 1;
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    CHECK(sProfile[0].lines == lines + 192);
+    CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+    CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+    CHECK(memcmp(alpha, refAlpha, sizeof(alpha)) == 0);
+    CHECK(field.nGpuQuads == ref.nGpuQuads);
+    CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
+    CHECK(memcmp(field.gpuBgKey, ref.gpuBgKey, sizeof(ref.gpuBgKey)) == 0);
+}
+
+int main(int argc, char **argv)
 {
     scroll_case(0, 1, 3, 0, 0, 0);
     scroll_case(1, 0, 0, 7, 11, 0);
@@ -397,6 +438,7 @@ int main(void)
             empty_front_bg_case(snapshot, bpp8, 0xC000);
         }
     }
+    if (argc == 2) captured_field_case(argv[1]);
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }
