@@ -634,6 +634,43 @@ static void front_band_capacity_case(void)
     CHECK(memcmp(over, refOver, sizeof(over)) == 0);
 }
 
+static void text_row_width_case(void)
+{
+    static const int rows[] = {0, 1, 7, 8, 127, 255, 256, 511};
+    reset(0);
+    /* Deterministic nontrivial maps, tile flips and both palette formats. */
+    for (unsigned i = 0; i < sizeof(NitroPort_DbBgVram); i++)
+        NitroPort_DbBgVram[i] = (u8)((i * 37u + (i >> 3) * 11u + 19u) & 255u);
+    for (unsigned i = 0; i < 0x400; i++)
+        NitroPort_Pltt[0x400 + i] = (u8)((i * 29u + 7u) & 255u);
+    wr32(0x1000, 0x10000 | 0x100);
+    for (int snapshot = 0; snapshot < 2; snapshot++) {
+        NitroPort_Render2DTakeState(1);
+        NitroRender2DSplit s = layout(over, alpha);
+        s.snapshot = snapshot;
+        Engine e;
+        SetUpEngine(&e, 1, &s);
+        u32 dispcnt = Rd32(e.io, 0);
+        for (int size = 0; size < 4; size++) {
+            for (int bpp = 0; bpp < 2; bpp++) {
+                u16 cnt = (u16)((size << 14) | (bpp << 7) | (7 << 8) | (2 << 2));
+                for (unsigned r = 0; r < sizeof(rows) / sizeof(rows[0]); r++) {
+                    int ty = rows[r] & (sTextSizes[size][1] - 1);
+                    u64 key = 0x98760000u + (u64)(snapshot * 0x100 + size * 0x20 + bpp * 0x10 + r);
+                    const u16 *cached = TextRowCached(&e, 1, 0, key, ty, cnt, dispcnt);
+                    CHECK(cached != NULL);
+                    if (!cached) continue;
+                    for (int x = 0; x < 512; x++)
+                        CHECK(cached[x] == TextBgPixel(&e, 0, cnt, dispcnt, x, ty));
+                    if (sTextSizes[size][0] == 256)
+                        CHECK(memcmp(cached, cached + 256, 256 * sizeof(*cached)) == 0);
+                    CHECK(TextRowCached(&e, 1, 0, key, ty, cnt, dispcnt) == cached);
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     vram_signature_case();
@@ -666,6 +703,7 @@ int main(int argc, char **argv)
     front_band_case(0);
     front_band_case(1);
     front_band_capacity_case();
+    text_row_width_case();
     if (argc == 2) captured_field_case(argv[1]);
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;

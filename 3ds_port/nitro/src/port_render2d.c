@@ -2837,8 +2837,14 @@ static const u16 *TextRowCached(const Engine *e, int pe, int bg, u64 key, int ty
         sProfile[pe].rowHits++;
         return slot->px;
     }
-    for (i = 0; i < 512; i++) {
+    int mapW = sTextSizes[bgcnt >> 14][0];
+    for (i = 0; i < mapW; i++) {
         slot->px[i] = TextBgPixel(e, bg, bgcnt, dispcnt, i, ty);
+    }
+    /* TextBgPixel wraps mapx by mapW. For a 256-wide map its second
+     * 256 pixels are exactly the first half, including flips and palette. */
+    if (mapW == 256) {
+        memcpy(slot->px + 256, slot->px, 256 * sizeof(slot->px[0]));
     }
     slot->key = key;
     slot->ty = (u16)ty;
