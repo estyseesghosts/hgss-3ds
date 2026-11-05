@@ -4567,6 +4567,12 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         if (fixedWidth == 0) {
             LookUpObjArt(e, objFrame, dispcnt, -1);
         }
+    } else {
+        /* ObjFrame persists between scenes. Without OBJ display SortObjs
+         * doesn't run: discard its old entries before GPU region/atlas
+         * selection and empty-picture admission consult the current count.
+         * OAM need not be cleared when the game disables OBJ rendering. */
+        objFrame->count = 0;
     }
     /* S5/S6 bundle commit: OBJ takes, the region rule, kind masking and
      * quad emission. Runs when takes are possible; the region rule decides
