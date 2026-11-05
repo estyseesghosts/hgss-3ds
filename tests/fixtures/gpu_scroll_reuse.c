@@ -335,6 +335,44 @@ static void disabled_obj_transition_case(int mode, int snapshot)
     CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
 }
 
+static void empty_front_bg_case(int snapshot, int bpp8, int size)
+{
+    reset(1);
+    wr32(0, Rd32(NitroPort_IoReg, 0) | 0x800u);
+    /* Goldenrod's topology: BG1/BG2 behind 3D, BG3 in front, only two
+     * GPU picture slots. Its separate font map/tiles initially draw nothing. */
+    wr16(14, (3 << 8) | (2 << 2) | size | (bpp8 ? 0x80 : 0));
+    /* Larger maps must not overlap the two nonempty field maps. */
+    memset(NitroPort_BgVram + 0x1800, 0, 0x2000);
+    for (int phase = 0; phase < 5; phase++) {
+        if (phase == 1) NitroPort_BgVram[0x1800] = 1; /* still a zero tile */
+        if (phase == 2) NitroPort_BgVram[0x8000 + (bpp8 ? 64 : 32)] = 0x11;
+        if (phase == 3) NitroPort_BgVram[0x8000 + (bpp8 ? 64 : 32)] = 0;
+        if (phase == 4) NitroPort_BgVram[0x1800] = 0;
+        wr16(0x14, phase * 7); wr16(0x18, phase * 11);
+        NitroPort_Render2DTakeState(0);
+        NitroRender2DSplit field = layout(over, alpha);
+        field.snapshot = snapshot;
+        field.anchorWindows = 1;
+        for (int b = 0; b < 4; b++) field.clip[b] = 1;
+        memcpy(refAlpha, alpha, sizeof(alpha));
+        unsigned lines = sProfile[0].lines;
+        CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
+        CHECK(field.nGpuQuads == 2);
+        CHECK(phase == 2 ? sProfile[0].lines > lines : sProfile[0].lines == lines);
+        NitroRender2DSplit ref = layout(refOver, refAlpha);
+        ref.snapshot = snapshot;
+        ref.anchorWindows = 1;
+        for (int b = 0; b < 4; b++) ref.clip[b] = 1;
+        NitroPort_Render2DSplit(0, refUnder, &ref);
+        CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+        CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+        CHECK(memcmp(alpha, refAlpha, sizeof(alpha)) == 0);
+        CHECK(field.nGpuQuads == ref.nGpuQuads);
+        CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
+    }
+}
+
 int main(void)
 {
     scroll_case(0, 1, 3, 0, 0, 0);
@@ -354,6 +392,10 @@ int main(void)
         disabled_obj_transition_case(0, snapshot);
         disabled_obj_transition_case(1, snapshot);
         disabled_obj_transition_case(2, snapshot);
+        for (int bpp8 = 0; bpp8 < 2; bpp8++) {
+            empty_front_bg_case(snapshot, bpp8, 0);
+            empty_front_bg_case(snapshot, bpp8, 0xC000);
+        }
     }
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;

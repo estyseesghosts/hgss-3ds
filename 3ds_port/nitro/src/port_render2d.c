@@ -974,7 +974,7 @@ static void DecideSplits(Engine *e, const int *kind, const u16 *bgcnt, u32 dispc
  * behind the panel). Beside a party list's panels and a
  * summary's boxes, the bands were black (nothing there: the backdrop),
  * 2026-10-15. */
-static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt)
+static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 dispcnt, u32 emptyText)
 {
     int bg, side;
 
@@ -984,7 +984,7 @@ static void DecideBandFills(Engine *e, const int *kind, const u16 *bgcnt, u32 di
         u8 edge[2][HMAX];   /* the BG has something at its edge, not plain */
 
         e->bandFills[bg] = 0;
-        if (e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg] ||
+        if ((emptyText & (1u << bg)) || e->width <= W || kind[bg] != BG_TEXT || !e->clip[bg] || e->art[bg] != NULL || e->split[bg] ||
             ((e->partBgs >> bg) & 1)) {
             continue;
         }
@@ -2713,6 +2713,30 @@ static u64 BgKey(const Engine *e, int bg, int kind, u16 bgcnt, u32 dispcnt)
     return BgKeyT(e, bg, kind, bgcnt, dispcnt, 0);
 }
 
+/* Prove a plain text map transparent from CURRENT bytes, not a dirty flag or
+ * a previously empty picture. Index zero is transparent in both tile formats,
+ * regardless of palette/flip/scroll. Visit each referenced tile once; do not
+ * assume that an empty map entry means its tile zero is empty too. The caller
+ * excludes artwork/parts/windows that could add pixels outside these tiles. */
+static int TextBgTransparent(const Engine *e, u16 bgcnt, u32 dispcnt)
+{
+    u32 seen[32] = {0};
+    u32 screen = ScreenBase(e, bgcnt, dispcnt), chars = CharBase(e, bgcnt, dispcnt);
+    u32 entries = (u32)(sTextSizes[bgcnt >> 14][0] / 8) * (u32)(sTextSizes[bgcnt >> 14][1] / 8);
+    u32 bytes = (bgcnt & 0x80) ? 64 : 32;
+
+    for (u32 i = 0; i < entries; i++) {
+        u32 tile = Rd16(e->bgVram, (screen + i * 2) & e->bgMask) & 0x3FFu;
+        u32 bit = 1u << (tile & 31);
+        if (seen[tile >> 5] & bit) continue;
+        seen[tile >> 5] |= bit;
+        for (u32 k = 0; k < bytes; k += 4) {
+            if (Rd32(e->bgVram, (chars + tile * bytes + k) & e->bgMask)) return 0;
+        }
+    }
+    return 1;
+}
+
 /* BgKey for drawing, worked out again only when what it reads changed
  * (QuickAdd's hash of it differs): FNV-1a's 64-bit multiply a byte took a
  * sixth of drawing the opening's screens with pictures, every frame. Each
@@ -4370,6 +4394,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     int pe = e->isA ? 0 : 1;
     NitroRender2DProfile *prof = &sProfile[pe];
     u64 frameKey[4];
+    u32 emptyText = 0;
     u64 tSetup = R2D_NOW();
 
     if (eva > 16) {
@@ -4410,7 +4435,18 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
             DecideSplits(e, kind, bgcnt, dispcnt);
             LookUpArt(e, kind, bgcnt, dispcnt, frameKey);
         }
-        DecideBandFills(e, kind, bgcnt, dispcnt);
+        if (e->reusePixels && split != NULL && split->gpuBgs && e->isA &&
+            (dispcnt & 0x108) == 0x108 && !(dispcnt & 0xE000) && e->lines == NULL &&
+            e->height == H && e->top == 0 && !e->circles[0].on && !e->circles[1].on) {
+            for (bg = 1; bg < 4; bg++) {
+                if (kind[bg] == BG_TEXT && e->art[bg] == NULL && !e->split[bg] &&
+                    !((e->partBgs | e->picBgs) & (1u << bg)) &&
+                    TextBgTransparent(e, bgcnt[bg], dispcnt)) {
+                    emptyText |= 1u << bg;
+                }
+            }
+        }
+        DecideBandFills(e, kind, bgcnt, dispcnt, emptyText);
         DecideTallEdges(e, kind, bgcnt, dispcnt);
         DecideTallWindows(e, kind);
     }
@@ -4891,13 +4927,14 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
      * per-line effects. Mixed regions and affine takes keep the full renderer.
      * Re-run all setup/validation/quad emission above even on reuse: scroll can
      * affect layout eligibility, and fresh metadata must reach the compositor. */
-    if (frameOk && committedText && committedText == ((dispcnt >> 8) & 0xEu) &&
+    if (frameOk && committedText && (committedText | emptyText) == ((dispcnt >> 8) & 0xEu) &&
         objFrame->count == 0 && !e->circles[0].on && !e->circles[1].on) {
         sCommittedTextOnly[pe] = committedText;
         if ((e->reusePixels & R2D_TRY_FLAT) && e->height == H && e->top == 0 &&
             !(bldcnt & 0x20) && split->over != NULL) {
             /* All 2D layers are actual GPU takes, not nominations. Each CPU
-             * row therefore has t.filled == 0: SnapshotOver clears over and
+             * row therefore has t.filled == 0 (untaken text maps have just
+             * been proven transparent): SnapshotOver clears over and
              * leaves its unused alpha alone; resolve writes the backdrop.
              * No backdrop first-target bit means even a colour effect cannot
              * change that result. Do two whole-plane operations instead of
@@ -5735,7 +5772,7 @@ int NitroPort_Render2DLayer(int engine, int bg, const NitroRender2DSplit *layout
     if (e.width > W) {
         DecideSplits(&e, kind, bgcnt, dispcnt);
         LookUpArt(&e, kind, bgcnt, dispcnt, NULL);
-        DecideBandFills(&e, kind, bgcnt, dispcnt);
+        DecideBandFills(&e, kind, bgcnt, dispcnt, 0);
     }
     *key = BgKey(&e, bg, kind[bg], bgcnt[bg], dispcnt);
     *hofs = kind[bg] == BG_TEXT ? Rd16(e.io, 0x10 + bg * 4) & 0x1FF : 0;
