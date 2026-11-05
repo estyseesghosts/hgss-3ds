@@ -196,6 +196,50 @@ static void data_scroll_key_case(int snapshot)
     CHECK(memcmp(palette.gpuQuads, tile.gpuQuads, 2 * sizeof(NitroGpuQuad)) == 0);
 }
 
+/* Conservative fallback must see writes that bypass any hypothetical hook.
+ * These are signature coverage tests, not proof of complete writer inventory. */
+static void vram_signature_case(void)
+{
+    static const u32 zero[2] = {0, 0};
+    /* The old identical-lane seeding erased an incoming bit-31 difference
+     * for EVERY eight-byte region, independent of its contents. */
+    for (u32 seed = 0; seed < 32; seed++) {
+        u32 h = seed * 0x9e3779b9u;
+        CHECK(HashWords((const u8 *)zero, sizeof(zero), h) !=
+              HashWords((const u8 *)zero, sizeof(zero), h ^ 0x80000000u));
+    }
+    struct Region { int engine; u8 *bytes; unsigned length; } regions[] = {
+        {0, NitroPort_BgVram, 0x80000}, {0, NitroPort_ObjVram, 0x40000},
+        {0, NitroPort_LcdcVram + 0x80000, 0x18000},
+        {1, NitroPort_DbBgVram, 0x20000}, {1, NitroPort_DbObjVram, 0x20000},
+        {1, NitroPort_LcdcVram + 0x98000, 0xc000},
+    };
+    reset(1);
+    for (unsigned i = 0; i < sizeof(regions) / sizeof(regions[0]); i++) {
+        struct Region *r = &regions[i];
+        const u8 *io = NitroPort_IoReg + (r->engine ? 0x1000 : 0);
+        for (unsigned end = 0; end < 2; end++) {
+            unsigned offset = end ? r->length - 1 : 0;
+            u32 before = EngineVramSignature(r->engine, io);
+            r->bytes[offset] ^= 1;
+            if (EngineVramSignature(r->engine, io) == before)
+                fprintf(stderr, "signature collision region=%u offset=%u\n", i, offset);
+            CHECK(EngineVramSignature(r->engine, io) != before);
+            r->bytes[offset] ^= 1;
+            CHECK(EngineVramSignature(r->engine, io) == before);
+        }
+    }
+    /* LCDC display mode consumes the selected 128-KiB bank as well. */
+    for (unsigned bank = 0; bank < 4; bank++) {
+        wr32(0, (2u << 16) | (bank << 18));
+        u8 *p = NitroPort_LcdcVram + bank * 0x20000 + 0x1ffff;
+        u32 before = EngineVramSignature(0, NitroPort_IoReg);
+        *p ^= 1;
+        CHECK(EngineVramSignature(0, NitroPort_IoReg) != before);
+        *p ^= 1;
+    }
+}
+
 enum Change { PALETTE, TILE, OAM, WINDOW, HBLANK, NOMINATION, BUFFER,
               BLANK_RETURN, LAYOUT, AFFINE, ENGINE_B, BACKDROP_EFFECT, FORCED_RENDER };
 static void fallback_case(enum Change change)
@@ -556,6 +600,7 @@ static void front_band_capacity_case(void)
 
 int main(int argc, char **argv)
 {
+    vram_signature_case();
     data_scroll_key_case(0);
     data_scroll_key_case(1);
     scroll_case(0, 1, 3, 0, 0, 0);

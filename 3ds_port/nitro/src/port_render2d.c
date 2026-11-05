@@ -6362,7 +6362,11 @@ void NitroPort_RenderScreens(u16 *top, u16 *bottom)
 static u32 HashWords(const u8 *p, u32 bytes, u32 h)
 {
     const u32a *w = (const u32a *)p;
-    u32 n = bytes / 8, h2 = h ^ 0x9E3779B9u, i;
+    /* Rotate the incoming state for the second lane. With h2 = h ^ C, a
+     * difference in bit 31 of an earlier region flips bit 31 in BOTH lanes;
+     * odd multiplies preserve that single-bit difference and the final XOR
+     * cancels it. A later region could therefore erase a real VRAM change. */
+    u32 n = bytes / 8, h2 = ((h << 1) | (h >> 31)) ^ 0x9E3779B9u, i;
 
     for (i = 0; i < n; i++) {
         h = (h ^ w[2 * i]) * 16777619u;
