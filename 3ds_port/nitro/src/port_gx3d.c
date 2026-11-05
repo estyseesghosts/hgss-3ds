@@ -642,6 +642,12 @@ static struct {
     unsigned alphaOpaque, alphaTranslucent, alphaWire;
     uint32_t lastAttr;
 } sDiag;
+/* One count per whole-list attempt, not per vertex. Separate from sDiag so
+ * its existing scene/vertex accounting and reset semantics stay intact. */
+static struct {
+    unsigned attempts, mode, incomplete, unsupported, empty, saturated, intersects, mixed;
+    unsigned accepted, vertices, polygons;
+} sHiddenDiag;
 
 static void diag_log(void)
 {
@@ -662,7 +668,13 @@ static void diag_log(void)
                   (unsigned long)sDiag.lastAttr,
                   (long)s.vertices[0].clip[0], (long)s.vertices[0].clip[1],
                   (long)s.vertices[0].clip[2], (long)s.vertices[0].clip[3]);
+    NitroPort_Log("[gx3d] hidden-lists: %u attempts, %u accepted (%u vertices, %u polys); "
+                  "reject mode/incomplete/op/empty/range/intersect/mixed %u/%u/%u/%u/%u/%u/%u",
+                  sHiddenDiag.attempts, sHiddenDiag.accepted, sHiddenDiag.vertices, sHiddenDiag.polygons,
+                  sHiddenDiag.mode, sHiddenDiag.incomplete, sHiddenDiag.unsupported, sHiddenDiag.empty,
+                  sHiddenDiag.saturated, sHiddenDiag.intersects, sHiddenDiag.mixed);
     memset(&sDiag, 0, sizeof(sDiag));
+    memset(&sHiddenDiag, 0, sizeof(sHiddenDiag));
 }
 
 /* One polygon's triangles, held until the polygon is known to be stored. */
@@ -2196,8 +2208,9 @@ static int skip_hidden_vertices(StreamCursor *sc)
     const uint32_t *p;
     int32_t *xyz=v.xyz,*lo=v.lo,*hi=v.hi;
 
+    sHiddenDiag.attempts++;
     /* Texture coordinates from normals or vertices: done as usual. */
-    if(mode>=2u)return 0;
+    if(mode>=2u){sHiddenDiag.mode++;return 0;}
     /* The vertices' bounding box, where they end, and what they leave. */
     memset(&v,0,sizeof(v));
     v.xyz[0]=s.coord[0];v.xyz[1]=s.coord[1];v.xyz[2]=s.coord[2];
@@ -2220,21 +2233,21 @@ static int skip_hidden_vertices(StreamCursor *sc)
                 end.c.i=i;end.c.word=word;   /* (that command not taken) */
                 goto found;
             }
-            if(r<0)return 0;
+            if(r<0){sHiddenDiag.unsupported++;return 0;}
             word>>=8;
             i+=sParamCount[op];
         }
         scan.c.i=i;scan.c.word=word;
         /* On into the next entry (or a command of its own). */
         end=scan;
-        if(!stream_next(&scan,&op,&p))return 0;   /* the rest isn't known yet */
+        if(!stream_next(&scan,&op,&p)){sHiddenDiag.incomplete++;return 0;}   /* the rest isn't known yet */
         r=scan_op(&v,op,p);
         if(r>0)goto found;
-        if(r<0)return 0;
+        if(r<0){sHiddenDiag.unsupported++;return 0;}
     }
 found:
     n=v.n;
-    if(!n)return 0;
+    if(!n){sHiddenDiag.empty++;return 0;}
     /* Each corner through the clip matrix, before the >> 12 (S): with
      * a = S >> 12, S_v + S_w < 0 makes v + w < 0, and S_v - S_w >= 4096
      * makes v > w: outside that plane (outcode). */
@@ -2253,7 +2266,7 @@ found:
             for(j=0;j<4;j++){
                 c[j]=base[j]+((k&1)?edge[0][j]:0)+((k&2)?edge[1][j]:0)+((k&4)?edge[2][j]:0);
                 /* Far from saturation() for every point of the box. */
-                if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42))return 0;
+                if(c[j]>=((int64_t)1<<42)||c[j]<=-((int64_t)1<<42)){sHiddenDiag.saturated++;return 0;}
             }
             if(!(c[0]+c[3]<0))outside&=~1u;
             if(!(c[0]-c[3]>=4096))outside&=~2u;
@@ -2263,10 +2276,10 @@ found:
             if(!(c[2]-c[3]>=4096))outside&=~32u;
             /* w <= 0 (behind the camera; a [gx3d] count): all or none. */
             if(c[3]<4096)behind++;else front++;
-            if(!outside)return 0;
+            if(!outside){sHiddenDiag.intersects++;return 0;}
         }
     }
-    if(behind&&front)return 0;
+    if(behind&&front){sHiddenDiag.mixed++;return 0;}
     /* Hidden: what the commands leave behind, without the vertices (each
      * command only sets state; the last one of each kind is what stays). */
     s.coord[0]=xyz[0];s.coord[1]=xyz[1];s.coord[2]=xyz[2];
@@ -2287,6 +2300,7 @@ found:
     if(v.haveColor)s.rgb=v.color&0x7FFF;
     if(v.haveNormal||v.haveColor)s.rgbPending=v.normalLast;
     polys=polygons_of(s.primitive,n);
+    sHiddenDiag.accepted++;sHiddenDiag.vertices+=n;sHiddenDiag.polygons+=polys;
     sDiag.vertices+=n;
     if(behind)sDiag.behind+=n;
     sDiag.polygons+=polys;

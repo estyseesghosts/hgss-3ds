@@ -157,6 +157,42 @@ static uint64_t submit_trace(void)
     return h;
 }
 
+static void hidden_list_profile_cases(void)
+{
+    uint32_t words[4] = {8192u, 0, 0, 0}; /* one vertex followed by END */
+    StreamCursor c;
+    memset(&s, 0, sizeof(s)); memset(&sHiddenDiag, 0, sizeof(sHiddenDiag));
+    identity(&s.xf); s.xfTrans[3] = (int64_t)4096 * 4096;
+    s.primitive = 0;
+    memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 2; c.c.word = 0x4123;
+    CHECK(skip_hidden_vertices(&c) == 1);
+    CHECK(sHiddenDiag.accepted == 1 && sHiddenDiag.vertices == 1 && sHiddenDiag.polygons == 0);
+
+    words[0] = 0; memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 2; c.c.word = 0x4123;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.intersects == 1);
+    s.texparam = 2u << 30;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.mode == 1);
+    s.texparam = 0;
+    memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 2; c.c.word = 0x29;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.unsupported == 1);
+    memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 2; c.c.word = 0x41;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.empty == 1);
+    memset(&c, 0, sizeof(c)); c.c.w = words; c.end = 1; sRing[0] = 0;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.incomplete == 1);
+    s.xfTrans[0] = (int64_t)1 << 42;
+    memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 2; c.c.word = 0x4123;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.saturated == 1);
+    /* Both vertices are beyond +X but lie on opposite sides of the camera. */
+    s.xfTrans[0] = s.xfTrans[3] = 0; s.xf.a[7] = 4096;
+    words[0] = 8192u | ((uint32_t)(uint16_t)-4096 << 16); words[1] = 0;
+    words[2] = 8192u | (4096u << 16); words[3] = 0;
+    memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 4; c.c.word = 0x412323;
+    CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.mixed == 1);
+    CHECK(sHiddenDiag.attempts == sHiddenDiag.accepted + sHiddenDiag.mode + sHiddenDiag.incomplete +
+          sHiddenDiag.unsupported + sHiddenDiag.empty + sHiddenDiag.saturated + sHiddenDiag.intersects +
+          sHiddenDiag.mixed);
+}
+
 static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
                         Matrix *a, const Matrix *p, uint32_t *digest)
 {
@@ -182,6 +218,7 @@ int main(int argc, char **argv)
     uint64_t trace = submit_trace();
     printf("gx3d submit trace: %016llx\n", (unsigned long long)trace);
     CHECK(trace == UINT64_C(0x7679d7b60433e5d0)); /* pre-change translator */
+    hidden_list_profile_cases();
     for (int n = 0; n < 100006; n++) {
         static const int32_t edge[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -4096};
         (void)value();
