@@ -79,6 +79,7 @@ static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
 }
 int main(int argc, char **argv)
 {
+    unsigned saturated = 0;
     invalidation_cases();
     for (int n = 0; n < 100006; n++) {
         static const int32_t edge[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -4096};
@@ -96,6 +97,9 @@ int main(int argc, char **argv)
     for (int n = 0; n < 20000; n++) {
         Matrix a, p = {{0}}, expected, actual;
         for (int k = 0; k < 16; k++) a.a[k] = value();
+        /* Force genuine 32-bit output saturation while every 64-bit sum
+         * remains in range; ordinary random matrices alone are too small. */
+        if (n % 13 == 0) for (int k = 0; k < 16; k++) a.a[k] *= 256;
         p.a[0] = value(); p.a[5] = value(); p.a[10] = value();
         p.a[11] = value(); p.a[14] = value(); p.a[15] = value();
         /* Both signs, zeros, saturation and a one-word violation of EACH
@@ -104,6 +108,7 @@ int main(int argc, char **argv)
         if (n % 7 == 0) { p.a[11] = 0; p.a[15] = 4096; }
         if (n % 11 == 0) { p.a[11] = -4096; p.a[15] = 0; }
         reference(&expected, &a, &p);
+        for (int k = 0; k < 16; k++) saturated += expected.a[k] == INT32_MIN || expected.a[k] == INT32_MAX;
         multiply_clip(&actual, &a, &p);
         CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
         /* Aliasing contracts of the original multiply are preserved. */
@@ -130,6 +135,7 @@ int main(int argc, char **argv)
             CHECK(g.xf.a[row*4+1] == reference_saturate((y >= 0 ? y+120 : y-120)/240));
         }
     }
+    CHECK(saturated > 0);
     if (argc > 1) {
         /* Native microbenchmark only: NOT Old 3DS scene timing. */
         Matrix a, p = {{21628,0,0,0, 0,28836,0,0, 0,0,-5266,-4096, 0,0,-1404343,0}};
