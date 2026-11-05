@@ -80,6 +80,18 @@ static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
 int main(int argc, char **argv)
 {
     invalidation_cases();
+    for (int n = 0; n < 100006; n++) {
+        static const int32_t edge[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -4096};
+        (void)value();
+        int32_t v = n < 6 ? edge[n] : (int32_t)rng;
+        static const int ratios[][2] = {{256,320},{192,240},{256,400},{1,1}};
+        for (unsigned k = 0; k < sizeof(ratios)/sizeof(ratios[0]); k++) {
+            int num = ratios[k][0], den = ratios[k][1];
+            int64_t scaled = (int64_t)v * num;
+            scaled = (scaled >= 0 ? scaled + den/2 : scaled - den/2) / den;
+            CHECK(scale_view(v, num, den) == reference_saturate(scaled));
+        }
+    }
     static const int offdiag[] = {1,2,3,4,6,7,8,9,12,13};
     for (int n = 0; n < 20000; n++) {
         Matrix a, p = {{0}}, expected, actual;
@@ -106,6 +118,17 @@ int main(int argc, char **argv)
         CHECK(memcmp(&g.clip, &expected, sizeof(expected)) == 0);
         CHECK(memcmp(&g.xf, &expected, sizeof(expected)) == 0);
         for (int k = 0; k < 4; k++) CHECK(g.xfTrans[k] == ((int64_t)expected.a[12+k] << 12));
+        /* Exercise the actual wide/tall ensure_clip path as well. */
+        g.clipDirty = 1; g.wideNum = 256; g.wideDen = 320;
+        g.tallNum = 192; g.tallDen = 240;
+        g.viewport[2] = 255; g.viewport[3] = 191;
+        ensure_clip(&g);
+        for (int row = 0; row < 4; row++) {
+            int64_t x = (int64_t)expected.a[row*4] * 256;
+            int64_t y = (int64_t)expected.a[row*4+1] * 192;
+            CHECK(g.xf.a[row*4] == reference_saturate((x >= 0 ? x+160 : x-160)/320));
+            CHECK(g.xf.a[row*4+1] == reference_saturate((y >= 0 ? y+120 : y-120)/240));
+        }
     }
     if (argc > 1) {
         /* Native microbenchmark only: NOT Old 3DS scene timing. */

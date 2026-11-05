@@ -524,6 +524,25 @@ static void set_wide_view(GeoState *g,int screenWidth,int screenHeight)
     if(screenHeight==192){g->tallNum=1;g->tallDen=1;}
     g->clipDirty=1;
 }
+static int32_t scale_view(int32_t value,int32_t num,int32_t den)
+{
+    /* The shipped wide view is 256/320; a 240-line view is 192/240.
+     * Both are 4/5. Quotient/remainder keeps even INT32_MIN in range and
+     * needs only a constant 32-bit division (ARM strength-reduces it), not
+     * the old signed 64-bit division for every clip-matrix row. Remainders
+     * 0..4 round to 0,1,2,2,3. Fifths cannot land on a half, so this is
+     * exactly the original signed nearest rounding, not an approximation. */
+    if((num==256 && den==320)||(num==192 && den==240)){
+        static const uint8_t rounded[5]={0,1,2,2,3};
+        uint32_t n=value<0?0u-(uint32_t)value:(uint32_t)value;
+        uint32_t q=n/5u;
+        int32_t scaled=(int32_t)(q*4u+rounded[n-q*5u]);
+        return value<0?-scaled:scaled;
+    }
+    int64_t v=(int64_t)value*num;
+    v=(v>=0?v+den/2:v-den/2)/den;
+    return saturation(v);
+}
 static void ensure_clip(GeoState *g)
 {
     unsigned j;
@@ -533,19 +552,14 @@ static void ensure_clip(GeoState *g)
     g->xf=g->clip;
     if(g->wideNum!=g->wideDen && ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
         for(j=0;j<4;j++){
-            int64_t v=(int64_t)g->clip.a[j*4]*g->wideNum;
-            /* rounded to nearest, towards zero at a half */
-            v=(v>=0?v+g->wideDen/2:v-g->wideDen/2)/g->wideDen;
-            g->xf.a[j*4]=saturation(v);
+            g->xf.a[j*4]=scale_view(g->clip.a[j*4],g->wideNum,g->wideDen);
         }
     }
     /* (and taller: y, with the DS's full-height viewport) */
     if(g->tallNum!=g->tallDen && ((g->viewport[3]-g->viewport[1]+1)&0xFF)==192 &&
        ((g->viewport[2]-g->viewport[0]+1)&0x1FF)==256){
         for(j=0;j<4;j++){
-            int64_t v=(int64_t)g->clip.a[j*4+1]*g->tallNum;
-            v=(v>=0?v+g->tallDen/2:v-g->tallDen/2)/g->tallDen;
-            g->xf.a[j*4+1]=saturation(v);
+            g->xf.a[j*4+1]=scale_view(g->clip.a[j*4+1],g->tallNum,g->tallDen);
         }
     }
     for(j=0;j<4;j++)g->xfTrans[j]=(int64_t)g->xf.a[12+j]<<12;
