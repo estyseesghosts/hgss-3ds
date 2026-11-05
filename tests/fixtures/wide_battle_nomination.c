@@ -1,7 +1,5 @@
-/* The battle veto in the wide layout (port_wide.c): battles nominate no
- * GPU background quads, so their UI draws in software; the field keeps
- * its takes. Uses the real file, with stubs for the port pieces
- * nomination never touches. */
+/* Battle and field both nominate GPU backgrounds. The renderer validates
+ * each candidate; the battle flag must not suppress nomination. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -41,10 +39,10 @@ int main(void)
     /* Off by default: the field keeps its takes. */
     CHECK(NitroPort_BattleActive() == 0);
     CHECK(NitroPort_NominateGpuBgs() == 0xE);
-    /* In battle: nothing is nominated, so the dialogue draws in software. */
+    /* Battle uses the same nomination as the field. */
     NitroPort_SetBattleActive(1);
     CHECK(NitroPort_BattleActive() != 0);
-    CHECK(NitroPort_NominateGpuBgs() == 0);
+    CHECK(NitroPort_NominateGpuBgs() == 0xE);
     /* After the battle: takes resume without any other call. */
     NitroPort_SetBattleActive(0);
     CHECK(NitroPort_BattleActive() == 0);
@@ -52,7 +50,7 @@ int main(void)
     /* Any nonzero input sets the flag; there is no counter to drain. */
     NitroPort_SetBattleActive(42);
     CHECK(NitroPort_BattleActive() != 0);
-    CHECK(NitroPort_NominateGpuBgs() == 0);
+    CHECK(NitroPort_NominateGpuBgs() == 0xE);
     NitroPort_SetBattleActive(0);
     CHECK(NitroPort_NominateGpuBgs() == 0xE);
     printf("wide-battle: %u checks, %u failed\n", checks, failures);

@@ -4457,7 +4457,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
      * no-3D-mode reject everything, counted once). */
     int nBgTake = 0;
     u32 committedText = 0;
-    int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS];
+    int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS], takeBands[NITRO_GPU_BG_SLOTS];
     int takeHofs[NITRO_GPU_BG_SLOTS], takeVofs[NITRO_GPU_BG_SLOTS];
     if (split != NULL) {
         /* The 3D header before frameOk reads it: Render zeroes the split
@@ -4560,6 +4560,30 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                     prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
                     continue;
                 }
+                int bands = kind[gb] == BG_TEXT && !behind && e->clip[gb] && e->width > W;
+                if (bands) {
+                    int runs = 0;
+                    /* Bound extra draw calls as well as the split array:
+                     * the compositor has one finite vertex budget shared
+                     * by both eyes and the rest of the screen. */
+                    if (bgBlend || e->top != 0 || e->height != H || !e->bandFills[gb] ||
+                        e->origin < 0 || e->origin + W > e->width) {
+                        prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                        continue;
+                    }
+                    for (int side = 0; side < 2; side++) {
+                        u16 prev = 0;
+                        for (int line = 0; line < H; line++) {
+                            u16 c = e->bandFill[gb][side][line];
+                            if (c && c != prev) runs++;
+                            prev = c;
+                        }
+                    }
+                    if (runs > 16) {
+                        prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                        continue;
+                    }
+                }
                 /* Slice S2a: the frame's key (computed once in setup). */
                 key = frameKey[gb] != 0 ? frameKey[gb] : BgKeyCached(e, gb, kind[gb], bgcnt[gb], dispcnt);
                 for (i = 0; i < 0x200; i += 4) {
@@ -4581,6 +4605,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 }
                 takeBlend[nBgTake] = bgBlend;
                 takeBehind[nBgTake] = behind;
+                takeBands[nBgTake] = bands;
                 takeHofs[nBgTake] = Rd16(io, 0x10 + gb * 4) & 0x1FF;
                 takeVofs[nBgTake] = Rd16(io, 0x12 + gb * 4) & 0x1FF;
                 nBgTake++;
@@ -4830,6 +4855,10 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                             q->y0 = 0;
                             q->x1 = (u16)e->width;
                             q->y1 = (u16)(e->top > 0 && e->height > 192 ? e->height : 192);
+                            if (takeBands[slot]) {
+                                q->x0 = (u16)e->origin;
+                                q->x1 = (u16)(e->origin + W);
+                            }
                             /* UVs normalized to the texture below (map pixels
                              * times texels-per-pixel over 512). */
                             float texel = (split->gpuBgW[slot] == 256 && split->gpuBgH[slot] == 256) ? 2.0f : 1.0f;
@@ -4850,15 +4879,37 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                                 q->u2 = (float)(refX + pa * (s32)(x1 - e->origin) + pb * (s32)(y0 - e->top)) * texel / 512.0f;
                                 q->v2 = (float)(refY + pc * (x1 - e->origin) + pd * (y0 - e->top)) * texel / 512.0f;
                             } else {
-                                q->u0 = ((float)takeHofs[slot] - (float)e->origin) * texel / 512.0f;
+                                q->u0 = ((float)takeHofs[slot] - (takeBands[slot] ? 0.0f : (float)e->origin)) * texel / 512.0f;
                                 q->v0 = ((float)takeVofs[slot] - (float)e->top) * texel / 512.0f;
-                                q->u1 = q->u0 + (float)e->width * texel / 512.0f;
+                                q->u1 = q->u0 + (float)(q->x1 - q->x0) * texel / 512.0f;
                                 q->v1 = q->v0 + (float)(q->y1 - q->y0) * texel / 512.0f;
                                 q->u2 = q->u1;
                                 q->v2 = q->v0;
                             }
                             if (wantBehind) {
                                 nBehind++;
+                            }
+                            if (takeBands[slot]) {
+                                for (int side = 0; side < 2; side++) {
+                                    int y = 0;
+                                    while (y < H) {
+                                        int end = y + 1;
+                                        u16 colour = e->bandFill[gb][side][y];
+                                        while (end < H && e->bandFill[gb][side][end] == colour) end++;
+                                        if (colour != 0) {
+                                            NitroGpuQuad *band = &split->gpuQuads[nQuads++];
+                                            memset(band, 0, sizeof(*band));
+                                            band->kind = 2;
+                                            band->pad[0] = (u8)colour;
+                                            band->pad[1] = (u8)(colour >> 8);
+                                            band->x0 = side ? (u16)(e->origin + W) : 0;
+                                            band->x1 = side ? (u16)e->width : (u16)e->origin;
+                                            band->y0 = (u16)y;
+                                            band->y1 = (u16)end;
+                                        }
+                                        y = end;
+                                    }
+                                }
                             }
                         }
                         for (k2 = nCommitObj - 1; k2 >= 0; k2--) {

@@ -47,6 +47,7 @@
  */
 #ifdef __3DS__
 #include "port_pica.h"
+#include "port_quad_uv.h"
 #include <nitro_port_lowermenu.h>
 #include <nitro_port_render2d.h>
 #include <nitro_port_upscale.h>
@@ -2888,6 +2889,21 @@ static void draw_gpu_quads(const LayerSet *set, const ComposeLayers *info, const
         float y1 = pic->y0 + (float)q->y1 * scale;
         u32 col;
 
+        if (q->kind == 2) {
+            uint16_t colour = (uint16_t)(q->pad[0] | ((uint16_t)q->pad[1] << 8));
+
+            if (sConfig.flipV) {
+                float t = pic->y0 + pic->y1;
+                float oldY0 = y0;
+                y0 = t - y1;
+                y1 = t - oldY0;
+            }
+            quad_combiner(0);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                           GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+            quad(x0, y0, x1, y1, 0.0f, 0, 0, 0, 0, rgba_of(colour, 255));
+            continue;
+        }
         if (q->kind == 0) {
             int s = q->slot;
 
@@ -2922,7 +2938,9 @@ static void draw_gpu_quads(const LayerSet *set, const ComposeLayers *info, const
             y0 = y1;
             y1 = t;
         }
-        quad4(x0, y0, x1, y1, 0.0f, q->u0, q->v0, q->u1, q->v1, q->u2, q->v2, col);
+        quad4(x0, y0, x1, y1, 0.0f, q->u0, NitroPort_QuadV(q->kind, i < info->gpuQuadsBehind, q->v0),
+              q->u1, NitroPort_QuadV(q->kind, i < info->gpuQuadsBehind, q->v1),
+              q->u2, NitroPort_QuadV(q->kind, i < info->gpuQuadsBehind, q->v2), col);
     }
     if (last > first) {
         NitroPort_PicaProfileMark("the 2D quads");

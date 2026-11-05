@@ -498,18 +498,10 @@ int NitroPort_RepeatingBgs(void)
     return laidOut ? 0 : (int)bgs;
 }
 
-/* Slice S5/S6 bundle: the port nominates text BGs for the compositor
- * quad itself, repeating-flagged or not. The only scene veto is the
- * battle's: per-BG validation (plain tiles, z-order, blend, windows,
- * H-blank) plus the region rule prove each take in any scene, so untaken
- * scenes just draw in software. Battles stay software (their dialogue
- * mirrored through a quad; no take is proven exact for them yet, and
- * their UI churns faster than quad keys pay for). */
+/* Nominate text BGs in every scene; individual unsupported modes retain
+ * the renderer's existing per-BG and region fallbacks. */
 int NitroPort_NominateGpuBgs(void)
 {
-    if (NitroPort_BattleActive()) {
-        return 0;
-    }
     return 0xE;
 }
 

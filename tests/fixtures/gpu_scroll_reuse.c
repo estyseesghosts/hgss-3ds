@@ -450,6 +450,69 @@ static void captured_field_case(const char *dir)
     CHECK(memcmp(field.gpuBgKey, ref.gpuBgKey, sizeof(ref.gpuBgKey)) == 0);
 }
 
+static void front_band_case(int patterned)
+{
+    static u16 picture[256 * 256], reconstructed[320 * 192];
+    reset(0);
+    wr16(10, (1 << 8)); /* BG1 in front of priority-1 3D */
+    memset(NitroPort_BgVram + 32, 0x11, 32);
+    if (patterned) {
+        memset(NitroPort_BgVram + 64, 0x22, 32);
+        for (int ty = 0; ty < 32; ty++) for (int tx = 0; tx < 32; tx++) {
+            u16 tile = (ty / 4) % 3; /* transparent, red, green bands */
+            memcpy(NitroPort_BgVram + 0x800 + (ty * 32 + tx) * 2, &tile, 2);
+        }
+        wr16(0x14, 7); wr16(0x16, 13);
+    }
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit ref = layout(refOver, refAlpha);
+    ref.snapshot = 1; ref.gpuBgs = 0; ref.clip[1] = 1;
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    NitroRender2DSplit taken = layout(over, alpha);
+    taken.snapshot = 1; taken.clip[1] = 1;
+    NitroPort_Render2DSplit(0, under, &taken);
+    CHECK(taken.nGpuQuads >= 3);
+    CHECK(taken.gpuQuadsBehind == 0);
+    CHECK(NitroPort_Render2DBgPicture(1, 1, picture));
+    memset(reconstructed, 0, sizeof(reconstructed));
+    for (int i = 0; i < taken.nGpuQuads; i++) {
+        NitroGpuQuad *q = &taken.gpuQuads[i];
+        for (int y = q->y0; y < q->y1; y++) for (int x = q->x0; x < q->x1; x++) {
+            u16 c;
+            if (q->kind == 2) {
+                c = (u16)(q->pad[0] | ((u16)q->pad[1] << 8));
+            } else {
+                int sx = (int)(q->u0 * 256.0f) + x - q->x0;
+                int sy = (int)(q->v0 * 256.0f) + y - q->y0;
+                u16 p = picture[(sy & 255) * 256 + (sx & 255)];
+                c = p & 1 ? (u16)(0x8000 | ((p >> 11) & 31) | (((p >> 6) & 31) << 5) |
+                                  (((p >> 1) & 31) << 10)) : 0;
+            }
+            reconstructed[y * 320 + x] = c;
+        }
+    }
+    CHECK(memcmp(reconstructed, refOver, sizeof(reconstructed)) == 0);
+}
+
+static void front_band_capacity_case(void)
+{
+    reset(0);
+    wr16(10, (1 << 8));
+    /* Alternating solid rows require more runs than fit in the bounded quad
+     * list; the entire front region must remain on the software path. */
+    for (int y = 0; y < 8; y++) {
+        memset(NitroPort_BgVram + 32 + y * 4, y & 1 ? 0x22 : 0x11, 4);
+    }
+    NitroRender2DSplit candidate = layout(over, alpha);
+    candidate.clip[1] = 1;
+    NitroPort_Render2DSplit(0, under, &candidate);
+    NitroRender2DSplit ref = layout(refOver, refAlpha);
+    ref.clip[1] = 1; ref.gpuBgs = 0;
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    CHECK(candidate.nGpuQuads == 0);
+    CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+}
+
 int main(int argc, char **argv)
 {
     scroll_case(0, 1, 3, 0, 0, 0);
@@ -475,6 +538,9 @@ int main(int argc, char **argv)
         }
     }
     flat_no_full_vram_hash_case();
+    front_band_case(0);
+    front_band_case(1);
+    front_band_capacity_case();
     if (argc == 2) captured_field_case(argv[1]);
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;

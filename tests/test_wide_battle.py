@@ -1,8 +1,8 @@
-"""Native tests of the battle GPU-background veto.
+"""Native tests of battle and field GPU-background nomination.
 
 Builds the actual wide-layout file with the same isolated SDK typedef
 adaptation as the renderer fixture (no production header is changed) and
-checks that battles nominate no GPU quads while the field keeps its takes.
+checks that battles and the field both nominate GPU quads.
 """
 import os
 from pathlib import Path
@@ -16,7 +16,7 @@ UPSTREAM = REPO / "build" / "upstream"
 
 
 class WideBattleTests(unittest.TestCase):
-    def test_battle_veto(self):
+    def test_battle_nomination(self):
         out = REPO / "build" / "wide-battle-native"
         inc = out / "include" / "nitro"
         inc.mkdir(parents=True, exist_ok=True)

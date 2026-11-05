@@ -23,12 +23,12 @@ extern "C" {
  * (u2,v2) is corner B(x1,y0); D is the parallelogram completion. Wrap
  * selects texture repeat vs clamp (affine overflow off needs clamp). */
 typedef struct NitroGpuQuad {
-    uint8_t kind;   /* 0 = BG picture slot, 1 = OBJ atlas cell */
+    uint8_t kind;   /* 0 = BG picture, 1 = OBJ atlas, 2 = solid BG side band */
     uint8_t blend;  /* 0 replace, 1 alpha-blend */
     uint8_t slot;   /* bgTex slot or atlas cell */
     uint8_t eva, evb;
     uint8_t wrap;   /* GPU_REPEAT or GPU_CLAMP_TO_EDGE */
-    uint8_t pad[2];
+    uint8_t pad[2]; /* kind 2: little-endian RGB555 colour */
     uint16_t x0, y0, x1, y1;   /* DS-pixel rect */
     float u0, v0, u1, v1, u2, v2;   /* texture corners A B C */
 } NitroGpuQuad;
