@@ -346,6 +346,27 @@ Newest first. Each entry: what changed, what was run, what it proved.
   have split DISP fully the first time; (c) emulator rig had no boot check and
   the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
   session — always target exact PIDs.
+### 2026-11-04 — run 26: disabled-OBJ state correction (hardware pending)
+
+- Run **79afbd3** remains essentially flat in scripted Goldenrod: **8.075
+  compositions/s**, **1.575 drawer frames/s**, **419.935 ms render wall/frame**
+  (interval ends 2400–4200). At 5400, **4608 empty lines / 24 committed regions**
+  show the empty-plane shortcut still not removing the live field walks.
+- Integrated **f481089**: clear persistent sorted sprite count when DISPCNT
+  disables OBJ display. This prevents stale sprites reaching GPU decisions and
+  blocking the existing no-sprite shortcuts. Re-enabling OBJ still sorts OAM.
+  This is a locally reproduced defect, not yet the proven hardware explanation.
+- Actual-renderer regression: **955 checks pass**, including ASan/UBSan; same
+  fixture fails **22 checks** against pre-fix main. Covers normal/translucent/
+  window sprite transitions with live and captured state, quad/atlas exclusion,
+  empty-plane admission and full-render pixel equivalence. No added diagnostics,
+  scheduler/audio/clock/config changes or allocations.
+- Patch check **86/86**. `make test`: **461 tests**, no assertion failures,
+  **11 known native toolchain errors**, 13 skips. SDK and port test targets were
+  attempted natively and remain blocked by host compiler/host32 limitations.
+  Native 3DS builds in progress; hardware/golden/New 3DS gates **pending**.
+- Details: [o3ds-log26-disabled-obj.md](agent-notes/o3ds-log26-disabled-obj.md).
+
 ### 2026-11-04 — run 25: traversable, not finished; empty scanline follow-up
 
 - Owner confirms walking Goldenrod → adjacent southern route → Goldenrod is
