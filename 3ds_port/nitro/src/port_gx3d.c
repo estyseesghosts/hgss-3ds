@@ -1021,7 +1021,6 @@ static void replay_polygon(const PolyRecord *r,int32_t clip[4][4])
     }
     begin_polygon();
     if(!polygon_hidden(any,all)){
-        sPolygonFront=polygon_front(&v[0],&v[1],&v[2]);
         stage_triangle(&v[0],&v[1],&v[2]);
         if(r->count==4)stage_triangle(&v[0],&v[2],&v[3]);
         end_polygon(1);   /* (the DS's vertex RAM: as the scene's own, roughly) */
@@ -1467,7 +1466,6 @@ static void submit_vertex(void)
             begin_polygon();
             if(!polygon_hidden(s.vertices[0].outside|s.vertices[1].outside|s.vertices[2].outside,
                                s.vertices[0].outside&s.vertices[1].outside&s.vertices[2].outside)){
-                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 end_polygon(3);
                 record_polygon(&s.vertices[0],&s.vertices[1],&s.vertices[2],NULL);
@@ -1482,7 +1480,6 @@ static void submit_vertex(void)
                                s.vertices[2].outside|s.vertices[3].outside,
                                s.vertices[0].outside&s.vertices[1].outside&
                                s.vertices[2].outside&s.vertices[3].outside)){
-                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[2]);
                 stage_triangle(&s.vertices[0],&s.vertices[2],&s.vertices[3]);
                 end_polygon(4);
@@ -1507,7 +1504,6 @@ static void submit_vertex(void)
             begin_polygon();
             if(!polygon_hidden(first->outside|second->outside|vp->outside,
                                first->outside&second->outside&vp->outside)){
-                sPolygonFront=polygon_front(first,second,vp);
                 stage_triangle(first,second,vp);
                 end_polygon(n==2?3:1);
                 record_polygon(first,second,vp,NULL);
@@ -1522,7 +1518,6 @@ static void submit_vertex(void)
                                s.vertices[2].outside|s.vertices[3].outside,
                                s.vertices[0].outside&s.vertices[1].outside&
                                s.vertices[2].outside&s.vertices[3].outside)){
-                sPolygonFront=polygon_front(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
                 stage_triangle(&s.vertices[0],&s.vertices[1],&s.vertices[3]);
                 stage_triangle(&s.vertices[0],&s.vertices[3],&s.vertices[2]);
                 /* The first quad of a strip brings 4 vertices, later ones 2. */

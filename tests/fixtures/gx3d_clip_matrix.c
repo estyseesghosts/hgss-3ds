@@ -4,6 +4,10 @@
 #include GX3D_SOURCE
 
 unsigned char NitroPort_IoReg[0x2000] __attribute__((aligned(8)));
+int NitroPort_Gx3dTriangleTranslucent(const NitroGx3dTriangle *tri)
+{
+    return ((tri->polygon_attr >> 16) & 31u) < 31u;
+}
 static unsigned checks, failures;
 #define CHECK(x) do { checks++; if (!(x)) { failures++; fprintf(stderr, "%d: %s\n", __LINE__, #x); } } while (0)
 static uint32_t rng = 0x31415926;
@@ -60,6 +64,99 @@ static void invalidation_cases(void)
     }
 }
 
+/* A caller's previous facing value must not affect a stage. This includes
+ * early camera/outside exits, clipping, both winding directions, all cull
+ * masks and shadow capture. Only the unobserved prior-facing global itself
+ * may remain different on an early exit. */
+static void stage_prior_facing_cases(void)
+{
+    struct Result {
+        GeoVertex v[3];
+        NitroGx3dTriangle staged[16];
+        NitroGx3dTriangle shadow[16];
+        __typeof__(sDiag) diag;
+        unsigned count, vertices, clipped, shadows;
+    } first, second;
+    unsigned shadowCases = 0;
+    for (int n = 0; n < 10000; n++) {
+        GeoVertex input[3] = {{0}};
+        for (int v = 0; v < 3; v++) {
+            for (int k = 0; k < 3; k++) input[v].clip[k] = value() / 128;
+            input[v].clip[3] = (n % 11 == 0 && v == 0) ? 0 : 4096;
+            if (n % 53 == 0 && v == 0) memset(input[v].clip, 0, sizeof(input[v].clip));
+            input[v].outside = (uint8_t)outcode(input[v].clip);
+            input[v].lit = 1;
+            input[v].color = (uint16_t)(value() & 0x7fff);
+            input[v].s = value(); input[v].t = value();
+        }
+        memset(&s, 0, sizeof(s));
+        s.attr = (uint32_t)((n & 3) << 6) | (31u << 16);
+        s.viewport[2] = 255; s.viewport[3] = 191;
+        sShadowCapture = (n >> 2) & 1;
+        sDest = &sScenes[0];
+        struct Result *result[2] = {&first, &second};
+        for (int trial = 0; trial < 2; trial++) {
+            struct Result *r = result[trial];
+            memset(r, 0, sizeof(*r)); memcpy(r->v, input, sizeof(input));
+            sDest->shadow_count = 0; sDest->shadow_triangles = r->shadow;
+            memset(&sDiag, 0, sizeof(sDiag)); memset(sStaged, 0, sizeof(sStaged));
+            sStagedCount = sStagedVertices = sStagedClipped = 0;
+            sPolygonFront = trial;
+            stage_triangle(&r->v[0], &r->v[1], &r->v[2]);
+            memcpy(r->staged, sStaged, sizeof(sStaged));
+            r->diag = sDiag; r->count = sStagedCount; r->vertices = sStagedVertices;
+            r->clipped = sStagedClipped; r->shadows = sDest->shadow_count;
+        }
+        shadowCases += first.shadows != 0;
+        CHECK(memcmp(&first, &second, sizeof(first)) == 0);
+    }
+    CHECK(shadowCases > 0);
+    sDest->shadow_triangles = NULL; sDest = NULL; sShadowCapture = 0;
+}
+
+static uint64_t trace_bytes(uint64_t h, const void *data, size_t size)
+{
+    const uint8_t *p = data;
+    while (size--) h = (h ^ *p++) * UINT64_C(1099511628211);
+    return h;
+}
+
+/* Actual submit path, all primitive kinds, clipping and interpolation records.
+ * Its digest is compared with the pre-optimization source by the Python test. */
+static uint64_t submit_trace(void)
+{
+    static PolyRecord records[MAX_RECORDS];
+    static NitroGx3dTriangle shadow[NITRO_GX3D_MAX_SHADOW_TRIANGLES];
+    uint64_t h = UINT64_C(1469598103934665603);
+    rng = 0x87543121;
+    for (int primitive = 0; primitive < 4; primitive++) for (int mode = 0; mode < 4; mode++) {
+        memset(&s, 0, sizeof(s)); memset(&sDiag, 0, sizeof(sDiag));
+        memset(records, 0, sizeof(records)); memset(shadow, 0, sizeof(shadow));
+        memset(&sScenes[0], 0, sizeof(sScenes[0]));
+        sDest = &sScenes[0]; sDest->shadow_triangles = shadow;
+        sShadowCapture = 1; sInterp = 1; sReplaying = 0;
+        sRec[0] = records; sRecBuild = 0; sRecCount[0] = 0;
+        identity(&s.pos); identity(&s.proj); identity(&s.vec);
+        s.wideNum = s.wideDen = s.tallNum = s.tallDen = 1; s.clipDirty = 1;
+        s.viewport[2] = 255; s.viewport[3] = 191;
+        s.inBegin = 1; s.primitive = primitive;
+        s.attr = (uint32_t)(mode << 6) | (31u << 16); s.rgb = 0x739c;
+        for (int i = 0; i < 96; i++) {
+            s.coord[0] = value() / 128; s.coord[1] = value() / 128; s.coord[2] = value() / 256;
+            submit_vertex();
+        }
+        h = trace_bytes(h, &sDest->count, sizeof(sDest->count));
+        h = trace_bytes(h, sDest->triangles, sDest->count * sizeof(sDest->triangles[0]));
+        h = trace_bytes(h, &sDest->shadow_count, sizeof(sDest->shadow_count));
+        h = trace_bytes(h, shadow, sDest->shadow_count * sizeof(shadow[0]));
+        h = trace_bytes(h, &sRecCount[0], sizeof(sRecCount[0]));
+        h = trace_bytes(h, records, sRecCount[0] * sizeof(records[0]));
+        h = trace_bytes(h, &sDiag, sizeof(sDiag));
+    }
+    sDest = NULL; sShadowCapture = 0; sInterp = 0; sRec[0] = NULL;
+    return h;
+}
+
 static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
                         Matrix *a, const Matrix *p, uint32_t *digest)
 {
@@ -81,6 +178,10 @@ int main(int argc, char **argv)
 {
     unsigned saturated = 0;
     invalidation_cases();
+    stage_prior_facing_cases();
+    uint64_t trace = submit_trace();
+    printf("gx3d submit trace: %016llx\n", (unsigned long long)trace);
+    CHECK(trace == UINT64_C(0x7679d7b60433e5d0)); /* pre-change translator */
     for (int n = 0; n < 100006; n++) {
         static const int32_t edge[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -4096};
         (void)value();
