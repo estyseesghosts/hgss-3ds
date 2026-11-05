@@ -140,6 +140,46 @@ DEFINE_SCALE2X(NitroPort_Scale2xTiled32, uint32_t)
 DEFINE_DOUBLE(NitroPort_Double2xTiled16, uint16_t)
 DEFINE_DOUBLE(NitroPort_Double2xTiled32, uint32_t)
 
+unsigned NitroPort_Update2xBgTiles16(const uint16_t *src, uint16_t *dst,
+                                    void (*flush)(void *, uint32_t))
+{
+    unsigned dirty = 0;
+    int first = 4096, last = -1;
+    for (int by = 0; by < 64; by++) {
+        for (int bx = 0; bx < 64; bx++) {
+            const uint16_t *s = src + by * 4 * 256 + bx * 4;
+            uint16_t *tile = dst + (by * 64 + bx) * 64;
+            int changed = 0;
+            for (int y = 0; y < 4 && !changed; y++) {
+                for (int x = 0; x < 4; x++) {
+                    /* The existing texture was made by Double2x: all four
+                     * copies agree, so one texel proves this pixel. */
+                    if (s[y * 256 + x] != tile[sMorton4[y][x] * 4]) {
+                        changed = 1;
+                        break;
+                    }
+                }
+            }
+            if (!changed) continue;
+            for (int y = 0; y < 4; y++) {
+                for (int x = 0; x < 4; x++) {
+                    uint16_t c = s[y * 256 + x];
+                    uint16_t *p = tile + sMorton4[y][x] * 4;
+                    p[0] = p[1] = p[2] = p[3] = c;
+                }
+            }
+            int index = by * 64 + bx;
+            if (index < first) first = index;
+            last = index;
+            dirty++;
+        }
+    }
+    if (last >= first && flush != NULL) {
+        flush(dst + first * 64, (uint32_t)(last - first + 1) * 128u);
+    }
+    return dirty;
+}
+
 void NitroPort_Double2xTiled16TableRows(const uint16_t *src, int w, int h, int y0, int y1, uint16_t *dst,
                                         int dstWidth, const uint16_t *table)
 {

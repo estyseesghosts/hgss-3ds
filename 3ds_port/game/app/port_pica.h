@@ -348,6 +348,7 @@ typedef struct ComposeStats {
     u32 midFrames;           /* frames of in-between scenes (60 frames a second) */
     u32 midLate;             /* of them, late for their V-blank (shown at their scene's, or left out) */
     u64 gpuTicks, cpuTicks, publishTicks;
+    u32 bgFullUploads, bgDeltaUpdates, bgDirtyTiles, bgFlushedBytes;
     int lag;
 } ComposeStats;
 void NitroPort_ComposeStats(ComposeStats *stats);

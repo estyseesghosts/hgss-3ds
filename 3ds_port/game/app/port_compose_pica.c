@@ -139,6 +139,7 @@ typedef struct LayerSet {
     void *bgTex[NITRO_GPU_BG_SLOTS];
     uint64_t bgKey[NITRO_GPU_BG_SLOTS];
     int bgValid[NITRO_GPU_BG_SLOTS];
+    int bgDouble[NITRO_GPU_BG_SLOTS]; /* last upload was 256x256 doubled */
     /* S6 bundle: taken OBJs decoded once into this 512 x 512 RGBA5551
      * tiled atlas (2x texels, transparent gutters), keyed by content;
      * lazily allocated on first use. */
@@ -153,6 +154,7 @@ typedef struct LayerSet {
 #define BG_TEX_BYTES (BG_TEX_W * BG_TEX_W * 2)
 #define BG_TEX_ALLOC (BG_TEX_BYTES + BG_TEX_W * 8 * 2)
 static int sBgsAvailable;   /* (the upper screen's sets have their bgTex) */
+static volatile u32 sBgFullUploads, sBgDeltaUpdates, sBgDirtyTiles, sBgFlushedBytes;
 static C3D_Tex sBgTex;
 /* Engine A's BG scrolls by frame (NitroPort_ComposeNoteBgOffsets): the
  * last BG_OFS_KEPT frames the game handed over. */
@@ -1315,6 +1317,12 @@ static void flush_texture(void *data, uint32_t bytes)
     GSPGPU_FlushDataCache(data, bytes);
 }
 
+static void flush_bg_texture(void *data, uint32_t bytes)
+{
+    GSPGPU_FlushDataCache(data, bytes);
+    __atomic_fetch_add(&sBgFlushedBytes, bytes, __ATOMIC_RELAXED);
+}
+
 /* The picture into a set's textures a texel a pixel (the 1x display), only
  * the bands of 4 rows changed since the set was last written: the same
  * diff as the 2x publisher (NitroPort_PublishDoubledOver, port_upscale.c),
@@ -1724,11 +1732,22 @@ int NitroPort_ComposePublish(int engine, int screen)
                 continue;
             }
             if (l->gpuBgW[s] == 256 && l->gpuBgH[s] == 256) {
-                NitroPort_Double2xTiled16(l->gpuBgPicture[s], 256, 256, set->bgTex[s], BG_TEX_W);
+                if (set->bgValid[s] && set->bgDouble[s]) {
+                    unsigned dirty = NitroPort_Update2xBgTiles16(l->gpuBgPicture[s], set->bgTex[s], flush_bg_texture);
+                    __atomic_fetch_add(&sBgDeltaUpdates, 1u, __ATOMIC_RELAXED);
+                    __atomic_fetch_add(&sBgDirtyTiles, dirty, __ATOMIC_RELAXED);
+                } else {
+                    NitroPort_Double2xTiled16(l->gpuBgPicture[s], 256, 256, set->bgTex[s], BG_TEX_W);
+                    flush_bg_texture(set->bgTex[s], BG_TEX_BYTES);
+                    __atomic_fetch_add(&sBgFullUploads, 1u, __ATOMIC_RELAXED);
+                }
+                set->bgDouble[s] = 1;
             } else {
                 NitroPort_Tile16(l->gpuBgPicture[s], l->gpuBgW[s], l->gpuBgH[s], set->bgTex[s], BG_TEX_W);
+                flush_bg_texture(set->bgTex[s], BG_TEX_BYTES);
+                __atomic_fetch_add(&sBgFullUploads, 1u, __ATOMIC_RELAXED);
+                set->bgDouble[s] = 0;
             }
-            GSPGPU_FlushDataCache(set->bgTex[s], BG_TEX_BYTES);
             set->bgKey[s] = l->gpuBgKey[s];
             set->bgValid[s] = 1;
         }
@@ -4114,6 +4133,10 @@ void NitroPort_ComposeStats(ComposeStats *stats)
     stats->cpuTicks = sCpuTicks;
     stats->published = __atomic_load_n(&sPublished, __ATOMIC_RELAXED);
     stats->publishTicks = __atomic_load_n(&sPublishTicks, __ATOMIC_RELAXED);
+    stats->bgFullUploads = __atomic_load_n(&sBgFullUploads, __ATOMIC_RELAXED);
+    stats->bgDeltaUpdates = __atomic_load_n(&sBgDeltaUpdates, __ATOMIC_RELAXED);
+    stats->bgDirtyTiles = __atomic_load_n(&sBgDirtyTiles, __ATOMIC_RELAXED);
+    stats->bgFlushedBytes = __atomic_load_n(&sBgFlushedBytes, __ATOMIC_RELAXED);
     stats->lag = sLag;
     stats->late = sLate;
     stats->timed = sTimed;

@@ -1303,6 +1303,7 @@ typedef struct PerfDisplay {
     u64 cpuTicks, gpuTicks, waitTicks, publishTicks;
     u64 buildTicks, sceneWaitTicks, scenePublishTicks;
     u32 texConverted;
+    u32 bgFullUploads, bgDeltaUpdates, bgDirtyTiles, bgFlushedBytes;
     u64 texels, texTicks;
 } PerfDisplay;
 
@@ -1381,6 +1382,10 @@ static void PerfLog(u64 now)
         sPerfDisplay.gpuTicks = st.gpuTicks;
         sPerfDisplay.waitTicks = st.waitTicks;
         sPerfDisplay.publishTicks = st.publishTicks;
+        sPerfDisplay.bgFullUploads = st.bgFullUploads;
+        sPerfDisplay.bgDeltaUpdates = st.bgDeltaUpdates;
+        sPerfDisplay.bgDirtyTiles = st.bgDirtyTiles;
+        sPerfDisplay.bgFlushedBytes = st.bgFlushedBytes;
         sPerfDisplay.buildTicks = build;
         sPerfDisplay.sceneWaitTicks = wait;
         sPerfDisplay.scenePublishTicks = publish;
@@ -1448,7 +1453,12 @@ static void PerfLog(u64 now)
                       (unsigned)texConverted,
                       texConverted ? (double)tex / texConverted : 0.0,
                       PerfMsPer(texTime, texConverted),
-                      (double)cmdPeak * 100.0, cmdCut);
+                       (double)cmdPeak * 100.0, cmdCut);
+        NitroPort_Log("[perf] bg-upload: full %u, delta %u, delta tiles %u, flushed KB %.1f",
+                      (unsigned)(st.bgFullUploads - sPerfDisplay.bgFullUploads),
+                      (unsigned)(st.bgDeltaUpdates - sPerfDisplay.bgDeltaUpdates),
+                      (unsigned)(st.bgDirtyTiles - sPerfDisplay.bgDirtyTiles),
+                      (double)(st.bgFlushedBytes - sPerfDisplay.bgFlushedBytes) / 1024.0);
         sPerfDisplay.frames = st.frames;
         sPerfDisplay.published = st.published;
         sPerfDisplay.timed = st.timed;
@@ -1460,6 +1470,10 @@ static void PerfLog(u64 now)
         sPerfDisplay.gpuTicks = st.gpuTicks;
         sPerfDisplay.waitTicks = st.waitTicks;
         sPerfDisplay.publishTicks = st.publishTicks;
+        sPerfDisplay.bgFullUploads = st.bgFullUploads;
+        sPerfDisplay.bgDeltaUpdates = st.bgDeltaUpdates;
+        sPerfDisplay.bgDirtyTiles = st.bgDirtyTiles;
+        sPerfDisplay.bgFlushedBytes = st.bgFlushedBytes;
         sPerfDisplay.buildTicks = build;
         sPerfDisplay.sceneWaitTicks = wait;
         sPerfDisplay.scenePublishTicks = publish;

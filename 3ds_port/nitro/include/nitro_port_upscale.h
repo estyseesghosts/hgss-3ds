@@ -54,6 +54,13 @@ void NitroPort_Scale2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst, 
  * w and h multiples of 4; the texture at least 2 h + 8 rows. */
 void NitroPort_Double2xTiled16(const uint16_t *src, int w, int h, uint16_t *dst, int dstWidth);
 void NitroPort_Double2xTiled32(const uint32_t *src, int w, int h, uint32_t *dst, int dstWidth);
+/* Update an existing 512x512 texture made by Double2xTiled16 from a 256x256
+ * picture. The caller owns the texture and must wait for its GPU reads before
+ * calling. Changed complete 8x8 tiles are written; flush receives at most
+ * one contiguous span covering them. Returns the number of tiles
+ * changed. The extra padding row is outside this repeat-wrapped texture. */
+unsigned NitroPort_Update2xBgTiles16(const uint16_t *src, uint16_t *dst,
+                                    void (*flush)(void *, uint32_t));
 /* NitroPort_Double2xTiled16 of the DS's colours (bits 0-4 red, 5-9 green,
  * 10-14 blue; bit 15 ignored) turned into texels by table (32768 of them),
  * in one pass: no picture in between, the four texels of a pixel written
