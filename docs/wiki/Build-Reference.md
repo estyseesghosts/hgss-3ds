@@ -37,14 +37,70 @@ $VENV tools/hgss_game.py --game soulsilver --target 3ds --keep-going \
 ### Before trusting a 3DS build
 
 ```bash
-python3 tools/check_patches.py      # must print "86/86 patches applied"
+python3 tools/check_patches.py      # must print "87/87 patches applied"
 ```
 
-If you edited anything under `3ds_port/nitro/src/`, delete the vendored
-archives first: `rm -rf build/game-3ds/sdk build/game-3ds-ss/sdk`. An
-incremental run has been seen to leave a stale `libnitro.a` in place, and a
-build from it silently contains the old code. See
+If you edited anything under `3ds_port/nitro/src/`, use a **new output directory**
+for each game, or rename that output's existing `sdk/` directory to a unique
+backup before rebuilding. An incremental run has left a stale `libnitro.a`
+in place; a clean git identity alone does not prove fresh archives. Preserve
+previous artifacts and sidecars rather than broadly deleting outputs. See
 [3DS-Pitfalls](3DS-Pitfalls.md#a-vendored-archive-does-not-rebuild).
+
+Export **both** `DEVKITPRO` and `DEVKITARM`, not just the tools on `PATH`.
+During W3/W4 validation, omitting `DEVKITARM` broke SDK archive setup and led to
+hundreds of unresolved symbols. Correcting the environment and rerunning with
+fresh archives fixed it; adding stand-ins or changing game code was unnecessary.
+
+### Adding a game patch (patch 1910 pattern)
+
+Decomp sources live in `build/upstream`; `tools/check_patches.py` compares each
+`patches/*/*.patch` subject against that tree's `git am` history, so a patch
+file alone is not applied — it must also be committed upstream:
+
+1. Edit the file under `build/upstream/`, keeping `#else` branches
+   byte-identical so the retail-matching build is unaffected.
+2. Commit there with the bootstrap identity
+   (`git -c user.name="pokeheartgold-3ds bootstrap" -c user.email="bootstrap@invalid" commit`),
+   then `git format-patch -1` into `patches/pokeheartgold/19NN-*.patch`.
+3. Re-run `check_patches.py` (now 87/87) and the full native suite: a test may
+   encode the old behavior and need updating with the fix.
+
+### Native validation and its limits (2026-11-04)
+
+Run from the repo with the Python environment above on `PATH`:
+
+```bash
+export PATH=/Users/terezi/hgss/bin:$PATH
+make test
+python3 tools/check_patches.py
+make content-check
+HGSS_RENDER_TEST_CFLAGS='-fsanitize=address,undefined -fno-sanitize-recover=all' \
+    "$VENV" tests/test_gpu_scroll_reuse.py
+HGSS_GX3D_TEST_CFLAGS='-fsanitize=address,undefined -fno-sanitize-recover=all' \
+    "$VENV" tests/test_gx3d_clip_matrix.py
+```
+
+The session's native suite ran **463 tests: 11 toolchain errors, 13 skips, no
+assertion failures**. That is not a green full suite. The unavailable host32,
+SDK/port, overlay and symbol gates are not replaced by the standalone fixed-width
+renderer/geometry fixtures. Historical container tables below are not current
+native results. Patch check was **87/87** and content check passed.
+
+The renderer fixture runs **1428 synthetic checks**; optional
+`HGSS_RENDER_CAPTURE_DIR=/absolute/private/capture` adds 10 checks using local
+Azahar dumps. The geometry fixture runs **740217 checks**. Both pass ASan/UBSan.
+Their isolated host typedef adaptations do not change production SDK headers or
+prove the full game ABI. Keep game-memory dumps under ignored `build/`, never
+commit them as fixtures. See [Renderer-Validation](Renderer-Validation.md).
+
+Before staging, record each `.build-info.txt` identity, clean/dirty state, SHA-256
+and size, check the boot banner, and require `validate_3dsx` to return no issues.
+The session's final pair is **b93c6ad**, built in entirely new
+`build/w3-w4-release-hg/` and `build/w3-w4-release-ss/` directories; each compiled
+**1092/1092** and linked cleanly. Later test/docs commits do not change those
+binaries. Exact hashes and staging destinations live in
+[STATE](../progress/STATE.md), not in a floating claim that HEAD was tested.
 
 ## 1. Where builds run
 

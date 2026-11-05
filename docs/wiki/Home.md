@@ -4,6 +4,11 @@ A native 3DS port of Pokémon HeartGold and SoulSilver, built on the ctrl-cheeb-
 
 ## Pages
 
+Latest lessons: [Renderer-Validation](Renderer-Validation.md) covers native
+pixel/math proofs, safe serial Azahar runs and evidence limits, including the
+W2 battle-take investigation. The staged
+candidate and pending hardware gates are in [STATE](../progress/STATE.md).
+
 | Page | What it covers |
 | --- | --- |
 | [Player's Guide](../USER-GUIDE.md) | **Start here to play.** The three Python scripts: install the toolchain, prepare your own HeartGold/SoulSilver ROM, build the `.3dsx`, and stage the SD-card folder. Plain language, Linux and macOS. |

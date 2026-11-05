@@ -116,12 +116,12 @@ A rejected file prints `Cannot write segment data!`; the console then aborts
 in its Loader with an undefined-instruction dump naming the process `loader`.
 See [3DS-Pitfalls](3DS-Pitfalls.md#one-relocation-held-symbol---0x06800000).
 
-The frame-time instrumentation is in: every 600 frames the shell writes a
-`FRAMETIME` line, and `tools/frametime_report.py log.txt` turns a whole log
-into the budget table (mean/min/p95/max per subsystem, the frame rate, and how
-many frames exceeded 16.7 ms). `audio_us` is filled by the audio thread once
-audio is wired; `draw_us` includes the flip wait, so `total_us` is the number
-that decides whether it feels smooth.
+Every 600 frames the shell writes a `FRAMETIME` **sample**, and
+`tools/frametime_report.py log.txt` summarizes those samples. Current fields
+are `game_us`, `state_us`, `total_us` and H-blank/handoff breakdowns, not the old
+`draw_us`/`audio_us` schema. Samples are not an all-frame latency distribution
+or a visible-frame rate. Read them alongside the interval `[perf]` counters
+described below.
 
 ## Logs over ftpd
 
@@ -259,6 +259,14 @@ save does not need it. Trainer and link battles take the same
 battle is a second check. If it still faults, send `log.txt` and the Luma
 dump; the pc maps with `arm-none-eabi-addr2line -e pokeheartgold-3ds.elf`.
 
+Owner-confirmed on Old 3DS hardware (pre-fix `b93c6ad`): the battle message
+box renders H-mirrored while status boxes stay correct — a real port defect,
+not an emulator artifact. The committed veto (patch 1910, game-driven battle
+flag forcing software BGs) is verified on Azahar but still needs a hardware
+photo A/B: same grass, same encounter, pre-fix vs veto build at the command
+prompt. The exact quad-path defect is open; see the [battle validation
+notes](../progress/agent-notes/w2-battle-ui-veto-and-quad-hunt.md).
+
 The same class of literal crashed later screens (the Pokémon summary, the
 encounter transition, the Hall of Fame, trades); patch 1905 converted all of
 them. Reaching any of those screens is a bonus check.
@@ -290,12 +298,12 @@ The shell logs a `frame N` line every 600 frames. Once the instrumentation
 build is in, the log also carries per-subsystem milliseconds; the report
 format and `tools/frametime_report.py` are described in
 `docs/progress/phase-5.md`. Target: **60 Hz** in menus, intro and title. The
-frame cap sets that pace: `total_us` should average near **16,700** (the
-period is `SYSCLOCK_ARM11 / 60` = 4,468,530 ticks ≈ 16,667 us). A mean near
-11,500 (87 Hz) means the cap is not in the artifact or not reached; a mean
-near 33,400 means `fps=30` is set. `fps=30` reports as missing the 60 Hz
-target by design. Record the New 3DS numbers and, separately, the Old 3DS
-numbers.
+frame cap requests that pace (period `SYSCLOCK_ARM11 / 60` = 4,468,530 ticks,
+approximately 16,667 us). Samples near that value are a useful check, not proof
+of normal gameplay speed. Confirm configuration from the banner rather than
+inferring it from latency: overruns, waits and scheduling also affect samples.
+`fps=30` deliberately halves the per-frame game clock and is not a playability
+fix. Record New and Old 3DS results separately.
 
 ## Reading the `[perf]` lines
 
@@ -304,9 +312,9 @@ the order they answer questions:
 
 | Line | Fields | What they mean |
 | --- | --- | --- |
-| `FRAMETIME` | `game_us` | the game's own logic for the interval |
+| `FRAMETIME` | `game_us` | `max(total_us - previous state_us, 0)`: residual interval time, not isolated game CPU time |
 | | `state_us` | the whole hand-off (`DrawFrame`) for the *previous* frame |
-| | `total_us` | interval between frame starts; 16,700 = 60 Hz |
+| | `total_us` | sampled interval between `NitroPort_OnFrame` entries; not visible FPS or interval-average update rate |
 | | `hblank_us` | the H-blank phase of the hand-off |
 | | `hb_keep_us` / `hb_dma_us` / `hb_irq_us` | that phase split: per-line register copy, DMA, interrupt dispatch |
 | `[perf] display` | `composes/s`, `build`, `GPU/waited`, `publishes/s`, `publish` | the display thread; `scene build` is its 3D CPU work |
@@ -328,6 +336,33 @@ Rules learned the hard way (see
   `state_us`, which is impossible.
 - `hb_*` are the **last walk's** split. A frame that did not arm H-blank prints
   stale values beside an 8 us `hblank_us`; don’t read them as this frame's.
+- `total_us` is entry-to-entry wall time; `state_us` times `DrawFrame`, not
+  just a memory copy. The interval can include prior pacing, waits and scheduling.
+  `WaitForFrameCap` runs at the end, but its banner alone does not establish
+  achieved update cadence. Run 27 has samples around 3 ms despite the 60-Hz
+  setting: keep W1 pacing unresolved rather than declaring normal speed or
+  deducing sustained 333-Hz updates from sparse samples. Check elapsed frame
+  progression, gameplay/audio speed and interval counters together.
+
+## Emulator preflight before another hardware run
+
+Use [Renderer-Validation](Renderer-Validation.md) for the serial Azahar procedure,
+capture replay and failure recovery. An Old/New emulator profile proves neither
+the console's CPU budget nor APT lifecycle behavior. A forced emulator shutdown
+is not HOME-close acceptance; silent operation without `dspfirm.cdc` is not an
+audio pass.
+
+The 2026-11-04 candidate is **b93c6ad**. Its final artifacts separately passed SS
+Old/New Goldenrod through 5400 and HG Old title through 6600. The longer HG New
+new-game-to-bedroom run (19800) used **1dc11dc**, before the final exact scaling
+optimization. Do not attribute that entire matrix to the final pair.
+Exact hashes, staged paths and pending gates are in [STATE](../progress/STATE.md).
+The final field profile has zero CPU scanlines/row copies at 5400 versus baseline
+**57408 empty lines / 299 regions**. This establishes reached work avoidance,
+not hardware FPS improvement. Run 27 / **96b3131** remains the latest matched
+hardware baseline; its later, different-geometry intervals are not Goldenrod
+benchmark gains. Full W3/W4 acceptance, geometry CPU attribution and the ≤16-ms
+target remain open, as do writer-generation/publish work and W2 battle UI.
 
 Before believing a run, confirm the build is the one you think: the startup
 banner prints `2D … (N texels a pixel)`, `the display on core N`, and the

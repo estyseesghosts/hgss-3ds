@@ -45,6 +45,10 @@ sequence.
 | A fix is missing on hardware although the source has it | [A missing patch compiles silently](#a-missing-patch-compiles-silently) |
 | A port-source edit seems to have no effect | [A vendored archive does not rebuild](#a-vendored-archive-does-not-rebuild) |
 | A diagnostic reports an impossible number (e.g. 0 sprites) | [Diagnose the diagnostic first](#diagnose-the-diagnostic-first) |
+| Battle dialogue renders H-mirrored, status boxes fine | [Battles must not take GPU quads on a dead name check](#battles-must-not-take-gpu-quads-on-a-dead-name-check) |
+| Takes fire in one battle phase but not another with identical BGs | [A take can hinge on the blend flag](#a-take-can-hinge-on-the-blend-flag) |
+| A host picture dump decodes garbage despite correct VRAM | [Snapshot reads need TakeState first](#snapshot-reads-need-takestate-first) |
+| A screenshot and its VRAM capture disagree on auto-advancing text | [Pair screenshots only with static phases](#pair-screenshots-only-with-static-phases) |
 
 ## A weak hook binds to NULL
 
@@ -853,6 +857,80 @@ check-bootstrap` and into `tools/game.py` so a direct invocation is covered too.
 stack — a later patch rewrites the same lines, so both the forward and reverse
 checks fail. Compare commit subjects instead.
 
+## Empty field planes still walk every scanline
+
+**Symptom.** GPU BG takes succeed, but each behind region still costs 192 empty
+CPU lines. A synthetic two-BG fixture passes while real Goldenrod misses the gate.
+
+**Cause.** The field also enables software BG3 in front of 3D. Captured DISPCNT
+`0x00011f18`, BG controls `9e01/0013/0117/0208`, BLDCNT 0 exposed the missing
+topology. Enabled is not the same as visible, nor nominated the same as GPU-taken.
+
+**Fix.** `a6f0375` proves ordinary text maps transparent from current map/tile
+bytes, visiting each referenced tile once. All texels must be index zero;
+tile *number* zero can contain visible data. Skip redundant side-band/scanline
+work only after existing GPU admission succeeds and other restrictions hold.
+Dialogue, artwork, windows, H-blank, effects and sprites retain their validators
+and software fallbacks. Captured-state replay compares with the forced renderer.
+
+**Rule.** Reproduce the live register **and memory** topology, including untaken
+layers. Zero visible pixels is a proof obligation, not a scene-name heuristic.
+
+## Disabled OBJ leaves persistent sorted sprites behind
+
+**Symptom.** The empty-plane shortcut rejects a frame after sprites are disabled,
+even though the current DISPCNT disables OBJ.
+
+**Cause.** The persistent work structure retained the previous sorted sprite
+count when `SortObjs` returned early for disabled OBJ.
+
+**Fix.** `f481089` resets the count before that return. Transition tests exercise
+enabled-to-disabled OBJ, including live and snapshot rendering.
+
+**Rule.** Reset derived state on disabled/early-return paths. A static disabled
+fixture does not expose stale state from a previous enabled frame.
+
+## Empty-pixel reuse still hashes whole VRAM
+
+**Symptom.** Eliminating scanlines leaves large signature reads on the field path.
+
+**Fix.** `e59fcac` freshly rebuilds/validates metadata and resolves flat CPU planes
+on every established flat-path call. It does not skip based on last frame's
+emptiness or an unproven dirty flag. This avoids whole-region checks in both
+reuse and `RememberSplit`; mixed scenes keep conservative hashing. The call
+returns 1 because it actually refreshes output. A protected unused VRAM page
+proves the old reads fault and the new path does not read it, even during active
+GPU tile/scroll changes.
+
+**Rule.** Fresh resolution and unchanged-memory reuse are different contracts.
+Do not remove general hashing until all relevant writers are covered.
+
+## A reference comparison fails on untouched alpha history
+
+**Symptom.** Candidate/reference alpha differs on an empty over-plane transition.
+
+**Cause.** Empty over pixels leave alpha untouched; the harness seeded different
+previous alpha buffers. The comparison measured history, not a rendering error.
+
+**Fix.** Seed identical histories for both calls, compare pixels and metadata,
+and retain forced `NitroPort_Render2DSplit` as the independent reference.
+
+**Rule.** Compare equivalent input state, including retained destination bytes.
+Do not change production semantics to hide a faulty test setup.
+
+## A random numerical test never exercises saturation
+
+**Symptom.** A matrix suite says it covers saturation, but its operands produce
+no saturated outputs.
+
+**Fix.** Test-only `7cf4761` safely enlarges selected operands, keeps 64-bit sums
+in range, and asserts at least one INT32_MIN/MAX output occurred. Test every
+sparse guard violation, alias and rounding boundary independently too.
+
+**Rule.** Assert the difficult condition happened; test labels and randomness
+alone are not coverage evidence. See [Renderer-Validation](Renderer-Validation.md)
+for exact math and emulator-launch/cleanup lessons.
+
 ## A vendored archive does not rebuild
 
 **Symptom.** The link failed on a symbol that plainly exists in the edited
@@ -880,3 +958,73 @@ sprites affine. The filter discarded every entry.
 instrumentation before the system. The same session also shipped a `FRAMETIME`
 pair (`total_us` < `state_us`) that was provably impossible and should have been
 trusted less than it was.
+
+## Battles must not take GPU quads on a dead name check
+
+**Symptom.** Wild-battle message text renders H-mirrored (every glyph
+flipped, order kept) whenever the dialogue BG is a compositor quad. Status
+boxes and sprites are unaffected. Confirmed on Old 3DS hardware, so it is
+not an emulator artifact.
+
+**Cause.** `NitroPort_NominateGpuBgs` vetoed battles with
+`NitroPort_OverlayLoadedNamed("battle")`, but `main.lsf` has 129 overlays
+and no such name (nor `overlay5`), and no overlay loads at battle start
+anyway — field code already holds OVY_12, which also hosts the battle
+template. The check never matched, so battles took quads whose exactness
+was never proven for them.
+
+**Fix.** `Battle_Init`/`Battle_Exit` set and clear a port battle flag
+(patch 1910, `#ifdef SDK_PORT_3DS`-only additions; all battle types run
+through `gOverlayTemplate_Battle`), and nomination returns 0 while it is
+set. The field keeps its takes; battle intervals take 0 and resume after.
+
+**Rule.** An overlay-name check is dead unless the name is proven to exist
+in the generated overlay table *and* observed loading at the right moment.
+Prefer a game-state flag through an approved port hook, and cover it with a
+test — the old nominate test asserted the dead check and had to be fixed
+with it. The exact quad-path defect (mirrored text with correct host-side
+inputs) remains open; see the [battle validation notes](../progress/agent-notes/w2-battle-ui-veto-and-quad-hunt.md).
+
+## A take can hinge on the blend flag
+
+**Symptom.** In one battle build, the entry messages ("Wild ...",
+"Go! ...") rendered correctly while the command prompt mirrored — same
+DISPCNT/BGCNT/scrolls, same VRAM bytes.
+
+**Cause.** `BLDCNT` was `0x3f40` during entry (blend active, so the blend
+validator rejects the take and software draws) and `0x0000` at the command
+prompt (take fires, quad path mirrors). Two phases of one scene took
+different rendering paths.
+
+**Rule.** When comparing two frames, diff `BLDCNT`/brightness first: a
+phase change in blend state changes *which* renderer drew the pixels, and
+a pixel comparison across the boundary proves nothing about either path.
+Capture the flag with the registers, every time.
+
+## Snapshot reads need TakeState first
+
+**Symptom.** A host harness decoding real battle VRAM through
+`Render2DBgPicture` produced empty layers with wrong map sizes.
+
+**Cause.** The harness passed `snapshot=1` without ever calling
+`NitroPort_Render2DTakeState`, so the engine read zeroed snapshot state:
+`bgcnt` decoded as 0 and every base/size came out wrong. The live shell
+takes state every frame, so the harness must too.
+
+**Rule.** Any host tool that reads through a snapshot layout must call
+`TakeState` first; treat a suspiciously empty decode as a setup bug, not a
+game-data finding.
+
+## Pair screenshots only with static phases
+
+**Symptom.** A transition-frame screenshot and its VRAM capture disagreed:
+the box was mid-print in one and settled in the other.
+
+**Cause.** The script screenshotted, then read ~600 KB of VRAM over RPC —
+seconds later, after auto-advancing text had moved on. On input-waiting
+screens (command menu, naming) the state is static and pairs are safe; on
+auto-playing sequences they are not.
+
+**Rule.** Capture VRAM first when the sequence moves, screenshot on static
+screens, and record which is which. A mismatch between a screenshot and a
+later capture is a methods failure, not evidence about either renderer.

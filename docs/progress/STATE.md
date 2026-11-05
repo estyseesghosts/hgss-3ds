@@ -1,5 +1,20 @@
 # Current state
 
+**In progress (2026-11-04): W2 battle dialogue mirror fix, `4ae58a6` + patch 1910.**
+The GPU-BG veto tested an overlay name that exists nowhere in `main.lsf`,
+so battles took quads and dialogue mirrored — the owner confirmed the
+mirror on Old 3DS hardware on pre-fix `b93c6ad`, ruling out an emulator
+artifact. `Battle_Init`/`Battle_Exit` now set/clear a port battle flag (all
+battle types run through `gOverlayTemplate_Battle`); nomination returns 0
+while set. Azahar grass-save repro: entry reads correctly, battle intervals
+take 0 quads, field takes resume after. Native suite 463 tests, no failures.
+Clean veto HG/SS builds compile and validate but are **not staged**; a
+hardware photo A/B is still pending. The exact GPU-path defect is open
+(take fires only at command phase when `BLDCNT` clears; host chain verifies
+correct — see [battle validation notes](agent-notes/w2-battle-ui-veto-and-quad-hunt.md)).
+Notably unrelated: a tall-grass comm-error screen in an A-mash run is a
+separate game-flow assert, not this rendering path.
+
 **Latest candidate (2026-11-04): `b93c6ad` — W3 live-field work avoidance and W4
 exact matrix optimizations.** Both native builds and final Azahar field/title
 smokes pass; artifacts are staged. Real Old 3DS improvement, the 16-ms geometry

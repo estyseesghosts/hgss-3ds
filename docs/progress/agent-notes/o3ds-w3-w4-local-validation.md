@@ -137,6 +137,30 @@ All final probe saves, script files and configuration were checked restored
 byte-for-byte; no test-owned emulator remains running. No save round-trip,
 DSP playback, HOME/sleep or actual hardware regression is claimed by these runs.
 
+## Session issues and resolutions
+
+| Issue encountered | Diagnosis and resolution |
+| --- | --- |
+| Previous enabled OBJ state blocked an empty frame after OBJ was disabled | Persistent sorted count survived the early return. `f481089` clears it; enabled-to-disabled transition tests cover live/snapshot paths. |
+| Synthetic W3 success did not predict Goldenrod | Two-BG fixtures omitted enabled transparent front BG3. Captured registers plus map/tile/OAM data supplied the real topology; `a6f0375` proves current transparency and retains fallbacks. |
+| Pixel-reference alpha mismatches on transitions | Empty over pixels intentionally retain alpha. Seed matching candidate/reference history, not a production alpha-clearing change. |
+| Empty-plane optimization still scanned full VRAM | Fresh revalidation/refill (`e59fcac`) avoids asserting unchanged memory. A protected-unused-page test failed with SIGBUS before the fix and passes after, including active GPU writes. |
+| Archive setup failure followed by hundreds of unresolved symbols | `DEVKITARM` was omitted. Export both devkit variables and rebuild fresh archives; no linker stand-ins or source workaround needed. |
+| Potential stale vendored library despite edited source | Preserve old SDK outputs by renaming, or use entirely new build outputs. Final release HG/SS used new directories; sidecars and boot identity bind results to actual binaries. |
+| Direct Azahar executable never booted | Terminal-launch warning blocked Qt. Process sampling showed a modal dialog; app-bundle launch via `open -W -n … --args …` resolved it. |
+| Early emulator probes overlapped and contaminated shared SD/RPC evidence | TERM can leave Qt's close confirmation alive. Discard those probes; refuse existing emulators, record actual test-owned PID, bounded TERM/KILL and confirmed exit before restoration/relaunch. Corrected runs are serial. |
+| Numerical fixture claimed saturation without producing any | Increase selected operands within safe 64-bit limits and assert saturation occurred (`7cf4761`). No game source or release binary change. |
+| Native full-suite errors | 11 toolchain errors and 13 skips remain. Standalone actual-renderer/math fixtures provide bounded evidence, not a substitute for unavailable host32/SDK gates. |
+| Emulator silence and forced process exit | Missing `dspfirm.cdc`; audio is not tested. Forced shutdown is not HOME/sleep/close acceptance. These remain explicit hardware gates. |
+| Wiki timing schema and pacing interpretation were stale | Verify `NitroPort_OnFrame`: entry-to-entry `total_us`, prior `DrawFrame` state, residual `game_us`; no isolated game-CPU or visible-FPS claim. Run-27 ~3-ms samples despite a 60-Hz banner leave pacing unresolved. |
+
+Durable procedures and proof boundaries are now in the wiki's
+[Renderer-Validation](../../wiki/Renderer-Validation.md),
+[Build-Reference](../../wiki/Build-Reference.md),
+[Hardware-Testing](../../wiki/Hardware-Testing.md) and
+[3DS-Pitfalls](../../wiki/3DS-Pitfalls.md). No emulator runner or private dump
+was promoted into a tracked tool/fixture by this documentation update.
+
 ## Validation procedure and remaining gates
 
 - Native toolchain only: devkitPro/devkitARM, no Docker or new dependencies.
