@@ -240,6 +240,38 @@ static void vram_signature_case(void)
     }
 }
 
+/* A real lower-screen text pixel can depend on the last VRAM byte. The
+ * fallback must request a redraw after a raw write, not just change a hash. */
+static void lower_vram_end_pixel_case(void)
+{
+    reset(0);
+    memset(NitroPort_DbBgVram, 0, sizeof(NitroPort_DbBgVram));
+    wr32(0x1000, 0x10000 | 0x100); /* graphics mode, BG0 */
+    wr16(0x1008, 7 << 2); /* character base 0x1c000, screen base 0 */
+    wr16(0x1010, 6); wr16(0x1012, 7);
+    u16 tile = 511;
+    memcpy(NitroPort_DbBgVram, &tile, sizeof(tile));
+    ((u16 *)(NitroPort_Pltt + 0x400))[1] = 0x7fff;
+    NitroRender2DSplit initial = layout(over, alpha);
+    initial.gpuBgs = 0;
+    NitroPort_Render2DSplit(1, under, &initial);
+    for (int i = 0; i < 3; i++) {
+        NitroRender2DSplit stable = layout(over, alpha);
+        stable.gpuBgs = 0;
+        NitroPort_Render2DSplitIfChanged(1, under, &stable);
+    }
+    u16 before = under[32];
+    NitroPort_DbBgVram[0x1ffff] ^= 1;
+    NitroRender2DSplit changed = layout(over, alpha);
+    changed.gpuBgs = 0;
+    CHECK(NitroPort_Render2DSplitIfChanged(1, under, &changed) == 1);
+    NitroRender2DSplit reference = layout(refOver, refAlpha);
+    reference.gpuBgs = 0;
+    NitroPort_Render2DSplit(1, refUnder, &reference);
+    CHECK(refUnder[32] != before);
+    CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+}
+
 enum Change { PALETTE, TILE, OAM, WINDOW, HBLANK, NOMINATION, BUFFER,
               BLANK_RETURN, LAYOUT, AFFINE, ENGINE_B, BACKDROP_EFFECT, FORCED_RENDER };
 static void fallback_case(enum Change change)
@@ -601,6 +633,7 @@ static void front_band_capacity_case(void)
 int main(int argc, char **argv)
 {
     vram_signature_case();
+    lower_vram_end_pixel_case();
     data_scroll_key_case(0);
     data_scroll_key_case(1);
     scroll_case(0, 1, 3, 0, 0, 0);
