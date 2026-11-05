@@ -25,3 +25,11 @@ class PublishProfileTests(unittest.TestCase):
         self.assertIn("wall, check includes wait", source)
         self.assertIn("p->noBuffer - last->noBuffer", source)
         self.assertIn("memcpy(sPerfPublish, st.publish, sizeof(sPerfPublish));", source)
+
+    def test_screen_render_attribution_follows_display_swap(self):
+        source = (ROOT / "hgss/game/app/main_3ds.c").read_text()
+        drawer = source[source.index("static void DrawerMain"):source.index("static bool StartDrawer")]
+        self.assertIn("OnTop(0, d->aOnTop) ? 0 : 1", drawer)
+        self.assertIn("OnTop(1, d->aOnTop) ? 0 : 1", drawer)
+        self.assertEqual(drawer.count("&d->screenRenderCalls[screen], 1u"), 2)
+        self.assertIn("render: %u calls, %.2f ms/call wall (includes preemption)", source)

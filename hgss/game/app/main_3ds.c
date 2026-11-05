@@ -635,8 +635,12 @@ typedef struct Drawer {
     volatile u64 publishTicks;      /* ShowScreen and Compose2DCurrent */
     volatile unsigned count;        /* frames handled */
     volatile unsigned drawn;        /* screens actually redrawn */
+    volatile u64 screenRenderTicks[2]; /* physical top/bottom, wall ticks */
+    volatile unsigned screenRenderCalls[2];
     u64 logTicks, logRenderTicks, logPublishTicks;
     unsigned logCount, logDrawn;
+    u64 logScreenRenderTicks[2];
+    unsigned logScreenRenderCalls[2];
 } Drawer;
 
 static Drawer sDrawers[2];
@@ -993,15 +997,23 @@ static void DrawerMain(void *arg)
         start = svcGetSystemTick();
         if (d->screens & ENGINE_A) {
             u64 t = svcGetSystemTick();
+            int screen = OnTop(0, d->aOnTop) ? 0 : 1;
 
             drawA = RenderScreen(0, d->aOnTop, d->stamp);
-            __atomic_fetch_add(&d->renderTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
+            t = svcGetSystemTick() - t;
+            __atomic_fetch_add(&d->renderTicks, t, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&d->screenRenderTicks[screen], t, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&d->screenRenderCalls[screen], 1u, __ATOMIC_RELAXED);
         }
         if (d->screens & ENGINE_B) {
             u64 t = svcGetSystemTick();
+            int screen = OnTop(1, d->aOnTop) ? 0 : 1;
 
             drawB = RenderScreen(1, d->aOnTop, d->stamp);
-            __atomic_fetch_add(&d->renderTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
+            t = svcGetSystemTick() - t;
+            __atomic_fetch_add(&d->renderTicks, t, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&d->screenRenderTicks[screen], t, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&d->screenRenderCalls[screen], 1u, __ATOMIC_RELAXED);
         }
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         if (d->screens & ENGINE_A) {
@@ -1387,6 +1399,10 @@ static void PerfLog(u64 now)
             d->logPublishTicks = __atomic_load_n(&d->publishTicks, __ATOMIC_RELAXED);
             d->logCount = __atomic_load_n(&d->count, __ATOMIC_RELAXED);
             d->logDrawn = __atomic_load_n(&d->drawn, __ATOMIC_RELAXED);
+            for (int screen = 0; screen < 2; screen++) {
+                d->logScreenRenderTicks[screen] = __atomic_load_n(&d->screenRenderTicks[screen], __ATOMIC_RELAXED);
+                d->logScreenRenderCalls[screen] = __atomic_load_n(&d->screenRenderCalls[screen], __ATOMIC_RELAXED);
+            }
         }
         NitroPort_Log("[perf] counters started (frame rates follow at the next log)");
         return;
@@ -1570,6 +1586,15 @@ static void PerfLog(u64 now)
                       : (d->screens == ENGINE_A) == sAOnTop ? "upper" : "lower",
                       PerfPerSecond(count, seconds), PerfMsPer(ticks, count),
                       PerfMsPer(render, count), PerfMsPer(publish, count), drawn);
+        for (int screen = 0; screen < 2; screen++) {
+            u64 st = __atomic_load_n(&d->screenRenderTicks[screen], __ATOMIC_RELAXED);
+            unsigned sc = __atomic_load_n(&d->screenRenderCalls[screen], __ATOMIC_RELAXED);
+            NitroPort_Log("[perf] drawer %d %s render: %u calls, %.2f ms/call wall (includes preemption)",
+                          i, screen ? "bottom" : "top", sc - d->logScreenRenderCalls[screen],
+                          PerfMsPer(st - d->logScreenRenderTicks[screen], sc - d->logScreenRenderCalls[screen]));
+            d->logScreenRenderTicks[screen] = st;
+            d->logScreenRenderCalls[screen] = sc;
+        }
         d->logTicks += ticks;
         d->logRenderTicks += render;
         d->logPublishTicks += publish;
