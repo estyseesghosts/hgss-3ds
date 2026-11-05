@@ -26,6 +26,40 @@ static void reference(Matrix *out, const Matrix *a, const Matrix *b)
     }
     *out = r;
 }
+static void invalidation_cases(void)
+{
+    static const unsigned ops[] = {0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c};
+    uint32_t p[16] = {0};
+    p[0] = p[5] = p[10] = p[15] = 4096;
+    for (int mode = 0; mode < 4; mode++) for (unsigned n = 0; n < sizeof(ops)/sizeof(ops[0]); n++) {
+        unsigned op = ops[n];
+        GeoState g = {0};
+        identity(&g.pos); identity(&g.proj); identity(&g.vec); identity(&g.tex);
+        identity(&g.pjStack); identity(&g.texStack);
+        identity(&g.posStack[0]); identity(&g.vecStack[0]);
+        g.mode = mode; g.wideNum = g.wideDen = g.tallNum = g.tallDen = 1;
+        g.clipDirty = 1;
+        ensure_clip(&g);
+        Matrix before = g.clip, expected;
+        /* Use valid stack operations; pop to level zero. */
+        g.pjLevel = g.texLevel = g.pvLevel = (op == 0x12);
+        uint32_t old = p[0];
+        if (op >= 0x11 && op <= 0x14) p[0] = (mode == 1 || mode == 2) && op == 0x12 ? 1 : 0;
+        matrix_command(&g, op, p);
+        int mutates = mode != 3 && op != 0x11 && op != 0x13;
+        CHECK(g.clipDirty == mutates);
+        CHECK(memcmp(&g.clip, &before, sizeof(before)) == 0); /* still lazy */
+        reference(&expected, &g.pos, &g.proj);
+        ensure_clip(&g);
+        CHECK(memcmp(&g.clip, &expected, sizeof(expected)) == 0);
+        /* Non-mutating commands must never clear a previous real mutation. */
+        g.clipDirty = 1;
+        matrix_command(&g, op, p);
+        CHECK(g.clipDirty == 1);
+        p[0] = old;
+    }
+}
+
 static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
                         Matrix *a, const Matrix *p, uint32_t *digest)
 {
@@ -45,6 +79,7 @@ static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
 }
 int main(int argc, char **argv)
 {
+    invalidation_cases();
     static const int offdiag[] = {1,2,3,4,6,7,8,9,12,13};
     for (int n = 0; n < 20000; n++) {
         Matrix a, p = {{0}}, expected, actual;

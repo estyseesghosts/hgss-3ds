@@ -1557,7 +1557,12 @@ static void matrix_command(GeoState *g,unsigned op,const uint32_t *p)
     /* The clip matrix is worked out again when a vertex, a test or the SDK
      * (NitroPort_Gx3dSyncResults) next needs it: models change matrices
      * several times between vertices. */
-    g->clipDirty=1;
+    /* Texture matrices cannot change position/projection/vector results.
+     * PUSH and STORE only save the current matrix; POP/RESTORE do mutate it.
+     * Leave an already-dirty result dirty, but do not invalidate a clean one
+     * for commands that cannot affect it. Texture-coordinate math above still
+     * runs normally. */
+    if(g->mode!=3 && op!=0x11 && op!=0x13)g->clipDirty=1;
 }
 /* GXSTAT from an engine's state: the box test result, the stack levels
  * and overflow. */
