@@ -2035,18 +2035,21 @@ class GpuBgNominateTests(unittest.TestCase):
     NITRO = REPO / "3ds_port" / "nitro" / "src"
     WIDE_H = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_wide.h"
 
-    def test_nominate_has_no_scene_vetoes(self):
+    def test_nominate_has_battle_veto_only(self):
         text = (self.NITRO / "port_wide.c").read_text()
         nom = text[text.index("int NitroPort_NominateGpuBgs(void)\n{"):
                     text.index("void NitroPort_SetWideScreen(int extra)\n{")]
-        # Battles stay software; everything else nominates and lets
-        # per-BG validation + the region rule decide (the old overlay5 /
-        # laidOut vetoes zeroed takes on the whole field).
-        self.assertIn('NitroPort_OverlayLoadedNamed("battle")', nom)
-        self.assertNotIn("overlay5", nom)
+        # Battles stay software through the game-driven flag (the old
+        # overlay-name veto never matched a real overlay); everything else
+        # nominates and lets per-BG validation + the region rule decide.
+        self.assertIn("NitroPort_BattleActive()", nom)
+        self.assertNotIn("OverlayLoadedNamed", nom)
         self.assertNotIn("laidOut", nom)
+        self.assertIn("return 0;", nom)
         self.assertIn("return 0xE;", nom)
-        self.assertIn("int NitroPort_NominateGpuBgs(void);", self.WIDE_H.read_text())
+        wide_h = self.WIDE_H.read_text()
+        self.assertIn("int NitroPort_NominateGpuBgs(void);", wide_h)
+        self.assertIn("int NitroPort_BattleActive(void);", wide_h)
 
     def test_shell_nominates_beside_the_game_flags(self):
         text = (self.APP / "main_3ds.c").read_text()

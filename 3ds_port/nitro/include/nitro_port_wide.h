@@ -251,9 +251,16 @@ void NitroPort_RepeatingBg(int bg, int on);
 int NitroPort_RepeatingBgs(void);
 /* Slice S5/S6 bundle: text BGs the port nominates for the compositor quad
  * itself, repeating-flagged or not (BGs 1-3: per-BG validation still
- * proves each one, so nomination is never a correctness claim). No scene
- * vetoes; battles stay software. */
+ * proves each one, so nomination is never a correctness claim). The only
+ * scene veto is the battle's (NitroPort_BattleActive): its dialogue went
+ * through a quad H-mirrored, and no take is proven exact for it yet. */
 int NitroPort_NominateGpuBgs(void);
+/* Whether a battle is on screen. Set by the game around its battle app
+ * (all battle types run through gOverlayTemplate_Battle); read by the
+ * drawer. Off by default and after every battle, so the field keeps its
+ * takes. Plain int under the port's atomics, like the field-effect flag. */
+void NitroPort_SetBattleActive(int active);
+int NitroPort_BattleActive(void);
 
 /* (the game: patch 0054, screen_fade_funcs.c) A window (0 or 1) of an
  * engine shaped by the game's circle fades (the screen closing or opening

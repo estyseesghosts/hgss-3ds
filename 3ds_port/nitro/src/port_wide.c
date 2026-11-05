@@ -257,6 +257,21 @@ int NitroPort_WideWindows(int engine, int bg, NitroWideWindow *out, int max)
 static int sForcePictures = -1;
 static volatile int sFieldCells;   /* (NitroPort_SetFieldCells) */
 
+/* Whether a battle is on screen (NitroPort_SetBattleActive, called by the
+ * game around its battle app: every battle type runs through
+ * gOverlayTemplate_Battle). Off by default and after every battle. */
+static volatile int sBattleActive;
+
+void NitroPort_SetBattleActive(int active)
+{
+    __atomic_store_n(&sBattleActive, active != 0, __ATOMIC_RELEASE);
+}
+
+int NitroPort_BattleActive(void)
+{
+    return __atomic_load_n(&sBattleActive, __ATOMIC_ACQUIRE);
+}
+
 void NitroPort_SetFieldCells(int on)
 {
     __atomic_store_n(&sFieldCells, on != 0, __ATOMIC_RELEASE);
@@ -484,14 +499,15 @@ int NitroPort_RepeatingBgs(void)
 }
 
 /* Slice S5/S6 bundle: the port nominates text BGs for the compositor
- * quad itself, repeating-flagged or not. No scene vetoes: per-BG
- * validation (plain tiles, z-order, blend, windows, H-blank) plus the
- * region rule prove each take in any scene, so untaken scenes just draw
- * in software. Battles stay software (their UI churns faster than quad
- * keys pay for). */
+ * quad itself, repeating-flagged or not. The only scene veto is the
+ * battle's: per-BG validation (plain tiles, z-order, blend, windows,
+ * H-blank) plus the region rule prove each take in any scene, so untaken
+ * scenes just draw in software. Battles stay software (their dialogue
+ * mirrored through a quad; no take is proven exact for them yet, and
+ * their UI churns faster than quad keys pay for). */
 int NitroPort_NominateGpuBgs(void)
 {
-    if (NitroPort_OverlayLoadedNamed("battle")) {
+    if (NitroPort_BattleActive()) {
         return 0;
     }
     return 0xE;

@@ -1,0 +1,57 @@
+From 69ff7900105a1d63121c7bf808cde62518643ac3 Mon Sep 17 00:00:00 2001
+From: pokeheartgold-3ds bootstrap <bootstrap@invalid>
+Date: Wed, 4 Nov 2026 23:29:33 -0500
+Subject: [PATCH] battle: flag battle-active for the port's software-BG veto
+
+Wild, trainer, link, Safari, Pal Park, Bug Contest and Frontier battles
+all run through gOverlayTemplate_Battle, whose Init and Exit now set and
+clear the port's battle flag under SDK_PORT_3DS. The port's GPU-BG
+nomination veto reads the flag instead of an overlay name that never
+exists, so battles draw in software while the field keeps its takes.
+Without the define nothing changes.
+---
+ src/launch_application.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/src/launch_application.c b/src/launch_application.c
+index d94f6d0..59d1abf 100644
+--- a/src/launch_application.c
++++ b/src/launch_application.c
+@@ -2,6 +2,14 @@
+ 
+ #include "global.h"
+ 
++#ifdef SDK_PORT_3DS
++// The 3DS port draws battle backgrounds in software until a GPU quad take
++// is proven exact for them. Every battle type runs through the template
++// below, so setting the flag here covers wild, trainer, link, Safari,
++// Pal Park, Bug Contest and Frontier battles.
++extern void NitroPort_SetBattleActive(int active);
++#endif
++
+ #include "constants/flags.h"
+ 
+ #include "application/pokegear/pokegear_main.h"
+@@ -161,6 +169,9 @@ static BOOL Task_NamingScreen(TaskManager *taskman);
+ static void SetName(TaskManager *taskman);
+ 
+ BOOL Battle_Init(OverlayManager *man, int *state) {
++#ifdef SDK_PORT_3DS
++    NitroPort_SetBattleActive(1);
++#endif
+     return TRUE;
+ }
+ 
+@@ -172,6 +183,9 @@ BOOL Battle_Main(OverlayManager *man, int *state) {
+ }
+ 
+ BOOL Battle_Exit(OverlayManager *man, int *state) {
++#ifdef SDK_PORT_3DS
++    NitroPort_SetBattleActive(0);
++#endif
+     return TRUE;
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
