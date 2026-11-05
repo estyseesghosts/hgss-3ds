@@ -62,7 +62,7 @@ static void reset(int two)
     memset(NitroPort_Oam, 0, sizeof(NitroPort_Oam));
     memset(&NitroPort_LineRegs, 0, sizeof(NitroPort_LineRegs));
     wr16(0x304, 0x202); /* both engines powered */
-    /* OBJ display enabled, as on the field, but all 128 OAM entries disabled.
+    /* OBJ display enabled for the initial synthetic scene, with all OAM disabled.
      * SortObjs itself must establish that no sprites affect the CPU picture. */
     wr32(0, 0x10000 | 0x1000 | 0x108 | 0x200 | (two ? 0x400 : 0));
     wr16(8, 1); /* 3D priority */
@@ -263,6 +263,78 @@ static void flat_content_case(int change)
     CHECK(candidate.backdrop == ref.backdrop);
 }
 
+static void disabled_obj_transition_case(int mode, int snapshot)
+{
+    reset(1);
+    /* A real preceding OBJ-enabled frame populates the persistent ObjFrame.
+     * Use both an ordinary sprite and an OBJ-window sprite: the latter isn't
+     * a GPU quad, but must not block the next scene's zero-sprite admission. */
+    ((u16 *)NitroPort_Oam)[0] = (u16)(mode << 10);
+    memset(NitroPort_ObjVram, 0x11, 32);
+    ((u16 *)NitroPort_Pltt)[0x100 + 1] = 0x7C00;
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit prior = layout(over, alpha);
+    prior.snapshot = snapshot;
+    prior.gpuBgs = 0;
+    NitroPort_Render2DSplit(0, under, &prior);
+    CHECK(sWork[0].objFrame.count == 1);
+
+    /* Field mode disables OBJ display. OAM deliberately remains populated:
+     * the display-enable bit, not clearing OAM, controls sprite visibility. */
+    wr32(0, Rd32(NitroPort_IoReg, 0) & ~0x1000u);
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit field = layout(over, alpha);
+    field.snapshot = snapshot;
+    NitroPort_Render2DSplit(0, under, &field);
+    CHECK(sWork[0].objFrame.count == 0);
+    CHECK(field.nGpuQuads == 2);
+    CHECK(field.gpuObjAtlasKey == 0);
+    for (int q = 0; q < field.nGpuQuads; q++) CHECK(field.gpuQuads[q].kind == 0);
+
+    unsigned lines = sProfile[0].lines;
+    NitroPort_BgVram[0x70000] ^= 1;
+    wr16(0x14, 47); wr16(0x18, 71);
+    NitroPort_Render2DTakeState(0);
+    field = layout(over, alpha);
+    field.snapshot = snapshot;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
+    CHECK(sProfile[0].lines == lines);
+    CHECK(field.nGpuQuads == 2);
+    CHECK(field.gpuObjAtlasKey == 0);
+    /* Empty over pixels leave alpha untouched; give both calls the same
+     * history, including alpha left by the preceding visible sprite. */
+    memcpy(refAlpha, alpha, sizeof(alpha));
+    NitroRender2DSplit ref = layout(refOver, refAlpha);
+    ref.snapshot = snapshot;
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+    CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+    CHECK(memcmp(alpha, refAlpha, sizeof(alpha)) == 0);
+    CHECK(field.nGpuQuads == ref.nGpuQuads);
+    CHECK(memcmp(field.gpuBgKey, ref.gpuBgKey, sizeof(ref.gpuBgKey)) == 0);
+    CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
+
+    /* Enabling OBJ again must sort current OAM, not keep the empty frame. */
+    wr32(0, Rd32(NitroPort_IoReg, 0) | 0x1000u);
+    NitroPort_Render2DTakeState(0);
+    field = layout(over, alpha);
+    field.snapshot = snapshot;
+    lines = sProfile[0].lines;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &field) == 1);
+    CHECK(sWork[0].objFrame.count == 1);
+    CHECK(sProfile[0].lines > lines);
+    /* Compare re-enabled sprites with a full render as well. */
+    memcpy(refAlpha, alpha, sizeof(alpha));
+    ref = layout(refOver, refAlpha);
+    ref.snapshot = snapshot;
+    NitroPort_Render2DSplit(0, refUnder, &ref);
+    CHECK(memcmp(under, refUnder, sizeof(under)) == 0);
+    CHECK(memcmp(over, refOver, sizeof(over)) == 0);
+    CHECK(memcmp(alpha, refAlpha, sizeof(alpha)) == 0);
+    CHECK(field.nGpuQuads == ref.nGpuQuads);
+    CHECK(memcmp(field.gpuQuads, ref.gpuQuads, ref.nGpuQuads * sizeof(NitroGpuQuad)) == 0);
+}
+
 int main(void)
 {
     scroll_case(0, 1, 3, 0, 0, 0);
@@ -278,6 +350,11 @@ int main(void)
     }
     for (int c = PALETTE; c <= FORCED_RENDER; c++) fallback_case((enum Change)c);
     for (int c = 0; c < 5; c++) flat_content_case(c);
+    for (int snapshot = 0; snapshot < 2; snapshot++) {
+        disabled_obj_transition_case(0, snapshot);
+        disabled_obj_transition_case(1, snapshot);
+        disabled_obj_transition_case(2, snapshot);
+    }
     printf("gpu-scroll: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }
