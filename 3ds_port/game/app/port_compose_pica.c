@@ -47,6 +47,7 @@
  */
 #ifdef __3DS__
 #include "port_pica.h"
+#include "port_compose_flat.h"
 #include "port_quad_uv.h"
 #include <nitro_port_lowermenu.h>
 #include <nitro_port_render2d.h>
@@ -319,6 +320,7 @@ static NitroPublishShadow sShadow[2];
  * already holds that picture needs only the new brightness. */
 static ComposeLayers sLastPublished[2];
 static int sLastPublishedValid[2];
+static int sShadowFlat[2], sShadowFlatColor[2];
 static NitroGx3dGpuVertex *sQuads;   /* this frame's quads (half of sQuadsAll: the frame before's other half) */
 static NitroGx3dGpuVertex *sQuadsAll;
 static int sQuadHalf;
@@ -896,6 +898,7 @@ static int compose_init(const ComposeConfig *config, int small)
     memset(sScreens, 0, sizeof(sScreens));
     sLastPublishedValid[0] = 0;
     sLastPublishedValid[1] = 0;
+    sShadowFlat[0] = sShadowFlat[1] = 0;
     LightLock_Init(&sSetLock);
     LightLock_Init(&sBgOfsLock);
     memset(sBgOfs, 0, sizeof(sBgOfs));
@@ -1468,6 +1471,10 @@ static int picture_holds(int e, const ComposeLayers *l, int w, int h)
     if (!sh->underValid || sh->width != w || sh->height != h) {
         return 0;
     }
+    if (NitroPort_FlatShadowMatches(l->flatCpuPlanes, sShadowFlat[e], l->backdrop, sShadowFlatColor[e],
+                                    w, h, sh->width, sh->height, l->has3d && l->over != NULL, sh->overValid)) {
+        return 1;
+    }
     if (memcmp(l->under, sh->under, (size_t)w * (size_t)h * 2u) != 0) {
         return 0;
     }
@@ -1730,6 +1737,7 @@ int NitroPort_ComposePublish(int engine, int screen)
     if (!l->displayOff && l->has3d && l->over) {
         over_rows(l->over, w, OVER_ROWS(l), &set->overTop, &set->overBottom);
     }
+    sShadowFlat[e] = 0; /* this publication may change or bypass the shadow */
     t = svcGetSystemTick();
     if (!l->displayOff && filter2d != COMPOSE_FILTER_SCALE2X && scr->texScale == 2) {
         /* over_rows() has already emptied overBottom when the front layer
@@ -1743,6 +1751,12 @@ int NitroPort_ComposePublish(int engine, int screen)
     } else if (!l->displayOff) {
         if (scr->texScale == 1) {
             publish_bands(e, l, scr, set, w, h);
+            if (l->flatCpuPlanes && h > 0 && h <= NITRO_PUBLISH_MAX_H && !(h & 7) && !(w & 7) &&
+                (size_t)w * (size_t)h <= NITRO_PUBLISH_MAX_PIXELS &&
+                sShadow[e].underValid && sShadow[e].overValid) {
+                sShadowFlat[e] = 1;
+                sShadowFlatColor[e] = l->backdrop;
+            }
         } else {
             /* (Scale2x: each texel reads the rows around its pixel.) */
             publish_whole(e, l, scr, set, w, h);

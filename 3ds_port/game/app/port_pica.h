@@ -261,6 +261,7 @@ typedef struct ComposeLayers {
      * nitro_port.h, which can't be included next to 3ds.h): the fields the
      * compositor needs, copied by the caller. */
     int has3d, scroll3d, tint3d, eva, evb, evy, masterBright, backdrop;
+    int flatCpuPlanes;       /* renderer proof; invalidated by any later pixel writer */
     /* (an H-blank effect) scroll3d on each of the 192 lines, when it
      * differs from line to line (the battles' start slides the 3D's lines
      * apart; a wavy screen) */

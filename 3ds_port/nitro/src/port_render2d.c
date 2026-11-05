@@ -4994,7 +4994,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
              * Refill on EVERY call: content changes and new buffers are safe;
              * there is no new unchanged-memory or writer-coverage assumption. */
              Fill(out, backdrop, width * H);
-             memset(split->over, 0, (size_t)width * H * sizeof(u16));
+              memset(split->over, 0, (size_t)width * H * sizeof(u16));
+              split->flatCpuPlanes = 1;
              split->scroll3dLines = 0;
              sSplitReuse[pe].flat = 1;
              return;

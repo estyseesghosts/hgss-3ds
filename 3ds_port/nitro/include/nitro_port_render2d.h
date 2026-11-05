@@ -78,6 +78,7 @@ typedef struct NitroRender2DSplit {
     uint64_t gpuObjAtlasKey;
     int masterBright;  /* the MASTER_BRIGHT register: mode in bits 14-15, factor 0-16 */
     int backdrop;      /* the backdrop colour (RGB555): what shows where no layer does */
+    int flatCpuPlanes; /* freshly proved under=backdrop, over=0; alpha unused */
     uint16_t *over;    /* width x 192 (x height with top) */
     uint8_t *overAlpha;/* width x 192 (x height with top) */
     /* The picture's canvas (the caller's choice, kept by the call): 0 or

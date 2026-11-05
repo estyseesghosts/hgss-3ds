@@ -98,6 +98,7 @@ static void scroll_case(int two, int h1, int v1, int h2, int v2, int bright)
     wr16(0x6C, bright);
     NitroRender2DSplit reused = layout(over, alpha);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &reused) != 0);
+    CHECK(reused.flatCpuPlanes == 1);
     CHECK(sProfile[0].lines == lines);
     /* Reference AFTER candidate, so it cannot change candidate cache history. */
     NitroRender2DSplit ref = layout(refOver, refAlpha);
@@ -334,6 +335,7 @@ static void fallback_case(enum Change change)
     if (!flat && sProfile[engine].lines == before) {
         fprintf(stderr, "fallback case %d unexpectedly omitted scanlines\n", change);
     }
+    if (!flat) CHECK(candidate.flatCpuPlanes == 0);
     CHECK(flat ? sProfile[engine].lines == before : sProfile[engine].lines > before);
     if (engine == 0 && !flat) CHECK(sProfile[0].lines > lines);
     /* For all fallbacks, compare the defined pixels and metadata with a full
@@ -372,6 +374,7 @@ static void flat_content_case(int change)
     wr16(0x14, 43); wr16(0x18, 63);
     NitroRender2DSplit candidate = layout(over, alpha);
     CHECK(NitroPort_Render2DSplitIfChanged(0, under, &candidate) == 1);
+    CHECK(candidate.flatCpuPlanes == 1);
     CHECK(sProfile[0].lines == lines);
     NitroRender2DSplit ref = layout(refOver, refAlpha);
     NitroPort_Render2DSplit(0, refUnder, &ref);
@@ -409,6 +412,7 @@ static void disabled_obj_transition_case(int mode, int snapshot)
     NitroPort_Render2DSplit(0, under, &field);
     CHECK(sWork[0].objFrame.count == 0);
     CHECK(field.nGpuQuads == 2);
+    CHECK(field.flatCpuPlanes == 0); /* forced draw never claims the proof */
     CHECK(field.gpuObjAtlasKey == 0);
     for (int q = 0; q < field.nGpuQuads; q++) CHECK(field.gpuQuads[q].kind == 0);
 

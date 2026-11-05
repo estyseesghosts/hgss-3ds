@@ -899,6 +899,8 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     if (!drawn) {
         int bright = NitroPort_Render2DMasterBright(engine, 1);
 
+        if (!top) layers->flatCpuPlanes = 0; /* lower toast can modify these planes */
+
         /* A fade changes only the GPU brightness. Publish the untouched
          * layers again so the compositor sees the new value, without
          * redrawing the 320x192 picture. */
@@ -952,6 +954,7 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     layers->evy = split.evy;
     layers->masterBright = split.masterBright;
     layers->backdrop = split.backdrop;
+    layers->flatCpuPlanes = top && split.flatCpuPlanes;
     layers->width = split.width > 256 ? split.width : 256;
     layers->height = split.height > 192 ? split.height : 192;
     layers->top = split.top;
