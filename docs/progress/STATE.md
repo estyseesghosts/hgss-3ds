@@ -346,6 +346,37 @@ Newest first. Each entry: what changed, what was run, what it proved.
   have split DISP fully the first time; (c) emulator rig had no boot check and
   the session used `rm` on a live log; (d) broad `pkill azahar` hit the owner's
   session — always target exact PIDs.
+### 2026-11-04 — W3/W4 live-field fixes and native/emulator validation
+
+- Run 27 (`96b3131`) remains **8.25 compositions/s** in scripted Goldenrod.
+  Render wall time improves, but the 192-empty-lines/region work persists;
+  zero audio drops and clean HOME-close. Not the playability finish line.
+- **a6f0375 (W3):** captured Azahar registers prove a third, untaken front BG3
+  blocks the old all-GPU gate. Prove ordinary text maps transparent from current
+  map/tile bytes, skip their side-band work, and admit the existing empty-plane
+  shortcut. No dirty-writer assumptions, allocation, nomination or queue changes.
+- Serial Azahar candidate through frame 5400 reaches **0 CPU scanlines / 0 row
+  copies**, while committing **416 BG takes / 208 behind regions**, zero rejects.
+  Captured-state replay is pixel/metadata exact versus forced full rendering.
+  **1428 synthetic renderer checks**, plus **10 private capture checks**, pass;
+  sanitizer runs pass. Emulator rate is not Old 3DS performance evidence.
+- **bcad322 + 2013709 (W4):** checked sparse clip-matrix product (24 vs 64
+  products, general fallback) and no invalidation for texture/PUSH/STORE commands
+  that cannot change clip/vector results. **180192 numerical/invalidation checks
+  pass**, including ASan/UBSan. No geometry rejection/order/shader changes.
+- Native suite **462 tests**, no assertion failures, **11 known toolchain
+  errors**, 13 skips; patch check **86/86**. Final clean builds/emulator smoke
+  in progress; do not deploy intermediate artifacts.
+- The established flat path now freshly revalidates/resolves each call instead
+  of scanning whole VRAM for unchanged pixels. A protected-page test proves the
+  full-region reads are absent, including after GPU tile writes and scrolling.
+  No dirty-generation or cached-emptiness assumptions; other scenes retain hashes.
+- These slices do **not** close all W3/W4 gates: conservative full hashing
+  remains outside that path, writer-generation/lower-publish work is deferred, and real geometry
+  CPU attribution / ≤16-ms target and Old/New 3DS correctness remain pending.
+- Reproduction, evidence, emulator limitations and safety corrections:
+  [o3ds-w3-w4-local-validation.md](agent-notes/o3ds-w3-w4-local-validation.md).
+
 ### 2026-11-04 — run 26: disabled-OBJ state correction (hardware pending)
 
 - Run **79afbd3** remains essentially flat in scripted Goldenrod: **8.075
