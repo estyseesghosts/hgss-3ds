@@ -64,7 +64,11 @@ though invisible alpha were freshly written.
 - `make sdk-tests`: blocked by native clang's unsupported
   `-fno-aggressive-loop-optimizations`; `make port-tests`: unavailable host32
   native link (armv4t/libc symbol failures). Neither is called passed.
-- Native HG/SS build results and staged hashes are recorded in STATE once built.
+- Native HG/SS: **1092/1092 compiled, 0 failed**, clean links, fresh SDK
+  archives, `validate_3dsx` **[]**. Clean build **96b3131**, with versioned
+  binaries/sidecars and full hashes recorded in STATE. First build attempt
+  omitted `DEVKITARM` and failed library setup; rerun with
+  `DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM` succeeded.
 
 Logs: `build/obj-disabled-validation/`. No patch-stack or memory-layout change;
 DS matching/layout reruns are not claimed. Host32 links, overlay self-check,

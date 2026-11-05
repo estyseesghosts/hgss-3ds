@@ -364,7 +364,18 @@ Newest first. Each entry: what changed, what was run, what it proved.
 - Patch check **86/86**. `make test`: **461 tests**, no assertion failures,
   **11 known native toolchain errors**, 13 skips. SDK and port test targets were
   attempted natively and remain blocked by host compiler/host32 limitations.
-  Native 3DS builds in progress; hardware/golden/New 3DS gates **pending**.
+  Hardware/golden/New 3DS gates **pending**.
+- **Staged clean build `96b3131`** (code fix `f481089` plus its documentation):
+  native HG/SS each **1092/1092 compiled, 0 failed**, linked, `validate_3dsx`
+  **[]**, fresh SDK archives. Versioned binaries and sidecars in the normal
+  `dist` destinations and `~/hgss-private/sd-card/3ds/`; previous binaries,
+  unversioned launch files, saves, scripts and configs preserved.
+  - HG `pokeheartgold-96b3131.3dsx`, **5,803,104 B**, SHA-256
+    `bc50eca79da09d62aa3028a02e2a1dd5b0eb3dba2aa74fa7a1e58e8489935be0`.
+  - SS `pokesoulsilver-96b3131.3dsx`, **5,803,160 B**, SHA-256
+    `d590af84872e7d283535ed570e420dfa5c031d3bc153b1be3d7b40bd58826705`.
+  Launch this version explicitly with the frozen inputs. Actual benefit over
+  run 26 is unverified; compare existing empty-line/region and drawer counters.
 - Details: [o3ds-log26-disabled-obj.md](agent-notes/o3ds-log26-disabled-obj.md).
 
 ### 2026-11-04 — run 25: traversable, not finished; empty scanline follow-up
