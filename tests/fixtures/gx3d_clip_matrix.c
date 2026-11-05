@@ -190,7 +190,43 @@ static void hidden_list_profile_cases(void)
     CHECK(skip_hidden_vertices(&c) == 0 && sHiddenDiag.mixed == 1);
     CHECK(sHiddenDiag.attempts == sHiddenDiag.accepted + sHiddenDiag.mode + sHiddenDiag.incomplete +
           sHiddenDiag.unsupported + sHiddenDiag.empty + sHiddenDiag.saturated + sHiddenDiag.intersects +
-          sHiddenDiag.mixed);
+          sHiddenDiag.mixed + sHiddenDiag.shadow);
+}
+
+static void hidden_list_shadow_case(void)
+{
+    static NitroGx3dTriangle shadow[16];
+    const int xy[3][2] = {{5000, -1000}, {7000, -1000}, {6000, 1000}};
+    uint32_t words[6];
+    GeoVertex v[3] = {{0}};
+    StreamCursor c = {0};
+    memset(&s, 0, sizeof(s)); memset(&sDiag, 0, sizeof(sDiag));
+    memset(shadow, 0, sizeof(shadow));
+    identity(&s.xf); s.xfTrans[3] = (int64_t)4096 * 4096;
+    s.attr = (3u << 6) | (31u << 16); s.viewport[2] = 255; s.viewport[3] = 191;
+    sDest = &sScenes[0]; sDest->shadow_triangles = shadow; sDest->shadow_count = 0;
+    sShadowCapture = 1;
+    for (int i = 0; i < 3; i++) {
+        words[i * 2] = (uint16_t)xy[i][0] | ((uint32_t)(uint16_t)xy[i][1] << 16);
+        words[i * 2 + 1] = 0;
+        v[i].clip[0] = xy[i][0]; v[i].clip[1] = xy[i][1]; v[i].clip[3] = 4096;
+        v[i].outside = (uint8_t)outcode(v[i].clip); v[i].lit = 1;
+    }
+    CHECK(!polygon_hidden(v[0].outside | v[1].outside | v[2].outside,
+                          v[0].outside & v[1].outside & v[2].outside));
+    stage_triangle(&v[0], &v[1], &v[2]);
+    CHECK(sDest->shadow_count == 1); /* visible to the existing shadow path */
+    c.c.w = words; c.c.count = 6; c.c.word = 0x41232323;
+    CHECK(skip_hidden_vertices(&c) == 0); /* must retain those commands */
+    CHECK(sHiddenDiag.shadow == 1);
+    for (int sign = -1; sign <= 1; sign += 2) {
+        for (int i = 0; i < 3; i++) {
+            words[i * 2] = 0; words[i * 2 + 1] = (uint16_t)(sign * 8192);
+        }
+        memset(&c, 0, sizeof(c)); c.c.w = words; c.c.count = 6; c.c.word = 0x41232323;
+        CHECK(skip_hidden_vertices(&c) == 1); /* wholly beyond near/far stays rejectable */
+    }
+    sShadowCapture = 0; sDest->shadow_triangles = NULL; sDest = NULL;
 }
 
 static double benchmark(void (*fn)(Matrix *, const Matrix *, const Matrix *),
@@ -219,6 +255,7 @@ int main(int argc, char **argv)
     printf("gx3d submit trace: %016llx\n", (unsigned long long)trace);
     CHECK(trace == UINT64_C(0x7679d7b60433e5d0)); /* pre-change translator */
     hidden_list_profile_cases();
+    hidden_list_shadow_case();
     for (int n = 0; n < 100006; n++) {
         static const int32_t edge[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -4096};
         (void)value();

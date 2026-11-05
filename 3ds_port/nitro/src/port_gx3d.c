@@ -645,7 +645,7 @@ static struct {
 /* One count per whole-list attempt, not per vertex. Separate from sDiag so
  * its existing scene/vertex accounting and reset semantics stay intact. */
 static struct {
-    unsigned attempts, mode, incomplete, unsupported, empty, saturated, intersects, mixed;
+    unsigned attempts, mode, incomplete, unsupported, empty, saturated, intersects, mixed, shadow;
     unsigned accepted, vertices, polygons;
 } sHiddenDiag;
 
@@ -669,10 +669,10 @@ static void diag_log(void)
                   (long)s.vertices[0].clip[0], (long)s.vertices[0].clip[1],
                   (long)s.vertices[0].clip[2], (long)s.vertices[0].clip[3]);
     NitroPort_Log("[gx3d] hidden-lists: %u attempts, %u accepted (%u vertices, %u polys); "
-                  "reject mode/incomplete/op/empty/range/intersect/mixed %u/%u/%u/%u/%u/%u/%u",
+                  "reject mode/incomplete/op/empty/range/intersect/mixed/shadow %u/%u/%u/%u/%u/%u/%u/%u",
                   sHiddenDiag.attempts, sHiddenDiag.accepted, sHiddenDiag.vertices, sHiddenDiag.polygons,
                   sHiddenDiag.mode, sHiddenDiag.incomplete, sHiddenDiag.unsupported, sHiddenDiag.empty,
-                  sHiddenDiag.saturated, sHiddenDiag.intersects, sHiddenDiag.mixed);
+                  sHiddenDiag.saturated, sHiddenDiag.intersects, sHiddenDiag.mixed, sHiddenDiag.shadow);
     memset(&sDiag, 0, sizeof(sDiag));
     memset(&sHiddenDiag, 0, sizeof(sHiddenDiag));
 }
@@ -2280,6 +2280,10 @@ found:
         }
     }
     if(behind&&front){sHiddenDiag.mixed++;return 0;}
+    /* polygon_hidden deliberately keeps side-offscreen geometry for sun
+     * shadows. The list shortcut must defer to that same path; only a shared
+     * near/far rejection is guaranteed not to cast a retained shadow. */
+    if(sShadowCapture && !(outside & 0x30u)){sHiddenDiag.shadow++;return 0;}
     /* Hidden: what the commands leave behind, without the vertices (each
      * command only sets state; the last one of each kind is what stays). */
     s.coord[0]=xyz[0];s.coord[1]=xyz[1];s.coord[2]=xyz[2];
