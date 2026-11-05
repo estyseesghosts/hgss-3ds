@@ -155,6 +155,47 @@ static void sequence_case(int snapshot, int mapSize)
     CHECK(memcmp(alpha, refAlpha, sizeof(alpha)) == 0);
 }
 
+/* Scroll is placement, not texture identity. Direct writes must still change
+ * the data key: these exercise real key construction with no writer hooks. */
+static void data_scroll_key_case(int snapshot)
+{
+    reset(1);
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit first = layout(over, alpha);
+    first.snapshot = snapshot;
+    NitroPort_Render2DSplit(0, under, &first);
+    CHECK(first.nGpuQuads == 2);
+    wr16(0x14, 17); wr16(0x16, 19);
+    wr16(0x18, 23); wr16(0x1a, 29);
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit moved = layout(over, alpha);
+    moved.snapshot = snapshot;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &moved) == 1);
+    CHECK(moved.nGpuQuads == 2);
+    CHECK(memcmp(first.gpuBgKey, moved.gpuBgKey, sizeof(first.gpuBgKey)) == 0);
+    CHECK(memcmp(first.gpuQuads, moved.gpuQuads, 2 * sizeof(NitroGpuQuad)) != 0);
+
+    NitroPort_BgVram[32] ^= 1;
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit tile = layout(over, alpha);
+    tile.snapshot = snapshot;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &tile) == 1);
+    CHECK(tile.nGpuQuads == 2);
+    CHECK(tile.gpuBgKey[0] != moved.gpuBgKey[0]);
+    CHECK(tile.gpuBgKey[1] != moved.gpuBgKey[1]);
+    CHECK(memcmp(tile.gpuQuads, moved.gpuQuads, 2 * sizeof(NitroGpuQuad)) == 0);
+
+    ((u16 *)NitroPort_Pltt)[1] ^= 1;
+    NitroPort_Render2DTakeState(0);
+    NitroRender2DSplit palette = layout(over, alpha);
+    palette.snapshot = snapshot;
+    CHECK(NitroPort_Render2DSplitIfChanged(0, under, &palette) == 1);
+    CHECK(palette.nGpuQuads == 2);
+    CHECK(palette.gpuBgKey[0] != tile.gpuBgKey[0]);
+    CHECK(palette.gpuBgKey[1] != tile.gpuBgKey[1]);
+    CHECK(memcmp(palette.gpuQuads, tile.gpuQuads, 2 * sizeof(NitroGpuQuad)) == 0);
+}
+
 enum Change { PALETTE, TILE, OAM, WINDOW, HBLANK, NOMINATION, BUFFER,
               BLANK_RETURN, LAYOUT, AFFINE, ENGINE_B, BACKDROP_EFFECT, FORCED_RENDER };
 static void fallback_case(enum Change change)
@@ -515,6 +556,8 @@ static void front_band_capacity_case(void)
 
 int main(int argc, char **argv)
 {
+    data_scroll_key_case(0);
+    data_scroll_key_case(1);
     scroll_case(0, 1, 3, 0, 0, 0);
     scroll_case(1, 0, 0, 7, 11, 0);
     scroll_case(1, 13, 21, 31, 41, 0);
