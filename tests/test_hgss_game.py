@@ -1446,7 +1446,7 @@ class PerformanceWaveTwoTests(unittest.TestCase):
 
 class PerformanceWaveThreeTests(unittest.TestCase):
     """The third performance wave: the last double hot path, audio off core
-    0, the Old 3DS launch-only filter, and the lower screen at 30 Hz."""
+    0, the Old 3DS launch-only filter, and the lower screen cadence."""
 
     APP = REPO / "hgss" / "game" / "app"
     NITRO = REPO / "3ds_port" / "nitro" / "src"
@@ -1539,7 +1539,7 @@ class PerformanceWaveThreeTests(unittest.TestCase):
     def test_o3dsched_defaults_to_display_first_on_old_3ds(self):
         text = (self.APP / "main_3ds.c").read_text()
         parse = text[text.index('if (IniValue("o3dsched", value, sizeof(value))) {'):
-                      text.index("if (sIniLower30 < 0) {")]
+                      text.index('NitroPort_Log("[perf] display options:')]
         # Explicit keys keep working (default stays chewable, N3DS guard stays).
         self.assertIn('strcmp(value, "default") == 0', parse)
         self.assertIn("sIniSched = 0;", parse)
@@ -1552,24 +1552,18 @@ class PerformanceWaveThreeTests(unittest.TestCase):
         # The geometry priority follows the flag (demoted under the display).
         self.assertIn("s32 geoPriority = sIniSched ? priority + 3 : priority - 1;", text)
 
-    def test_lower_screen_is_30hz_on_old_3ds(self):
+    def test_lower_screen_offered_every_tick(self):
         text = (self.APP / "main_3ds.c").read_text()
         self.assertIn('IniValue("lower30"', text)
-        # Default by console: Old 3DS 30 Hz, New 3DS 60 Hz.
-        self.assertIn("sIniLower30 = sNew3ds ? 0 : 1;", text)
+        self.assertIn("lower30=%s ignored; both engines are offered every tick", text)
+        self.assertNotIn("sIniLower30", text)
         drawer = text[text.index("static void DrawerMain"):
                        text.index("static bool StartDrawer")]
-        # Only engine B ever skips (it cannot carry the 3D); never a forced
-        # redraw, and never on a New 3DS.
-        self.assertIn("!sNew3ds && sIniLower30 && ((d->stamp & 1u) != 0)", drawer)
-        self.assertIn("!sMustDraw[lowerIdx]", drawer)
-        self.assertIn("sToastDirty", drawer)
+        self.assertNotIn("d->stamp & 1", drawer)
+        self.assertIn("if (d->screens & ENGINE_B)", drawer)
         self.assertIn("RenderScreen(1, d->aOnTop, d->stamp)", drawer)
-        # A skipped frame publishes nothing, so the display reuses the last
-        # set instead of advancing its stamp.
-        self.assertIn("nothing rendered and nothing published", drawer)
-        # Game logic stays 60 Hz: only the lower 2D halves.
-        self.assertIn("lower 2D at %s", text)
+        self.assertIn("NitroPort_Compose2DCurrent(OnTop(1, d->aOnTop) ? 0 : 1, d->stamp)", drawer)
+        self.assertIn("lower 2D offered every tick", text)
 
 
 class PerformanceSliceATests(unittest.TestCase):

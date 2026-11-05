@@ -348,11 +348,10 @@ static bool sNew3ds;
  * "any core", the New 3DS default). Tentative here so PerfLog above can
  * read it; initialised at the audio section. */
 static int sAudioCore;
-/* `audiocore=` / `lower30=` / `o3dsched=` overrides (ReadDisplayOptions):
+/* `audiocore=` / `o3dsched=` overrides (ReadDisplayOptions):
  * declared here because the drawer and audio threads start before that
  * section. */
 static int sIniAudioCore = -1;
-static int sIniLower30 = -1;
 /* `o3dsched=display-first`: on an Old 3DS only, demote the always-ready
  * geometry worker below the event-driven display thread on core 1 (1 by
  * default on Old 3DS, 0 with `o3dsched=default`: today's order). Same-core
@@ -998,24 +997,11 @@ static void DrawerMain(void *arg)
             drawA = RenderScreen(0, d->aOnTop, d->stamp);
             __atomic_fetch_add(&d->renderTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
         }
-        /* An Old 3DS draws the lower screen's 2D at 30 Hz (game logic stays
-         * 60 Hz): engine B renders on even stamps only. Only engine B ever
-         * skips -- it cannot carry the 3D -- and never a forced redraw (a
-         * failed publish, resume, or a pending toast sets sMustDraw). The
-         * skipped frame publishes nothing, so the display reuses the last
-         * set; a New 3DS never skips. */
-        {
-            int lowerIdx = OnTop(1, d->aOnTop) ? 0 : 1;
-            bool skipB = !sNew3ds && sIniLower30 && ((d->stamp & 1u) != 0) &&
-                         !sMustDraw[lowerIdx] &&
-                         !__atomic_load_n(&sToastDirty, __ATOMIC_ACQUIRE);
+        if (d->screens & ENGINE_B) {
+            u64 t = svcGetSystemTick();
 
-            if ((d->screens & ENGINE_B) && !skipB) {
-                u64 t = svcGetSystemTick();
-
-                drawB = RenderScreen(1, d->aOnTop, d->stamp);
-                __atomic_fetch_add(&d->renderTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
-            }
+            drawB = RenderScreen(1, d->aOnTop, d->stamp);
+            __atomic_fetch_add(&d->renderTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
         }
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         if (d->screens & ENGINE_A) {
@@ -1030,20 +1016,12 @@ static void DrawerMain(void *arg)
             NitroPort_Compose2DDone(d->stamp);
         }
         if (d->screens & ENGINE_B) {
-            /* (a skipped 30 Hz frame: nothing rendered and nothing published,
-             * so no new stamp either) */
-            int lowerIdx = OnTop(1, d->aOnTop) ? 0 : 1;
-            bool skipped = !sNew3ds && sIniLower30 && ((d->stamp & 1u) != 0) &&
-                           !drawB && !sMustDraw[lowerIdx];
+            u64 t = svcGetSystemTick();
 
-            if (!skipped) {
-                u64 t = svcGetSystemTick();
-
-                if ((drawB ? ShowScreen(1, d->aOnTop) : !sMustDraw[OnTop(1, d->aOnTop) ? 0 : 1])) {
-                    NitroPort_Compose2DCurrent(OnTop(1, d->aOnTop) ? 0 : 1, d->stamp);
-                }
-                __atomic_fetch_add(&d->publishTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
+            if ((drawB ? ShowScreen(1, d->aOnTop) : !sMustDraw[OnTop(1, d->aOnTop) ? 0 : 1])) {
+                NitroPort_Compose2DCurrent(OnTop(1, d->aOnTop) ? 0 : 1, d->stamp);
             }
+            __atomic_fetch_add(&d->publishTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
         }
         __atomic_fetch_add(&d->ticks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
         __atomic_fetch_add(&d->count, 1u, __ATOMIC_RELAXED);
@@ -2250,10 +2228,6 @@ static int sIniDisplayCore = -1;
 /* `audiocore=0|1`: -1 is the console's default (core 1 on an Old 3DS, where
  * the drawer owns core 0; any core on a New 3DS, as before). It moves only
  * the audio thread; its priority stays above the game. (Declared above.) */
-/* `lower30=on/off`: -1 is the console's default (on on an Old 3DS: the lower
- * screen's 2D at 30 Hz while game logic stays 60 Hz; off on a New 3DS).
- * Only engine B ever skips: engine A can carry the 3D. (Declared above.) */
-
 static int IniOnOff(const char *value, int *out)
 {
     if (strcmp(value, "on") == 0 || strcmp(value, "1") == 0) {
@@ -2276,7 +2250,6 @@ static void ReadDisplayOptions(void)
     sIniWide = 1;
     sIniDisplayCore = -1;
     sIniAudioCore = -1;
-    sIniLower30 = -1;
     sIniSched = 0;
     if (IniValue("filter", value, sizeof(value))) {
         if (strcmp(value, "sharp") == 0) {
@@ -2343,14 +2316,7 @@ static void ReadDisplayOptions(void)
         }
     }
     if (IniValue("lower30", value, sizeof(value))) {
-        if (!IniOnOff(value, &sIniLower30)) {
-            NitroPort_Log("[perf] port.ini lower30=%s is not on/off/1/0; using the console's "
-                          "default", value);
-            sIniLower30 = -1;
-        } else {
-            NitroPort_Log("[perf] lower30=%s (the lower screen's 2D at %s)", value,
-                          sIniLower30 ? "30 Hz" : "60 Hz");
-        }
+        NitroPort_Log("[perf] port.ini lower30=%s ignored; both engines are offered every tick", value);
     }
     if (IniValue("o3dsched", value, sizeof(value))) {
         if (strcmp(value, "default") == 0) {
@@ -2375,11 +2341,6 @@ static void ReadDisplayOptions(void)
          * the event-driven display still yields to geometry when idle. */
         sIniSched = 1;
         NitroPort_Log("[perf] o3dsched default is display-first on Old 3DS (geometry demoted below the display on core 1)");
-    }
-    if (sIniLower30 < 0) {
-        /* The agreed profile: an Old 3DS draws the lower screen's 2D at
-         * 30 Hz (game logic stays 60 Hz); a New 3DS keeps 60 Hz. */
-        sIniLower30 = sNew3ds ? 0 : 1;
     }
     NitroPort_Log("[perf] display options: filter %d, stereo %d, wide %d, texscale %d",
                   sIniFilter, sIniStereo, sIniWide, sIniTexScale);
@@ -2717,9 +2678,9 @@ int main(int argc, char **argv)
     if (!sNew3ds) {
         /* The Old 3DS profile is fixed at launch: no runtime filter cycle
          * (its presets would reallocate layer sets and 2-4x texture memory
-         * mid-run), and the lower screen's 2D at 30 Hz (upper stays 60). */
-        NitroPort_Log("[perf] Old 3DS profile: launch-time filter only, lower 2D at %s, o3dsched %s",
-                      sIniLower30 ? "30 Hz" : "60 Hz", sIniSched ? "display-first" : "default");
+         * mid-run). Both engines are offered every tick. */
+        NitroPort_Log("[perf] Old 3DS profile: launch-time filter only, lower 2D offered every tick, o3dsched %s",
+                      sIniSched ? "display-first" : "default");
     }
 
     /* NDSP only when the console has dspfirm.cdc; otherwise stay silent and

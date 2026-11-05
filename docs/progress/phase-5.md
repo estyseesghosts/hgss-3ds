@@ -47,7 +47,7 @@ Measured findings that change the picture:
 The wave plan (W0 instruments, W1 compiler, W2 memory, W3 game-thread cost,
 W4 2D renderer, W5 publish, W6 threading) is sequenced instruments-first. The
 owner's decisions: widescreen stays on Old 3DS as a launch option; only the
-lower screen's 2D drops to 30 Hz; Old and New 3DS keep separate profiles.
+both 2D engines are offered every tick; Old and New 3DS keep separate profiles.
 
 
 ## What is in the tree
