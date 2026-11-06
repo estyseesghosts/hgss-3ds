@@ -494,6 +494,17 @@ wall without stating the assumption. One primary hypothesis per experiment.
   reject (bg+kind+bgcnt+dispcnt, mirrors dsp-gate pattern) so the
   next hardware run names BG3's kind directly. No behavior change;
   render2d partial + listcache gates green.
+- §13 REVIEW: BG3 blend-state takes (PARKED, not built). DS alpha
+  = src×EVA+dst×EVB with uniform factors: representable via PICA
+  vertex-alpha IFF EVA+EVB==16 (darkening sums are not — no
+  constant dst factor); DS brightness = integer formula vs PICA
+  f16 TEV/varyings (LSB rounding risk → tolerance gate + hw proof
+  required). The 143 rejects are likely banner brightness fades, a
+  conservative-exact reject, not proven representable. Prize
+  ~1-4% drawer core for real precision risk. Stop condition met
+  before generalizing: needs (1) EVA/EVB/brightness value census
+  in bench, (2) tolerance-gated fixtures, (3) hardware proof.
+  Revisit only with all three.
 - NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
   hardware run gives audio split AND true ARM11 run-path ratios
   (walk:box:insert:try) to de-risk all future diets. Emulator
