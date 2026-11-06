@@ -223,12 +223,23 @@ wall without stating the assumption. One primary hypothesis per experiment.
   waiters can never split it; the stale-marker /tmp/azmeta.txt approach
   is retired).
 
-## Exp-8 evict-cause census (building)
+## Exp-8 evict-cause census (done: 100% churn — structural insight)
 
-- Hypothesis options hinge on WHY entries churn (inserts ≈ evicts ≈ 13k):
-  (a) capacity/collisions (same key re-inserted) -> bigger/better table;
-  (b) rewritten-animated content (coords differ) -> caching fundamentally
-  limited, pivot to cheaper scans or fewer runs;
-  (c) heap-reuse churn (same coords, new src) -> content-keyed identity.
-- Discriminator (6 lines, existing log line): evictSame / evictAddr /
-  evictChurn. One probe decides. No behavior change (counters only).
+- Result: evictSame=0, evictAddr=0, churn=46549/46549. EVERY eviction is a
+  novel key. Keys stream without repeats beyond burst-hits: per-scene heap
+  reallocations + walking-camera content = endless novel runs. Cross-scene
+  content caching would need arrival-side identity (Exp-3b revived); parked.
+- WALL METROLOGY (first true numbers): wall-600→1200 = 10.0s → **60 ticks/s
+  wall = FULL SPEED already**. The 52/s premise was boot-contaminated.
+  Ticks gap = ZERO. Remaining: presents ~22/s → 30/s needs draws 224→300
+  per 600 ticks (+34%).
+- STRUCTURAL INSIGHT (SD log): 120 scenes = 1440 vtx → **12 verts/scene**.
+  Scenes are TINY; per-RUN machinery (lookup+scan/box ≈ 5k ticks/run) dwarfs
+  transform (~1.5k ticks/vert). Float/shade did nothing because the mult
+  kernel was never the fat — per-run overhead is.
+- Next (Exp-9): small-run skip bypass — runs under N words execute directly
+  without the skip machinery (bit-exact: bypass falls through to the normal
+  execute path). Wins on visible small runs (the majority per Exp-3a),
+  washes on hidden ones.
+- (Discriminator design: evictSame/evictAddr/evictChurn on the existing log
+  line; counters only, no behavior change. Kept in-tree as churn telemetry.)

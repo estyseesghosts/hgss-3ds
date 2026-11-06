@@ -1337,11 +1337,15 @@ class DisplayPerformanceTests(unittest.TestCase):
         for api in ("NitroPort_PicaTimes(", "NitroPort_ComposeStats(",
                     "NitroPort_PicaTextureStats(", "NitroPort_PicaCmdStats(",
                     "NitroPort_Gx3dThreadStats(", "NitroPort_Gx3dProducerWaitMicros(",
-                    "NitroPort_Gx3dThreadWakeups(", "sSoundMixTicks"):
+                    "NitroPort_Gx3dThreadWakeups(", "NitroPort_Gx3dSceneFlow(",
+                    "sSoundMixTicks"):
             self.assertIn(api, perf)
         for line in ('"[perf] display:', '"[perf] geometry:', '"[perf] audio:',
                      '"[perf] drawer %d'):
             self.assertIn(line, perf)
+        # Scene-flow census: queued vs done vs dropped rides the geometry
+        # line (decides worker-diet vs skip/display policy).
+        self.assertIn('"flow queued %u done %u dropped %u"', perf)
         # FRAMETIME separates the hand-off from the rest of the interval, and
         # carries DrawFrame's two phases apart (the audits attributed the
         # "13.5 ms hand-off" to three different things, so it is measured).

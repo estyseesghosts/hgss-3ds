@@ -116,6 +116,9 @@ static NitroGx3dScene *sDest;
 static inline NitroGx3dScene *dest_scene(void){return sDest?sDest:&sScenes[sBuilding];}
 static uint32_t sSerial;
 static uint32_t sSwapsDone;   /* (the geometry thread's; see below) */
+/* Completed scenes the display never consumed (mailbox newest-wins kept a
+ * newer one): the worker's wasted share, for the scene-flow census. */
+static uint32_t sSceneDroppedTotal;
 
 static inline int32_t saturation(int64_t n)
 {
@@ -1997,6 +2000,7 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
             /* Keep the newest image and reuse this building slot on the
              * exceptionally slow consumer path; never stall the game. */
             scene->count=0;scene->shadow_count=0;scene->dropped++;
+            __atomic_add_fetch(&sSceneDroppedTotal,1u,__ATOMIC_RELAXED);
         }
         sShadowCapture=NitroPort_SunShadows() && shadow_store();
         interp_swap();
@@ -3414,6 +3418,16 @@ void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped
     if(busy)*busy=__atomic_load_n(&sWorkerBusy,__ATOMIC_RELAXED);
     if(scenes)*scenes=__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
     if(skipped)*skipped=__atomic_load_n(&sSwapsSkipped,__ATOMIC_RELAXED);
+}
+/* Scene-flow census (no behavior change): game-queued vs worker-completed
+ * vs completed-but-never-consumed, per interval in the shell's geometry
+ * line. Decides whether the worker's diet or the skip/display policy is
+ * the scenes-published lever. */
+void NitroPort_Gx3dSceneFlow(uint32_t *queued,uint32_t *done,uint32_t *dropped)
+{
+    if(queued)*queued=sSwapsQueued;
+    if(done)*done=__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
+    if(dropped)*dropped=__atomic_load_n(&sSceneDroppedTotal,__ATOMIC_RELAXED);
 }
 
 /* ------------------------------------------------- the game's side */

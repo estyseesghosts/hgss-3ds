@@ -1482,6 +1482,7 @@ typedef struct PerfGeometry {
     u32 scenes, skipped;
     u64 producerWait;
     u32 wakeups;
+    u32 flowQueued, flowDone, flowDropped;
 } PerfGeometry;
 
 static bool sPerfHave;
@@ -1534,6 +1535,7 @@ static void PerfLog(u64 now)
     u64 build, wait, publish, texels, texTicks, busy, producerWait, longest;
     u64 soundTicks;
     u32 scenes, skipped, wakeups, converted;
+    u32 flowQueued, flowDone, flowDropped;
     ComposeStats st;
     float cmdPeak;
     unsigned cmdCut;
@@ -1550,6 +1552,7 @@ static void PerfLog(u64 now)
     NitroPort_Gx3dThreadStats(&busy, &scenes, &skipped);
     producerWait = NitroPort_Gx3dProducerWaitMicros();
     NitroPort_Gx3dThreadWakeups(&wakeups, &longest);
+    NitroPort_Gx3dSceneFlow(&flowQueued, &flowDone, &flowDropped);
     soundTicks = __atomic_load_n(&sSoundMixTicks, __ATOMIC_RELAXED);
     {
         /* Display-gating diagnostics: loop passes vs draws vs skip reasons
@@ -1645,6 +1648,9 @@ static void PerfLog(u64 now)
         sPerfGeometry.skipped = skipped;
         sPerfGeometry.producerWait = producerWait;
         sPerfGeometry.wakeups = wakeups;
+        sPerfGeometry.flowQueued = flowQueued;
+        sPerfGeometry.flowDone = flowDone;
+        sPerfGeometry.flowDropped = flowDropped;
         NitroPort_Render2DProfile(0, &sPerf2d[0]);
         NitroPort_Render2DProfile(1, &sPerf2d[1]);
         memcpy(sPerfPublish, st.publish, sizeof(sPerfPublish));
@@ -1758,19 +1764,27 @@ static void PerfLog(u64 now)
         u64 geoBusy = busy - sPerfGeometry.busy;
         u32 geoWakeups = wakeups - sPerfGeometry.wakeups;
         double producerMs = (double)(producerWait - sPerfGeometry.producerWait) / 1000.0;
+        u32 fQueued = flowQueued - sPerfGeometry.flowQueued;
+        u32 fDone = flowDone - sPerfGeometry.flowDone;
+        u32 fDropped = flowDropped - sPerfGeometry.flowDropped;
 
         NitroPort_Log("[perf] geometry: %.1f scenes/s, busy %.0f%% (%.2f ms/scene), %u skipped, "
-                      "producer wait %.1f ms, %u wakeups (longest %.1f ms)",
+                      "producer wait %.1f ms, %u wakeups (longest %.1f ms); "
+                      "flow queued %u done %u dropped %u",
                       PerfPerSecond(made, seconds),
                       seconds > 0.0 ? 100.0 * (double)geoBusy / (double)SYSCLOCK_ARM11 / seconds : 0.0,
                       PerfMsPer(geoBusy, made), (unsigned)left, producerMs,
                       (unsigned)geoWakeups,
-                      (double)longest * 1000.0 / (double)SYSCLOCK_ARM11);
+                      (double)longest * 1000.0 / (double)SYSCLOCK_ARM11,
+                      (unsigned)fQueued, (unsigned)fDone, (unsigned)fDropped);
         sPerfGeometry.scenes = scenes;
         sPerfGeometry.skipped = skipped;
         sPerfGeometry.busy = busy;
         sPerfGeometry.wakeups = wakeups;
         sPerfGeometry.producerWait = producerWait;
+        sPerfGeometry.flowQueued = flowQueued;
+        sPerfGeometry.flowDone = flowDone;
+        sPerfGeometry.flowDropped = flowDropped;
     }
 
     {

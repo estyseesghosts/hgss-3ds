@@ -255,6 +255,10 @@ void NitroPort_Gx3dFlush(void);
 /* The thread's busy time (in ticks), scenes finished, and scenes left out
  * because it was behind (the game never waits for it). */
 void NitroPort_Gx3dThreadStats(uint64_t *busy, uint32_t *scenes, uint32_t *skipped);
+/* Scene-flow census (no behavior change): scenes the game queued vs the
+ * worker finished vs finished-but-never-consumed (mailbox newest-wins kept
+ * a newer one). Per-interval deltas in the shell's geometry line. */
+void NitroPort_Gx3dSceneFlow(uint32_t *queued, uint32_t *done, uint32_t *dropped);
 /* The game's thread's time waiting for the geometry thread (its ring full,
  * or results it needs), in microseconds since the start. */
 uint64_t NitroPort_Gx3dProducerWaitMicros(void);
