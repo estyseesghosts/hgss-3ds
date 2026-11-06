@@ -458,6 +458,17 @@ wall without stating the assumption. One primary hypothesis per experiment.
   means. Presents are repeats+draws mixed (composes ~2x draws);
   distinct presents ≈ 4–5/s wall. Goal gap restated: 30 distinct
   needs ~213 completions/600frames (6–7x current 70–72).
+- RESULT az-slot3-01 (slot3 vs twin, emulator): takes 612→829,
+  front commits 0→181/600, blend rejects 0→143 (BG3 alpha states
+  fall back to software blend — correct, costs CPU there).
+  Raster lines 37056→8064 (−78%), row accesses −~50%, draws
+  300→366 / publishes 30→37 (cheap metadata republishes for quad
+  scroll). Worker 30.90 (flat), composes 23.3 (flat, content-gated
+  as always), screenshot phase-perfect, partialB mismatches 0.
+  VERDICT: mechanism proven (front commits, raster collapses);
+  throughput flat on emulator (expected). Open: BG3 blend-state
+  takes (TEV feasibility review needed); hardware wall proof
+  awaits user runs. KEEP behind flag; twin pristine.
 - NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
   hardware run gives audio split AND true ARM11 run-path ratios
   (walk:box:insert:try) to de-risk all future diets. Emulator

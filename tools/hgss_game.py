@@ -223,6 +223,11 @@ def port_cflags(target: str, cxx: bool = False) -> list[str]:
         flags += ["-DHGSS_GX3D_LISTCACHE=1"]
     if target == "3ds" and os.environ.get("HGSS_GX3D_STATEDEDUP") == "1":
         flags += ["-DHGSS_GX3D_STATEDEDUP=1"]
+    # BG3SLOT gates NITRO_GPU_BG_SLOTS in the shared render2d header, so
+    # every port object (lib and app) must see it: a split otherwise
+    # corrupts the split/layer structs across the drawer call.
+    if target == "3ds" and os.environ.get("HGSS_GX3D_BG3SLOT") == "1":
+        flags += ["-DHGSS_GX3D_BG3SLOT=1"]
     if target == "3ds" and os.environ.get("HGSS_A0_DIAG") == "1":
         flags += ["-DHGSS_A0_DIAG=1"]
     flags += game_defines()
@@ -846,14 +851,14 @@ def smdh_names(build_id: str | None = None) -> tuple[str, str, str]:
         return (GAME["app"], GAME["title"], GAME["app"])
     game = "SS" if GAME["binary"] == "pokesoulsilver" else "HG"
     # The tag is "{shortsha}[-dirty][-texprof][-texhint][-palhash][-gxhot]
-    # [-gxidx][-listcache][-statededup][-fusehash][-lazy][-a0diag]"
+    # [-gxidx][-listcache][-statededup][-fusehash][-lazy][-slot3][-a0diag]"
     # (experiment_build_id below): the SHA is first and never contains
     # a dash.
     short_sha = build_id.split("-")[0]
     rest = build_id[len(short_sha):]
     base = short_sha + ("-dirty" if rest.startswith("-dirty") else "")
     flags = [part for part in ("gxhot", "gxidx", "listcache", "statededup",
-                               "fusehash", "lazy", "a0diag")
+                               "fusehash", "lazy", "slot3", "a0diag")
              if f"-{part}" in rest]
     title = f"{game}-{build_id}"
     long = " ".join(flags)
@@ -1000,6 +1005,7 @@ def experiment_build_id(short: str, dirty: bool) -> str:
                              ("HGSS_GX3D_STATEDEDUP", "-statededup"),
                              ("HGSS_GX3D_FUSEHASH", "-fusehash"),
                              ("HGSS_GX3D_LAZYINSERT", "-lazy"),
+                             ("HGSS_GX3D_BG3SLOT", "-slot3"),
                              ("HGSS_A0_DIAG", "-a0diag")):
         if os.environ.get(variable) == "1":
             tag += suffix
@@ -1050,6 +1056,7 @@ def write_build_info(dsx: Path, game: str, target: str,
              f"gx3d_statededup: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_STATEDEDUP') == '1' else 'no'}\n"
              f"gx3d_fusehash: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_FUSEHASH') == '1' else 'no'}\n"
              f"gx3d_lazyinsert: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_LAZYINSERT') == '1' else 'no'}\n"
+             f"gx3d_bg3slot: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_BG3SLOT') == '1' else 'no'}\n"
              f"a0_diag: {'yes' if target == '3ds' and os.environ.get('HGSS_A0_DIAG') == '1' else 'no'}\n"
             f"build: {experiment_build_id(short, dirty)}\n"
             f"sha: {full}\n"
@@ -1435,6 +1442,12 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
     gx3d_marker = sdk_out / ".gx3d-mode"
     if not gx3d_marker.exists() or gx3d_marker.read_text().strip() != gx3d_mode:
         (sdk_out / "port" / "port_gx3d.o").unlink(missing_ok=True)
+    bg3slot_mode = "1" if os.environ.get("HGSS_GX3D_BG3SLOT") == "1" else "0"
+    bg3slot_marker = sdk_out / ".bg3slot-mode"
+    if not bg3slot_marker.exists() or bg3slot_marker.read_text().strip() != bg3slot_mode:
+        # NITRO_GPU_BG_SLOTS lives in the render2d header: a toggle
+        # rebuilds the 2D engine (gx3d.o rides the gx3d-mode marker).
+        (sdk_out / "port" / "port_render2d.o").unlink(missing_ok=True)
     a0_mode = "1" if os.environ.get("HGSS_A0_DIAG") == "1" else "0"
     a0_marker = sdk_out / ".a0-mode"
     if not a0_marker.exists() or a0_marker.read_text().strip() != a0_mode:
@@ -1454,6 +1467,7 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
             palette_marker.parent.mkdir(parents=True, exist_ok=True)
             palette_marker.write_text(palette_mode + "\n")
             gx3d_marker.write_text(gx3d_mode + "\n")
+            bg3slot_marker.write_text(bg3slot_mode + "\n")
             a0_marker.write_text(a0_mode + "\n")
         ok = ok and proc.returncode == 0
     libs = [p for p in (sdk_out / "libnitrosystem.a", sdk_out / "libnitro.a")

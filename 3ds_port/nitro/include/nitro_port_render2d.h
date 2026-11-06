@@ -33,7 +33,11 @@ typedef struct NitroGpuQuad {
     float u0, v0, u1, v1, u2, v2;   /* texture corners A B C */
 } NitroGpuQuad;
 #define NITRO_GPU_QUADS 132     /* 3 BGs + 128 OBJs + 1 spare */
+#ifdef HGSS_GX3D_BG3SLOT
+#define NITRO_GPU_BG_SLOTS 3    /* +1: the front text BG takes (Exp-21) */
+#else
 #define NITRO_GPU_BG_SLOTS 2    /* concurrent BG pictures (memory cap) */
+#endif
 #define NITRO_GPU_ATLAS_CELLS 9 /* opaque sprites per frame (memory cap) */
 #define NITRO_GPU_ATLAS_PITCH 132 /* cell stride, texels (128 content + 2 + 2 gutter) */
 #define NITRO_GPU_ATLAS_GUTTER 2  /* transparent texels around each cell for LINEAR */

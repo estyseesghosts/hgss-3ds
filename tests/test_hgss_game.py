@@ -108,6 +108,18 @@ class FlagTests(unittest.TestCase):
             self.assertIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("3ds"))
             self.assertNotIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("host32"))
 
+    def test_bg3slot_reaches_every_port_object(self):
+        # BG3SLOT gates NITRO_GPU_BG_SLOTS in a shared header: lib and
+        # app objects must agree or the split structs corrupt across the
+        # drawer call (az-slot3-00's black upper screen). port_cflags is
+        # what every port object compiles with, so the define must be
+        # here, not only in the nitro Makefile.
+        with patch.dict(os.environ, {"HGSS_GX3D_BG3SLOT": "0"}):
+            self.assertNotIn("-DHGSS_GX3D_BG3SLOT=1", hg.port_cflags("3ds"))
+        with patch.dict(os.environ, {"HGSS_GX3D_BG3SLOT": "1"}):
+            self.assertIn("-DHGSS_GX3D_BG3SLOT=1", hg.port_cflags("3ds"))
+            self.assertNotIn("-DHGSS_GX3D_BG3SLOT=1", hg.port_cflags("host32"))
+
     def test_gx3d_experiments_are_opt_in_and_3ds_only(self):
         for name, define in (("HGSS_GX3D_HOTLOOP", "-DHGSS_GX3D_HOTLOOP=1"),
                              ("HGSS_GX3D_INDEXED", "-DHGSS_GX3D_INDEXED=1"),
@@ -2465,7 +2477,8 @@ class BuildIdTests(unittest.TestCase):
                    "HGSS_PALETTE_HASH": "1", "HGSS_GX3D_HOTLOOP": "1",
                    "HGSS_GX3D_INDEXED": "1", "HGSS_GX3D_LISTCACHE": "1",
                    "HGSS_GX3D_STATEDEDUP": "1", "HGSS_GX3D_FUSEHASH": "1",
-                   "HGSS_GX3D_LAZYINSERT": "1", "HGSS_A0_DIAG": "1"}
+                   "HGSS_GX3D_LAZYINSERT": "1", "HGSS_GX3D_BG3SLOT": "1",
+                   "HGSS_A0_DIAG": "1"}
             with patch.dict(os.environ, env):
                 text = hg.write_build_info(dsx, "heartgold", "3ds",
                                            ("abc1234", "f" * 40, True, "")).read_text()
@@ -2473,8 +2486,9 @@ class BuildIdTests(unittest.TestCase):
                          "palette_hash: yes", "gx3d_hotloop: yes",
                          "gx3d_indexed: yes", "gx3d_listcache: yes",
                          "gx3d_statededup: yes", "gx3d_fusehash: yes",
-                         "gx3d_lazyinsert: yes", "a0_diag: yes",
-                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-fusehash-lazy-a0diag"):
+                         "gx3d_lazyinsert: yes", "gx3d_bg3slot: yes",
+                         "a0_diag: yes",
+                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-fusehash-lazy-slot3-a0diag"):
                 self.assertIn(line + "\n", text)
 
     def test_palette_hash_mode_invalidates_stale_sdk_object(self):
@@ -2552,6 +2566,21 @@ class BuildIdTests(unittest.TestCase):
                     r2d.write_bytes(b"diag")
                     hg.build_libraries(out, "3ds", out, 1)
                     self.assertTrue(gx.exists())
+                    self.assertTrue(r2d.exists())
+
+    def test_bg3slot_mode_invalidates_stale_render2d_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            r2d = out / "sdk/port/port_render2d.o"
+            r2d.parent.mkdir(parents=True)
+            r2d.write_bytes(b"stale")
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+                with patch.dict(os.environ, {"HGSS_GX3D_BG3SLOT": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(r2d.exists())
+                    self.assertEqual((out / "sdk/.bg3slot-mode").read_text(), "1\n")
+                    r2d.write_bytes(b"slotted")
+                    hg.build_libraries(out, "3ds", out, 1)
                     self.assertTrue(r2d.exists())
 
     def test_build_info_records_palette_hash_mode(self):
