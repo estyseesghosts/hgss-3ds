@@ -469,11 +469,35 @@ wall without stating the assumption. One primary hypothesis per experiment.
   throughput flat on emulator (expected). Open: BG3 blend-state
   takes (TEV feasibility review needed); hardware wall proof
   awaits user runs. KEEP behind flag; twin pristine.
+- RESULT log-o3ds-01 slot3 runs (hardware): NEUTRAL (worker,
+  drawer, composes, scenes all match twin; audits clean).
+  CORRECTION: the earlier "ext rejects" read was a field miscount
+  — they are MODE rejects (24→114 growing): BG3 evaluated via the
+  3rd slot but failing kind (non-text/affine: large-bitmap?) where
+  the emulator's BG3 takes cleanly. Take loop runs only ~30/600
+  frames on hw (vs ~306 emu) with zero other rejects — silent
+  gating (has3d/gpuBgs) or content-phase difference.
+  DIVERGENCE CAVEAT: frame-anchored metrics may compare different
+  map areas across platforms (slow-mo shifts script alignment)
+  and even across binaries (BSS layout → boot timing). Twin×2
+  matched, so same-binary comparisons hold; cross-binary and
+  cross-platform phase alignment is now suspect — match by content
+  markers (scenes drawn, BG config), not frame numbers.
+- NEXT: full-script (4200f) emulator probe to reproduce the hw
+  content phase on emulator (MODE-reject window?) with full
+  tooling; then BG3-kind forensics from captures. No more hw
+  conclusions from frame-aligned cross-platform reads.
 - NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
   hardware run gives audio split AND true ARM11 run-path ratios
   (walk:box:insert:try) to de-risk all future diets. Emulator
   micro-diets paused (tapped); box-float needs hardware profile
   first (Exp-7 lesson).
+- STAGED d1-batch-ss (`...-statededup-a0diag`, twin flags + A0 +
+  snd counters, sha 61f70930…): emulator-verified ([a0] lines
+  alive, screenshots identical, no [sndprof] — this Azahar mutes
+  audio). ONE hardware run, base port.ini (no hold): reads audio
+  split + ARM11 runpath off [sndprof]/[a0] lines. FTP detour
+  retired (card remounted).
 - Exp-19 content-repeat census (done, REFUTED): 582 sampled inserts,
   same-base repeats 0, moved ~4%. Heap churn is genuinely novel
   content (walking camera), not re-emitted blocks — content-keyed
