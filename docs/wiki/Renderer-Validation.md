@@ -121,6 +121,32 @@ Early probes overlapped because TERM had not stopped Qt; those runs were
 discarded for acceptance. Only the corrected serial runs support session claims.
 The final save/script/config restoration was verified byte-for-byte.
 
+## Fixture lessons from geometry-cache work
+
+Feed sizes are workload: 37-word test feeds fragment runs through sDec
+singles, which (correctly, by worker-walk coverage) taint arrival-side
+records — the big fixture then proves safety (bit-exact output) but
+cannot prove engagement, because entry-hit runs and record-eligible runs
+become disjoint populations. What did engage, in order:
+
+1. Whole-list feeds (no cuts) so records complete.
+2. Held (not freed) fresh buffers per scene, so entry keys stay novel —
+   freeing lets the allocator hand the same block back and entries hit,
+   silently bypassing the path under test.
+3. A minimal deterministic smoke (`ANN_SMOKE`: same runs, fresh buffers,
+   6 scenes) asserting records-hit > 0 with zero verify failures, plus
+   bit-compare against the unflagged reference — engagement proof that
+   the 12k-scene suite cannot give.
+4. Verify-before-trust on every new assumption: a stale `cc` once left
+   the old binary in place while censuses were read from it
+   (check `build exit: 0` before every run), and duplicate assignments
+   to one variable hid behind a correct-looking print (one writer per
+   variable, verified by grep, not by reading).
+
+A cache that never engages is dead weight no matter how safe: keep the
+engagement assertion (hits > 0) beside the exactness assertions, and
+revert when it stays zero.
+
 ## Evidence boundaries
 
 - Native fixtures: exact tested math/pixels/work avoidance, not full game ABI.

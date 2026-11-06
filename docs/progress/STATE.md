@@ -1,5 +1,25 @@
 # Current state
 
+**In progress (2026-11-06): Azahar 30fps campaign (Goldenrod, N3DS off,
+80% clock).** Goal: full-speed ticks (60/s wall, already achieved and
+re-measured twice via in-probe `wall-{mark}.txt` stamps) plus 30 presented
+fps (now ~23-24/s; needs draws 236→300 per 600 ticks). Claim sheets live
+in [the campaign log](agent-notes/az30-campaign.md); one hypothesis per
+experiment, wall A/B decides. Landed so far: lower30+drawerAB config
+(+21% presents, kept), hashed G3 tag (4096) and entry (1024) tables
+(+65% presents, kept), generation-keyed normal-color cache (kept as
+bit-exact work elimination, perf-neutral). Reverted: indexed-off
+(neutral), force-software raster (slower), vsync-off (neutral),
+singles-scan hook (neutral), entries-2048 (neutral), float clip kernel
+(slower). Key corrections: `sSwapsDone` double-counts skipped scenes, so
+the pipeline is 1:1:1 worker-bound (queued 300 / skipped 149 /
+completed ~150 / drawn 150) — not oversupplied; entry word-count is a
+fragmentation artifact, not run size. In progress, uncommitted: Exp-12
+produce-side run records (content-prefix keyed G3-list cache bypass),
+gated on a new `ANN_SMOKE` fixture (annHits>0, zero verify fails) before
+any probe. Old 3DS hardware validation of all campaign numbers is still
+open (emulator figures are emulator figures).
+
 **In progress (2026-11-06): Half A (Old 3DS speed plan) wave 1+2
 integration and A0 diagnostic start, on top of `584305e`, all
 uncommitted.** Lane G (geometry) and Lane L (lower screen) were built

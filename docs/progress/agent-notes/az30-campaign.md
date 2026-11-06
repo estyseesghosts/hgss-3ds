@@ -171,11 +171,14 @@ wall without stating the assumption. One primary hypothesis per experiment.
 
 ## Standing numbers (Azahar, 80% clock, lower30+drawerAB, twin-ish binary)
 
-- Ticks ~50-52/s wall (cap never binds; work-paced). Presents ~20/s wall
-  (draws ≈ scenes-pub ~150 + 2D-new ~76 per 600 ticks).
-- Gaps: ticks +15%, presents +50%.
-- Draw equation: draws ≈ max(scenes-pub, upper-new) + lower-new (overlap).
-  scenes-pub is the only scalable term (content-limited 2D otherwise).
+- Ticks **60/s wall, full speed** (wall-600→1200 = 10.0s, confirmed
+  az-evict-00 and az-flow-00; the old 50-52/s figures were
+  boot-contaminated). Ticks gap = ZERO.
+- Presents ~23-24/s wall (draws 236/600 ticks = 150 scene-driven + ~86
+  2D-new). Need draws 300/600 (+27%).
+- Draw equation: draws ≈ scenes-consumed (~150) + 2D-new (~86); scenes
+  consumed track worker completions 1:1, so scenes-published is the
+  scalable term (content-limited 2D otherwise).
 
 ## Exp-6 normal-keyed lighting cache (done, kept as work elimination)
 
@@ -253,5 +256,395 @@ wall without stating the assumption. One primary hypothesis per experiment.
   mailbox newest-wins overwrites the rest before display reads them.
   Worker oversupplies 2x; display take/draw cadence is the cap, NOT worker
   throughput. Worker-diet work is USELESS for draws from here.
-- Next: draw-trigger census (scene-draws vs serials-skipped on the loop
-  line) decides whether pairing waits or draw cadence drops the serials.
+
+## Flow correction (done: the "oversupply" verdict was wrong)
+
+- `sSwapsDone` increments on the skip path too (`work_op` skip branch,
+  `port_gx3d.c`): skipped scenes count as "done". So flow "done 299" =
+  ~150 genuinely completed + 149 skipped-and-counted, NOT 299 completions.
+- Corrected pipeline per 600 ticks: queued 300, skipped 149
+  (pre-processing drops), completed ~150, published ~150 (dropped 0),
+  consumed/drawn 150. NO waste anywhere — a 1:1:1 pipeline, and the
+  WORKER IS THE BINDING CONSTRAINT after all. Worker-diet work is back
+  on the table; skip-tuning cannot help (nothing completed is dropped).
+- Lesson: read the counter's write sites before building a theory on it;
+  "done" conflated two outcomes with opposite implications.
+
+## Exp-9 small-run bypass (done, neutral -> reverted)
+
+- Hypothesis: scenes average ~12 verts, so per-run skip machinery (~5k
+  ticks/run) dwarfs transforming a few verts (~1.5k each). Runs opening
+  in a tiny entry execute directly (bit-exact: bypass only skips the
+  skip attempt).
+- Result: fixture FAILED the behavior gate (inserts 27->1, hits 16k->4k).
+  Root cause: entry word-count is a FRAGMENTATION artifact, not run
+  size — the 37-word test feeds (and real GXFIFO flush cuts) split runs
+  across entries, so the bypass starved the cache of inserts.
+- Conclusion: REVERTED fully (hook, counter, log field). No dead code.
+  Lesson: size proxies must measure the run, not its container.
+
+## Draw-trigger census az-trig-00 (done: serials advance 1:1)
+
+- New counters at the upper-screen draw site (`ComposeDbgStats` +2):
+  scene-driven draws and published serials skipped between them.
+- Result (600→1200): scene-draws 150, serials-skipped **0**; ComposeFrame
+  gap always 1 (`sDropped=0`); shell takes newest via
+  `Gx3dNewerScene`/`AcquireScene`.
+- Reading (with the flow correction): takes track completions 1:1 —
+  ~150 completed, ~150 taken, 150 scene-driven draws, zero serials
+  skipped anywhere. There is no pool of completed-but-unconsumed
+  serials; the 149 not drawn were never processed (pre-processing
+  skips). So raising completions (worker diet) raises scene-driven
+  draws ~1:1, up to ~300/600 for 30fps. The census stays in-tree as
+  the take-side proof for future display-policy experiments.
+
+## Exp-13 run-path cost split (diag-only, building)
+
+- Hypothesis (one): per-run overhead (~165 runs/scene vs 12 verts/scene)
+  is the worker's binding cost; its split (listcache_try incl. full-L
+  verify walk vs scan walk vs insert full-hash second pass vs box test)
+  decides the next diet. No behavior change: all new code is
+  `#ifdef HGSS_A0_DIAG` (twin builds byte-unaffected when off).
+- Discriminator (single, at the decision point): sampled 1/64 scenes
+  (existing A0 pattern), try ticks/calls vs scan ticks/calls + walked
+  words per region (try-verify L / scan fetches incl. cross-entry
+  singles / insert full-hash L). Ratios only — emulator wall ticks
+  rank regions; hardware proves any later speedup.
+- Suspects, in order: (1) insert full-hash second pass per miss
+  (~47k/600 ticks, 100% churn — `full` consumed only by the
+  every-30-scenes audit); (2) hit-path full-L verify walk (~51k);
+  (3) try lookup fixed cost x184k. If (1) dominates, Exp-14 fuses the
+  full/sample hash into the scan's fetch loop (same values, one pass
+  eliminated — audit keeps working unchanged).
+- Candidate: `build/d1-runsplit-ss` (twin flags + HGSS_A0_DIAG=1, fresh
+  out dir). Baseline: d1-ctl-ss. Activation gate: `[a0] runpath` line
+  present with nonzero calls. Verdict threshold: name the biggest
+  region by ticks AND words; diet must target it.
+- RESULT (emulator; ratios only — ranks regions, hardware proves any
+  later speedup): clean run (drawer 29.5/s, game_us 5415 — diag-only
+  confirmed). Sampled 1/64: try ~1500-1630 ticks/call (1365/1128
+  calls), scan ~4300-5410 ticks/call (1026/794 calls, miss-only) →
+  scan ≈ 2.2x try ticks, ≈3x per call. Walked words/interval:
+  try-verify ~8.0k, scan-fetch ~5.5-5.9k, insert-full ~7.3-7.5k.
+  insert-full EXCEEDS scan-fetch (insert re-walks full L incl. params;
+  the scan skips params via i+=). ~748 ticks per fetched word ⇒ per-run
+  FIXED costs dominate, not walks. Suspect refined: insert's
+  per-start tag verification (nStarts × list_find_tag, up to 257
+  starts on fragmented runs) + entry fill + full-walk, paid per miss
+  for entries that 100%-churn says never re-hit.
+- Exp-14 follows (counters only, no behavior change): hits-by-jumps +
+  inserts-by-jumps histograms. If fragmented runs (jumps>0) never
+  re-hit, Exp-15 stops inserting them (scan fallback is always safe).
+- RESULT (az-split-01, same diag binary + histogram): jumps hits
+  47888/1651/0/0, inserts 46645/1473/0/0 — 97% single-entry, 3%
+  two-entry, ZERO spans ≥3. Fragmented runs re-hit PROPORTIONALLY
+  (1651 hits / 1473 inserts ≈ jumps-0 rate) → hypothesis REFUTED.
+  Dropping fragmented inserts would lose 3.3% of hits to save 3.1%
+  of inserts: ~neutral coverage for 3% insert savings. NOT the diet.
+  Runpath split replicated almost exactly (try 2151046/1365, scan
+  4775511/1026, words 7964/5927/7278 — try-verify/insert-full
+  identical to split-00: deterministic content).
+- Standing numbers: scan ≈ 2.2x try ticks; ~748 ticks/fetched word ⇒
+  per-run FIXED costs dominate. Scan-inner still unsplit (walk/decode
+  vs box/verdict+apply vs insert bookkeeping+walk) — Exp-15 splits
+  it (diag ticks, no behavior change), then the diet targets the
+  named region. No more telemetry after that: diet or accept.
+
+## Exp-16 fuse insert hash into scan (building)
+
+- Hypothesis (one): the insert's second L-walk (~26% of scan-inner,
+  7.3k vs 5.9k scan-fetch words/interval) is redundant — the scan
+  already visits every word of a single-entry run in linear order.
+  Hashing at visit time (first word + fetches + param skips) yields
+  the identical full FNV; sample offsets read directly (10 masked
+  ring reads, same entry). Multi-entry runs (3%) keep the old walk.
+- Design: scan accumulates `fuseFull` (always under LISTCACHE; ~1-2%
+  added scan cost); insert takes it, uses it iff nStarts==1, reads
+  sample directly. Under A0_DIAG the old walk still runs as a
+  self-verification (fuseMismatch counter, walked values win).
+  Safety net even if fused is wrong somewhere: per-hit sample check
+  + 30-scene full audit auto-disables the cache (perf to baseline,
+  never wrong pixels).
+- Correctness gates: host fixture bit-identical outputs (fused values
+  exercised through hits; no DISABLED) + device audits fail 0 +
+  fuseMismatch 0 + screenshots.
+- Candidate: `build/d1-fuse-ss` (twin flags + HGSS_A0_DIAG=1, fresh out
+  dir — self-verification active; ship build later without A0).
+  Baseline: d1-ctl-ss + az-split-02 runpath/scaninner numbers.
+  Watch: worker ms/scene (expect -3-8%), scanInsertTicks drop,
+  fuseMismatch 0, audits fail 0, draws, wall.
+- RESULT az-fuse-00 (correctness: PROVEN): fuse-mismatch 0 both
+  intervals, audits 8 fail 0, sample-fail 0, no DISABLED — fused full
+  FNV + direct sample reads are bit-identical to the old walk
+  in-game, across 49k inserts. Worker 31.36 ms/scene flat vs 31.32 —
+  EXPECTED: the A0 self-verification walk preserves the removed walk
+  on sampled scenes, masking the prize; fuse hashing overhead itself
+  ≈ +0.1% (negligible). This build cannot show the speedup.
+- Next: ship-shape binary (same source, A0 off) for the true number:
+  `build/d1-fuse2-ss`. Watch worker ms/scene (expect -3-8%),
+  draws, audits, wall. Keep threshold (Exp-6 rule): work-elimination
+  positive + perf neutral-or-better + zero-risk → keep.
+- RESULT az-fuse-01 (ship, A0 off): worker 31.38 ms/scene vs twin
+  30.98–31.21 — FLAT (neutral). Draws 302, game_us 5347, audits 8
+  fail 0, fuse-mismatch 0, screenshots phase-matched. VERDICT: KEEP
+  per Exp-6 rule — one full L-walk per insert eliminated (~46k
+  walks/600 ticks, count-proven), bit-identical (mismatch-0 +
+  audits + host-identical), zero risk (audit auto-disable net),
+  perf neutral on emulator. Honestly labeled: work elimination,
+  not a speedup.
+- FLAG (staged-pair hygiene): twin + fuse shared one build tag and
+  would have shown IDENTICAL launcher entries. Fuse is now a real
+  experiment flag `HGSS_GX3D_FUSEHASH` (`-fusehash` tag/SMDH/sidecar,
+  Makefile + gx3d_mode marker + smdh_names plumbed): OFF = old walk
+  (twin control, zero overhead — hashing sites gated out), ON =
+  fused insert + A0 self-verify. Staged files renamed accordingly;
+  the ambiguous `-2` card file superseded before any run.
+- Rebuild sequence: A0+fusehash device build re-proves mismatch-0
+  after gating → ship twin-off + ship fuse-on (fresh out dirs,
+  A/B telemetry-identical) → stage pair → hardware runs.
+- STAGED for Old3DS (card B9STRAPON, saves/port.ini/scripts untouched):
+  - `3ds/pokesoulsilver-926b99a-dirty-gxhot-gxidx-listcache-statededup.3dsx`
+    (twin control, fusehash off; sha256 c3fe47fb…; HBL shows the tag)
+  - `3ds/pokesoulsilver-926b99a-dirty-gxhot-gxidx-listcache-statededup-fusehash.3dsx`
+    (candidate, fusehash on; sha256 ed2eaf0f…; HBL shows …-fusehash)
+  - Superseded same-tag card files (untagged twin + ambiguous -2)
+    removed before any run; pre-existing pokesoulsilver.3dsx left alone.
+  - Emulator A/B (az-ctl3-00 vs az-fuse-01): worker 31.03 vs 31.38
+    (neutral), draws 305 vs 302, game_us 5389 vs 5347 — pair is
+    matched; hardware decides whether the eliminated walks pay.
+  - Hardware watch: geometry ms/scene (twin vs fuse), scenes drawn,
+    draws, wall pace, audits fail 0 both, screenshots if convenient.
+    Expectation: fuse ≤ twin on ms/scene (walks gone); size unknown
+    (ARM11 cache behavior vs JIT).
+- HARDWARE VERDICT log-o3ds-00 (twin runs 01:45+01:52, fuse 02:00;
+  one stale a50da64 archive ignored): twin#1 ≈ twin#2 within noise
+  (geometry 39–41 vs 38–42 ms/scene; scenes drawn 465 vs 472 by
+  frame 4200; drawer/audio shapes identical) — twin reproduces.
+  Fuse == twin everywhere (geometry 38.4–41.4, scenes drawn 462,
+  draws/drawer same, audits 28–40 fail 0, sample-fail 0, no
+  DISABLED, jumps consistent). VERDICT: fuse NEUTRAL on hardware,
+  SAFE — kept as work elimination (Exp-6 rule), not a speedup.
+- CONFIG GAP found (slice 0): az30-lower.ini (all emulator probes)
+  runs lower30=on + drawerAB=on, but the card port.ini runs both
+  OFF ("test flags off"). The emulator-vs-hardware drawer chasm
+  (15ms vs 250ms+ bottom wall) is substantially CONFIG, not just
+  ARM11-vs-JIT. Emulator drawerAB correctness already proven by
+  10+ probes (menus sane in every screenshot) — no new probe needed.
+- Exp-17 HARDWARE TEST (staged, no build): port_A.ini = card
+  port.ini + drawerAB=on ONLY (lower30 stays off to separate it
+  from Exp-1's combined emulator +21%). Mechanism: B renders only
+  when fresh/forced/incoherent (staleness ≤2 ticks); bSkips/"lower
+  deferred" counter proves engagement; need-gate asymmetry (top
+  calls≈need 1:1, bottom calls 30–135 vs need 0–21) predicts
+  bottom renders collapse toward need. Watch: drawer bottom
+  calls+wall, worker completions (freed core?), composes, menu
+  cursor/touch response (user-observed), audits. lower30-only
+  (port_B.ini) staged only after this reads out.
+- RESULT log-o3ds-40.txt (twin + START → port_A.ini, drawerAB=on,
+  13931 frames): engagement YES (lower deferred 12–16/600frames
+  walking, 22–43 idle). Bottom calls 28–34 → 23–32 in-window
+  (~-15%); bottom per-call wall UNCHANGED (~250–350ms) — the
+  per-call cost is intrinsic (true CPU and/or per-call waits), NOT
+  redundancy; deferral only trims count. Drawer ms/frame 300→210
+  (~-30%) via fewer renders + smaller publishes. Throughput FLAT:
+  worker 38–42 ms/scene, completions ~72/600frames, composes
+  8.5–9.4/s, publishes 4–5/s walking — identical to baseline.
+  VERDICT: drawerAB drawer-positive, throughput-NEUTRAL. ini stays
+  on card (harmless); not a lever. Freed core did NOT convert →
+  worker not drawer-preempt-bound (audio-preempt still open —
+  audio program now definitive either way).
+- SLOW-MO measured: run durations vs frames give ~19–25 game
+  frames/s on hardware (~40% speed) — part of what "unresponsive"
+  means. Presents are repeats+draws mixed (composes ~2x draws);
+  distinct presents ≈ 4–5/s wall. Goal gap restated: 30 distinct
+  needs ~213 completions/600frames (6–7x current 70–72).
+- NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
+  hardware run gives audio split AND true ARM11 run-path ratios
+  (walk:box:insert:try) to de-risk all future diets. Emulator
+  micro-diets paused (tapped); box-float needs hardware profile
+  first (Exp-7 lesson).
+- Hardware reality check (mush-free counts): presents ≈ 8.5–9/s
+  (emulator 23.6/s does NOT predict hardware presents — 2.6x off;
+  emulator keeps activation/correctness/count duty only, per guide).
+  Completions ≈ 70/600 ticks (7/s); skipped ≈ 230/600 (38%).
+  ms/scene divides by done-INCL-skips: muddy denominator, report
+  completions separately from now on. Goal 30 presents is 3.3x away.
+- NEW FINDING audio: 24–27% of core 0 is REAL mixing CPU (timer
+  wraps only NitroPort_SoundRender; sleep path outside it), 0
+  dropped. ~3ms per 12s window for 512-frame blocks = ~6x worse
+  than a reasonable 16ch ARM11 mixer. Biggest cleanly-measured fat
+  on core 0 (worker/drawer walls are preemption-mush on shared
+  core 0: drawer bottom 200–340ms/call × 2.5/s exceeds 100% alone,
+  proving waits dominate). Mixer structure: ≤171-sample stretches,
+  lock per stretch, Mix + sequencer sound_tick INSIDE the timed
+  region; capture/reverb path mixes frame-by-frame (field music
+  capture use unknown). NEXT: audio split profile (Mix vs
+  sound_tick vs lock, capturing flag, active channels) — one
+  device run names the hog.
+- Post-fuse survey (all killed cheaply, mostly by reading):
+  put32 = RAM memcpy (not MMIO); skip path already cheap (RING_SKIP
+  bypasses work_packets — no scan on skips); publish check = lock
+  wait, no hashing (drawer-hash diet dead); ensure_clip flag-guarded,
+  puts cheap; untagged-preskip impossible (no free verdict);
+  singles-preskip nonexistent (singles bypass work_packets already);
+  prio shuffle zero-sum (nobody idles); mid-scene interp
+  worker-negative (record+match+replay per scene at 94% busy).
+- Gap math (mush-free counts): presents ≈ completions + const 2D
+  (draws==need exactly; need = 150 scene + ~87 2D per 600 ticks).
+  30 presents needs ~213 completions (−30% worker). Banked certain:
+  ~0-4%. Identified risky remainder: box-32% (~7%, precision risk),
+  try-fixed (un-split, small), execute (mined twice). Sum < gap.
+  Emulator micro-diets are tapped; ARM11 ratios may differ (ring
+  chase + int64 could dominate there — fuse may pay on device).
+- NEXT: hardware truth (twin + fuse ship staged for SD runs) and/or
+  box diet with tolerance gate. No more emulator telemetry.
+- PROGRAM PIVOT (authorized: structural rewrite, Azahar-only until
+  hardware-worthy): filed 2.6x emulator-vs-hardware present gap +
+  3.3x hardware gap to goal mean micro-diets can't reach it.
+  - Slice 0 (lead, now): map drawer bottom-screen path first-hand
+    (raster/convert/upload/need-gate, why ~30 calls vs need) —
+    bottom render wall dominates hardware wall; bit-exact oracle
+    non-negotiable for everything after.
+  - Audio profile (delegated, ses_e4d9e3979ffeuIU3IYxT5Gg65u):
+    count-heavy Mix-vs-tick split + formats + capture in
+    port_snd.c/port_sound_chip.c, counters + periodic log only.
+  - Standing honesty: drawer-bottom(~30% wall share, CPU share
+    unproven) + audio-half(~12%) + worker bits(~5%) ≈ 1.8x rosiest
+    case, still short of 3.3x. Report ceiling cuts explicitly if
+    numbers demand it; no flag/test-only paths as features.
+
+## Exp-12 produce-side run records (done, reverted — harmful/neutral)
+
+- Hypothesis: worker decode-scans (~28-50% of worker) re-decode VTX words
+  the game thread already walked. Game-thread run records (bounds,
+  end-coords/state, VTX count, full FNV) keyed by 4-word content prefix
+  (position-free: survives heap rotation, resume states, cross-scene
+  repeats) let the worker structure-scan opcodes + verify by hash instead
+  of decoding. Game thread has headroom (game_us ~5.4ms of 16.6ms).
+- Design (one file, no flag, fixture-gated bit-exact): produce tracks
+  cursor/boundaries/state/FNV in `scan_packets` + `produce`; worker
+  `ann_assemble` does prefix walk, structure+hash walk, record verify,
+  then rejoins the shared tail (box test, apply, legacy insert).
+  Coverage is [BEGIN-param word .. terminator word], exactly the insert
+  walk's range. FNV mismatches fall back to legacy (counted); audits and
+  screenshots gate correctness.
+- Issues faced and fixed:
+  - Off-by-one (produce skipped the BEGIN param word; worker includes
+    it): fixed, `beginParam` = opParamStart.
+  - Duplicate `beginParam` assignment (stale `+1` overwrote the correct
+    index on every BEGIN): found via bp=1-vs-prefix contradiction,
+    removed; single writer now.
+  - Command-skip rewrite: the first version hashed command words only
+    and skipped params (params never hashed); rewritten word-sequential
+    mirroring the worker's fetch/shift/advance mechanics.
+  - Stale-binary confusion (twice): a failed `cc` left the old binary in
+    place while censuses were read from it. Now: check `build exit: 0`
+    before every run; never trust output without it.
+  - Fixture populations disjoint: 37-word feeds fragment runs through
+    sDec singles, which taint records (24k taints); surviving records
+    belong to runs that always entry-hit. So the big fixture proves
+    safety (bit-exact green) but cannot prove engagement.
+  - Replay theory checked and dead: fixture `ops` zero `sInterp`, so the
+    mid-scene replay path never engages; silence has another cause
+    (above).
+  - Fresh-buffer phase added (same bytes, novel held addresses) to force
+    entry-misses; still 0 ann hits — under diagnosis alongside:
+  - Smoke test (`ANN_SMOKE`, 6 deterministic scenes): checksums match
+    ref, 12 lookups, 0 hits, **6 verifyFails** — prefix matches but full
+    hash differs with worker L = produce nw − 1 systematically (27 vs
+    28, 38 vs 39). Tail evidence: produce hashed [..., END, BEGIN-next],
+    i.e. closes one word late. Open/close-position tracing in progress.
+- Watch: verifyFails must reach 0 with annHits>0 in smoke before any
+  Azahar probe; game_us must not grow (ticks at exactly 60.0/s).
+- VERDICT (emulator, Azahar N3DS-off CPU-80%, az30-lower.ini, 1200-frame
+  frozen script; all figures emulator, not hardware timing):
+  - Hypothesis: worker ms/scene drops via run skips. FAILED — geometry
+    ms/scene flat: ann 31.83 vs twin-control 30.98 (scenes/s 29.8 vs
+    29.9, identical hidden-lists output ~74k accepted / ~810k verts /
+    ~268k polys both sides, flow 300/299 both, audits fail 0, no
+    DISABLED). ~50% record hit rate (56.9k/112.3k) converts to no
+    measurable worker work elimination (~42% of hits fall back at the
+    terminator gate; skips that land save negligible work).
+  - Harm signal: drawer collapse 3/3 ann probes (11-14 frames/s
+    @42-59ms, publish-A ~21ms with check-wait ~12ms, game_us ~160) vs
+    2/2 twin-control probes clean (29-30 frames/s @15-16ms, publish-A
+    ~5ms, game_us 5351). Same binary flags except Exp-12; twin purity
+    verified (0 `annrun:` strings in ELF); screenshots phase-matched
+    (menu open both sides, CHECK vs NEXT = one input step apart, phase
+    marker only); wall pace full-speed 60 ticks/s on all five runs.
+    Geometry output identical across the split, so cause "different
+    workload/corruption" is OUT — remaining shape is scheduling/
+    pacing: worker wakeups nearly doubled (815 vs 429) with same
+    scenes/s, i.e. the skip path changes worker batch pacing and the
+    display thread pays in check-wait/preemption (guide §8/§14: wall
+    inflation under overlapping threads is not proof of renderer CPU).
+  - Claim sheet: baseline d1-ctl-ss
+    sha256 d307960e52a8f5be0ca4431dc116cd326f55575aba5d21a556ceb3cea0a9f424
+    (build 926b99a-dirty-gxhot-gxidx-listcache-statededup, no Exp-12);
+    candidate d1-ann-ss
+    sha256 a4ccf8823a38bfdf64be904f173d9ce1e2ce0b0d5590f70ec3efa05c6ce6b40a
+    (same flags + uncommitted Exp-12, 12-word prefix). Activation proven
+    (in-game `annrun:` census every probe: 110-112k lookups, ~50% hits).
+    Correctness held (bit-exact fixtures, audits 0, screenshots match).
+    Work elimination: none measured. Performance: regressed on emulator.
+  - Conclusion: HARMFUL/NEUTRAL with cause (no work eliminated +
+    emulator presentation regression + pacing perturbation). REVERTED
+    fully (port_gx3d.c, vertex header, fixture smoke/fresh phases,
+    test asserts) — no bisect: either half's outcome still leaves the
+    primary hypothesis failed, and either outcome ends in revert; the
+    pacing lesson (skips re-batch worker wakes; display pays) is
+    recorded for future skip designs.
+  - Kept knowledge: (1) silent-killer series (4) + loop-guard fix
+    (`for(;;)` + fetch-time bounds check) — any future produce-side
+    walker must mirror worker fetch/shift/advance exactly, incl.
+    block-final terminators; (2) 12-word content prefix reaches VTX
+    coords and discriminates same-material runs; (3) vfail assert
+    policy (big-suite hits>vfails tripwire, smoke strict zero) for any
+    future cross-thread record design; (4) worker-bound pipeline is
+    1:1:1 — skips that don't remove worker ms/scene are pure overhead.
+## Exp-12 produce-side bounds annotation (building)
+
+- Hypothesis: worker decode-scans (~28-50% of worker) re-decode VTX words
+  the game thread already walked; annotating per-entry bounds at produce
+  lets the worker union bounds + structure-scan opcodes (~3 ticks/word
+  vs ~15 decode) for the same skip verdicts. Game thread has headroom
+  (game_us ~5.4ms of 16.6ms budget); worker is saturated.
+- Design (one file, no flag, fixture-gated bit-exact):
+  - Produce: cursor tracks VTX ops (same vertex math) in scan_packets +
+    produce; per packets entry, min/max/verts noted into ListTag next to
+    the existing tag (tied to the words, safe across wrap/reuse).
+  - Worker: annotated path unions entry bounds + opcode-only structure
+    scan (extents, end-state, exact VTX count, last-VTX decode only);
+    exotic ops / singles / missing tags fall back to legacy full decode.
+    Box test / apply / insert tail shared. Same bounds math -> bit-exact.
+  - Game-thread cost guard: FRAMETIME game_us must not grow (ticks at
+    exactly 60.0/s; any regression reverts).
+- Watch: A0 hidden share, worker ms/scene, accepted rate (first-entry
+  looseness only ever loses skips, never correctness), draws, wall.
+- Order: az-trig-00 draw-trigger probe first (binary built), Exp-12 after.
+- RESOLVED the silent-killer series (each found by walling off one
+  assumption at a time): (1) off-by-one (produce skipped the BEGIN param
+  word the worker walk includes); (2) duplicate `beginParam` assignment
+  (stale `+1` overwrote the correct index on every BEGIN); (3) params
+  never hashed (first version hashed command words only); (4) block-final
+  terminators dropped (`while(j<n)` exits after the final fetch, before
+  its bytes process — worker loops guard only the fetch; with ENDs so
+  often last, no run ever closed at END and every close slipped a word
+  late). After (4), smoke goes fully green (annHits>0, zero verify
+  fails, bit-exact).
+- 12-word prefix (was 4, then 8): same-material runs share state-head
+  prologues; 12 words reach VTX coordinates, which discriminate.
+- Verify-fail variance understood, not feared: same binary gives 0 vs
+  ~5000 vfails depending on worker/producer interleave timing (logging
+  on/off flips it; scene outputs byte-identical either way). These are
+  cross-thread staleness races — a lagging worker meets records
+  overwritten by same-prologue variants and correctly falls back — so
+  the big suite asserts hits>vfails (mechanism wins more than it
+  wastes) instead of an absolute zero, while smoke holds the strict
+  zero-vfail coverage proof. Systematic breakage (the ±1-word bug:
+  0 hits vs thousands of fails) still trips it.
+- Fixture forensics worth keeping: 37-word feeds fragment runs through
+  sDec singles (which correctly taint records — the worker walk covers
+  packets only); the big suite therefore proves safety but not
+  engagement, hence `ANN_SMOKE` (same runs, fresh held buffers, 6
+  scenes) asserting hits>0 + verifyFails==0 + bit-compare.

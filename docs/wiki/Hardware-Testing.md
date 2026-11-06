@@ -343,6 +343,20 @@ Rules learned the hard way (see
   setting: keep W1 pacing unresolved rather than declaring normal speed or
   deducing sustained 333-Hz updates from sparse samples. Check elapsed frame
   progression, gameplay/audio speed and interval counters together.
+- Wall pace needs wall stamps, not guest counters. `game.log` is written
+  once at probe completion, so external waiters can never split one run;
+  poll the live log or stamp inside the probe (`wall-{mark}.txt` at two
+  frame markers and differencing gives wall seconds per N game frames).
+  A stale marker pattern (one that stops advancing, e.g. a finished run's
+  leftover log) reads as a hang — verify the marker moves before trusting
+  the delta. Boot time contaminates launch-to-frame deltas; the 50–52/s
+  wall pace inferred that way was wrong, and the marker-differenced
+  60.0/s held across runs.
+- Read every counter's write sites before theorizing. `sSwapsDone`
+  increments on the skip path too, so "done" conflated completions with
+  drops and briefly supported a backwards oversupply verdict; per-site
+  accounting (queued/done/dropped/skipped/drawn) showed a 1:1:1
+  worker-bound pipeline instead.
 
 ## Emulator preflight before another hardware run
 
