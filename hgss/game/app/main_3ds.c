@@ -403,6 +403,7 @@ static volatile bool sComposeForce;   /* redraw everything (back from the HOME m
 static bool VBlankStart(s32 priority);
 static void VBlankStop(void);
 static void GpuComposeLoop(void);
+static void AudioStop(void);
 /* Below, next to the other exits: START+SELECT's direct jump to hbmenu. */
 static void ExitToLauncher(void);
 
@@ -2390,16 +2391,52 @@ void NitroPort_OnFrame(void)
 
 /* Exit to the Homebrew Launcher (START+SELECT held 2 s). Deliberately NOT
  * the HOME-menu close path: no APT handling, no sQuit, no WaitForGame
- * teardown. The flush order is the whole contract — save, then log — and
- * then the process ends at once so the loader returns to hbmenu. Skipping
- * the graceful join is the point: a hung drawer must not trap the exit.
- * Called from the game thread; does not return. */
+ * teardown. Order: save, then a bounded mirror of the normal quit stops
+ * (drawers, geometry, display, sound), then the log, then the runtime and
+ * the process. The stops matter: ending the process with the DSP still
+ * streaming and the display thread inside citro3d leaves hbmenu dirty
+ * hardware state and crashes on the way out (the normal path's own
+ * comment). Each stop signals and joins with its own timeout, so a hung
+ * thread delays the exit instead of trapping it; a stuck one takes the
+ * old end-the-process fallback. Called from the game thread; the re-entry
+ * guard makes a held combo during teardown wait instead of redoing it. */
+static bool sExiting;
 static void ExitToLauncher(void)
 {
+    if (sExiting) {
+        for (;;) {
+            svcSleepThread(100 * 1000000LL);
+        }
+    }
+    sExiting = true;
     NitroPort_Log("START+SELECT held 2 s: exiting to the Homebrew Launcher (frame %lu)",
                   sFrame);
     NitroPort_CardFlush();
+    DrawersStop();
+    NitroPort_Log("[quit] drawing threads stopped");
+    GpuStopGeometry();
+    NitroPort_Log("[quit] geometry stopped");
+    GpuStop();
+    NitroPort_Log("[quit] display stopped");
+    if (sAudio) {
+        AudioStop();
+        NitroPort_Log("[quit] sound stopped");
+    }
+#ifdef HGSS_A0_DIAG
+    A0IdleStop();
+#endif
     FlushLog();
+    if (sGpuStopFailed || sThreadsStuck) {
+        /* Same fallback as the normal path: something is still inside
+         * citro3d/libctru/NDSP (logged above), so skip the runtime
+         * teardown and end the process. */
+        NitroPort_Log("[quit] a thread is still running; ending the process");
+        svcExitProcess();
+    }
+    if (sAudio) {
+        ndspExit();
+    }
+    gfxExit();
     svcExitProcess();
     while (1) {
         svcSleepThread(100 * 1000000LL);
@@ -3505,6 +3542,16 @@ int main(int argc, char **argv)
                 } else {
                     NitroPort_Log("running the game (thread stack %d KiB)", GAME_STACK_SIZE / 1024);
                     WaitForGame(thread);
+                }
+                if (sExiting) {
+                    /* START+SELECT's exit owns the teardown on the game
+                     * thread (bounded stops, then the process ends). Parking
+                     * here keeps this thread from running a second teardown
+                     * over it if HOME arrives mid-exit. */
+                    NitroPort_Log("[quit] exit already running on the game thread; waiting");
+                    for (;;) {
+                        svcSleepThread(100 * 1000000LL);
+                    }
                 }
                 /* Each step is logged: a close that hangs shows where. */
                 NitroPort_Log("[quit] closing");

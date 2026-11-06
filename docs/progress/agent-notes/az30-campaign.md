@@ -575,6 +575,19 @@ wall without stating the assumption. One primary hypothesis per experiment.
   batch2 `ae4a490-...-a0diag`, slot3b `ae4a490-...-slot3`, adpcm
   `3eb41c2-...-adpcm` (bits == committed; trailing doc deltas
   only). Untouched: twin, fuse, port.ini/scripts/saves, port_A/B.
+- Exp-23 START+SELECT exit crash (user-reported, building): the
+  exit ran CardFlush + FlushLog + raw svcExitProcess with DSP
+  streaming and the display thread inside citro3d — hbmenu
+  inherits dirty hardware and faults (the normal quit path's own
+  comment documents this crash class). Fix mirrors the normal
+  stops with their own timeouts (Drawers/Geometry/Display/Audio,
+  all signal-then-join and safe from the game thread), keeps
+  save-first order, flushes the log last, then ndspExit + gfxExit
+  + svcExitProcess; main thread parks while the exit owns
+  teardown (no double-stop if HOME arrives mid-exit); re-entry
+  guard + AudioStop forward decl. Scripted combos can't trigger
+  it (physical-only by design), so Azahar proves no-change only;
+  hardware proves the exit.
 - Exp-19 content-repeat census (done, REFUTED): 582 sampled inserts,
   same-base repeats 0, moved ~4%. Heap churn is genuinely novel
   content (walking camera), not re-emitted blocks — content-keyed
