@@ -2481,6 +2481,10 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
                              StreamCursor *end, const VertexScan *v, unsigned n,
                              uint32_t scEnd, uint32_t fusedFull);
 static int listcache_try(StreamCursor *sc);
+#ifdef HGSS_GX3D_LAZYINSERT
+static int lazy_pass(uint32_t r0, uint32_t i0, uint32_t word0,
+                     const int32_t keyCoord[3]);
+#endif
 #endif
 static int skip_hidden_vertices(StreamCursor *sc)
 {
@@ -2679,11 +2683,18 @@ found:
 #endif
 #ifdef HGSS_GX3D_LISTCACHE
     if(!lcNoTag){
-        listcache_insert(sc->r,sc->c.i,sc->c.word,lcCoord,lcFoundOp,
-                         lcEntry,lcEntries,&end,&v,n,sc->end,fuseFull);
-#ifdef HGSS_A0_DIAG
-        if(a0w)sA0Geo.scanInsertTicks+=A0GeoTick()-a0t1;
+#ifdef HGSS_GX3D_LAZYINSERT
+        int doInsert=lazy_pass(sc->r,sc->c.i,sc->c.word,lcCoord);
+#else
+        int doInsert=1;
 #endif
+        if(doInsert){
+            listcache_insert(sc->r,sc->c.i,sc->c.word,lcCoord,lcFoundOp,
+                             lcEntry,lcEntries,&end,&v,n,sc->end,fuseFull);
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanInsertTicks+=A0GeoTick()-a0t1;
+#endif
+        }
     }
 #endif
     /* Its END_VTXS or BEGIN_VTXS is next; no vertex of it is kept. */
@@ -2821,6 +2832,41 @@ static unsigned list_entry_slot(uintptr_t src, uint32_t keyWord, const int32_t c
     h^=h>>16;h*=0x7feb352du;h^=h>>15;
     return h&LISTCACHE_ENTRY_MASK;
 }
+#ifdef HGSS_GX3D_LAZYINSERT
+/* Lazy inserts (Exp-20): with ~100% churn, inserts serve only burst
+ * re-hits, so first sightings only arm this worker-private seen-filter
+ * (same key the insert would store) and the second sighting inserts.
+ * The filter never authorizes anything: inserts always store the
+ * current scan's values, so no epoch or invalidation is ever needed;
+ * the sampled-hash check and audits guard exactly as before. */
+typedef struct {
+    int used;
+    uintptr_t src;
+    uint32_t keyWord;
+    int32_t coord[3];
+} LazySeen;
+static LazySeen sLazySeen[LISTCACHE_ENTRIES];
+static int lazy_pass(uint32_t r0, uint32_t i0, uint32_t word0,
+                     const int32_t keyCoord[3])
+{
+    ListTag *t0=list_find_tag(r0);
+    uintptr_t src;
+    unsigned slot;
+    LazySeen *e;
+    if(!t0)return 0;
+    if(i0==0u)return 0;
+    src=t0->src+(uintptr_t)(i0-1u)*4u;
+    slot=list_entry_slot(src,word0,keyCoord);
+    e=&sLazySeen[slot];
+    if(e->used && e->src==src && e->keyWord==word0 &&
+       e->coord[0]==keyCoord[0] && e->coord[1]==keyCoord[1] &&
+       e->coord[2]==keyCoord[2])
+        return 1;
+    e->used=1;e->src=src;e->keyWord=word0;
+    e->coord[0]=keyCoord[0];e->coord[1]=keyCoord[1];e->coord[2]=keyCoord[2];
+    return 0;
+}
+#endif
 /* One entry forward the way stream_next steps (PAD skip, SKIP/end
  * bounds), landing only on packets entries. */
 static int list_jump_next(uint32_t *r, uint32_t end)
@@ -3232,6 +3278,9 @@ static void listcache_reset(void)
     unsigned k;
     for(k=0;k<LISTCACHE_ENTRIES;k++)sListCache[k].used=0;
     for(k=0;k<LISTCACHE_TAGS;k++)sListTags[k].seq=0;
+#ifdef HGSS_GX3D_LAZYINSERT
+    for(k=0;k<LISTCACHE_ENTRIES;k++)sLazySeen[k].used=0;
+#endif
     sListCacheEpoch++;
     sListCacheDisabled=0;
     sListAuditDue=0;

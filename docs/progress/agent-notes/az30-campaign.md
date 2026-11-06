@@ -463,6 +463,44 @@ wall without stating the assumption. One primary hypothesis per experiment.
   (walk:box:insert:try) to de-risk all future diets. Emulator
   micro-diets paused (tapped); box-float needs hardware profile
   first (Exp-7 lesson).
+- Exp-19 content-repeat census (done, REFUTED): 582 sampled inserts,
+  same-base repeats 0, moved ~4%. Heap churn is genuinely novel
+  content (walking camera), not re-emitted blocks — content-keyed
+  entries would buy ~nothing. Failed decisively and cheaply; census
+  removed (tree lean). Lesson: the churn is content-novelty, which
+  also bounds ALL cross-scene geometry caching (compiled lists
+  would churn identically).
+- Exp-20 lazy insert (building): with 100% churn, inserts serve
+  only burst re-hits (same-src ping-pong); novel runs pay
+  tag-verify + 64-bit strided divides + 64-entry census scan +
+  fill + evict traffic for entries that die unused. Gate: a small
+  worker-private direct-mapped seen-filter keyed by the insert key
+  (src, keyWord, coords); first sight sets, second sight inserts.
+  Safety: filter never authorizes anything — inserts store current
+  scan values by construction, sample/audit guards unchanged, no
+  epoch/invalidation needed ever. Expected: ~90% of inserts gone
+  (~23% scan-inner); measured via scanInsertTicks + inserts/evicts
+  collapse. Zero precision/pacing/cross-thread risk (removes
+  synchronous work). Behind CONTENTKEY... no — LAZYINSERT flag
+  (twin stays pristine); keep iff A/B wins.
+- RESULT az-lazy-00 (lazy-only vs twin-ship): inserts 46800→10171
+  (−78%), evicts 46221→9612 (−79%), hits 51528→59703 (+16% —
+  fewer evictions → longer-lived entries → MORE re-hits, bonus).
+  audits 8 fail 0, sample-fail 0, no DISABLED, screenshot
+  phase-perfect, host bit-identical all modes. Worker 31.38→30.80
+  (−1.9%), skipped 150→138, draws 302→316, wakes 407→567 (more,
+  shorter; longest 59.1→53.7ms — watch on hardware). VERDICT: KEEP
+  (Exp-6 rule: massive work elimination + bit-exact + neutral-better).
+  Emulator mutes the prize (JIT-cheap bookkeeping); hardware
+  (fill/evict/divide/census traffic) should amplify. Next: lazy+fuse
+  combo Azahar test, then hardware when runs resume.
+- RESULT az-lazyfuse-00 (combo vs twin-ship): worker 31.38→30.52
+  (−2.7%, additive-ish: fuse ~0 + lazy −1.9%), inserts 46800→10529,
+  hits 51528→61233 (+19%), fuse-mismatch 0, audits clean,
+  screenshot perfect. VERDICT: combo stacks cleanly; ship shape
+  (fusehash+lazy) is the current performance head. Worker descent
+  this campaign (emulator): 31.38 → 31.38 → 30.80 → 30.52, every
+  step bit-exact.
 - Exp-18 lower30/drawerAB 2x2 separation (emulator, twin binary,
   ini-only; completes Exp-1's confounded square):
   neither 228 draws / 22.8 composes / drawer 22.9/s@27.47ms;

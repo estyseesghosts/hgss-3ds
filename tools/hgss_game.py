@@ -846,14 +846,14 @@ def smdh_names(build_id: str | None = None) -> tuple[str, str, str]:
         return (GAME["app"], GAME["title"], GAME["app"])
     game = "SS" if GAME["binary"] == "pokesoulsilver" else "HG"
     # The tag is "{shortsha}[-dirty][-texprof][-texhint][-palhash][-gxhot]
-    # [-gxidx][-listcache][-statededup][-fusehash][-a0diag]"
+    # [-gxidx][-listcache][-statededup][-fusehash][-lazy][-a0diag]"
     # (experiment_build_id below): the SHA is first and never contains
     # a dash.
     short_sha = build_id.split("-")[0]
     rest = build_id[len(short_sha):]
     base = short_sha + ("-dirty" if rest.startswith("-dirty") else "")
     flags = [part for part in ("gxhot", "gxidx", "listcache", "statededup",
-                               "fusehash", "a0diag")
+                               "fusehash", "lazy", "a0diag")
              if f"-{part}" in rest]
     title = f"{game}-{build_id}"
     long = " ".join(flags)
@@ -999,6 +999,7 @@ def experiment_build_id(short: str, dirty: bool) -> str:
                              ("HGSS_GX3D_LISTCACHE", "-listcache"),
                              ("HGSS_GX3D_STATEDEDUP", "-statededup"),
                              ("HGSS_GX3D_FUSEHASH", "-fusehash"),
+                             ("HGSS_GX3D_LAZYINSERT", "-lazy"),
                              ("HGSS_A0_DIAG", "-a0diag")):
         if os.environ.get(variable) == "1":
             tag += suffix
@@ -1048,6 +1049,7 @@ def write_build_info(dsx: Path, game: str, target: str,
              f"gx3d_listcache: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_LISTCACHE') == '1' else 'no'}\n"
              f"gx3d_statededup: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_STATEDEDUP') == '1' else 'no'}\n"
              f"gx3d_fusehash: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_FUSEHASH') == '1' else 'no'}\n"
+             f"gx3d_lazyinsert: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_LAZYINSERT') == '1' else 'no'}\n"
              f"a0_diag: {'yes' if target == '3ds' and os.environ.get('HGSS_A0_DIAG') == '1' else 'no'}\n"
             f"build: {experiment_build_id(short, dirty)}\n"
             f"sha: {full}\n"
@@ -1411,7 +1413,7 @@ def gx3d_sdk_mode() -> str:
     invalidates the affected object whenever any of them toggles."""
     return ",".join("1" if os.environ.get(v) == "1" else "0" for v in
                     ("HGSS_GX3D_HOTLOOP", "HGSS_GX3D_LISTCACHE", "HGSS_GX3D_STATEDEDUP",
-                     "HGSS_GX3D_FUSEHASH"))
+                     "HGSS_GX3D_FUSEHASH", "HGSS_GX3D_LAZYINSERT"))
 
 
 def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool, list[Path]]:
