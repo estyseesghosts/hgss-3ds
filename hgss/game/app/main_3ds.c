@@ -16,7 +16,13 @@
  *   sdmc:/3ds/pokeheartgold-ss/soulsilver3ds.pak
  * each with manifest.json next to it, keeps the save in the same folder
  * (heartgold.sav or soulsilver.sav, a raw 512 KiB save, as emulators keep
- * them), and writes log.txt there.
+ * them), and writes log.txt there. A non-empty previous log.txt is renamed
+ * to log-YYYYMMDD-HHMMSS-<build>.txt at boot, so past logs are never
+ * overwritten; log.txt is always the current run.
+ *
+ * Alternate configs: holding START at launch reads port_A.ini, holding
+ * SELECT reads port_B.ini, instead of port.ini. Hold START+SELECT for 2 s
+ * at any time to leave cleanly for the Homebrew Launcher.
  *
  * Scripted input: put a tests/inputs-style script at script.txt in the
  * game's folder, or name it in port.ini:
@@ -40,6 +46,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "3ds_input.h"
 #include "heartgold.h"
@@ -67,6 +74,8 @@
 #define SAVE_PATH DATA_DIR "/" HEARTGOLD_SAVE_NAME
 #define LOG_PATH DATA_DIR "/log.txt"
 #define INI_PATH DATA_DIR "/port.ini"
+#define INI_PATH_A DATA_DIR "/port_A.ini"
+#define INI_PATH_B DATA_DIR "/port_B.ini"
 #define DEFAULT_SCRIPT DATA_DIR "/script.txt"
 
 /* libctru puts the Thread block at the base of the same allocation the stack
@@ -382,6 +391,8 @@ static volatile bool sComposeForce;   /* redraw everything (back from the HOME m
 static bool VBlankStart(s32 priority);
 static void VBlankStop(void);
 static void GpuComposeLoop(void);
+/* Below, next to the other exits: START+SELECT's direct jump to hbmenu. */
+static void ExitToLauncher(void);
 
 #ifdef HGSS_A0_DIAG
 static void A0ThreadRunning(const char *role);
@@ -759,6 +770,11 @@ static const FilterPreset sFilterPresets[] = {
 #define FILTER_PRESETS ((int)(sizeof(sFilterPresets) / sizeof(sFilterPresets[0])))
 static int sFilterPreset = 1;                 /* (the default: SHARP/NEAREST) */
 static bool sFilterCombo;                     /* (X+R held on the frame before) */
+/* START+SELECT held to leave for the Homebrew Launcher: the tick the combo
+ * started, or 0 when it is not held. Compared against EXIT_HOLD_TICKS below. */
+#define EXIT_HOLD_SECONDS 2
+#define EXIT_HOLD_TICKS ((u64)EXIT_HOLD_SECONDS * SYSCLOCK_ARM11)
+static u64 sExitHoldStart;
 /* The toast: what it says, when it goes (ticks; 0 none), and that a drawer
  * must redraw the lower screen. The game thread sets it, a drawer draws it. */
 #define TOAST_SECONDS 2
@@ -2083,6 +2099,27 @@ void NitroPort_OnFrame(void)
 
     hidScanInput();
     held = hidKeysHeld();
+    /* START+SELECT held 2 s exits to the Homebrew Launcher. This is NOT the
+     * HOME-menu close path (no APT close handling, no sQuit/WaitForGame
+     * teardown): it flushes the save and the log, then ends the process
+     * directly, and the loader returns to hbmenu. Wall-clock ticks, not
+     * frames: the drawer can run well under 60 Hz on an Old 3DS. Physical
+     * buttons only, so a scripted START+SELECT can never exit. The pair is
+     * masked from the game below so the 2 s hold does not open menus on
+     * the way out. */
+    {
+        bool exitCombo = (held & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT);
+
+        if (exitCombo) {
+            if (sExitHoldStart == 0) {
+                sExitHoldStart = svcGetSystemTick();
+            } else if (svcGetSystemTick() - sExitHoldStart >= EXIT_HOLD_TICKS) {
+                ExitToLauncher();
+            }
+        } else {
+            sExitHoldStart = 0;
+        }
+    }
     /* X+R cycles the pixel-filter presets. An edge, so one press is one
      * step; while held, X and R are masked from the game's buttons below.
      * An Old 3DS keeps its launch-time filter only: three of the five
@@ -2113,6 +2150,9 @@ void NitroPort_OnFrame(void)
     }
     hidCircleRead(&circle);
     buttons = DsButtons(held, circle);
+    if (((held & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT))) {
+        buttons &= (uint16_t)~(HGSS_BUTTON_START | HGSS_BUTTON_SELECT);
+    }
     if (filterCombo) {
         buttons &= (uint16_t)~(HGSS_BUTTON_X | HGSS_BUTTON_R);
     }
@@ -2255,6 +2295,24 @@ void NitroPort_OnFrame(void)
     /* Last, after both blits and the swap: this is what spaces frame starts
      * when the display work finishes early. */
     WaitForFrameCap(frameStart);
+}
+
+/* Exit to the Homebrew Launcher (START+SELECT held 2 s). Deliberately NOT
+ * the HOME-menu close path: no APT handling, no sQuit, no WaitForGame
+ * teardown. The flush order is the whole contract — save, then log — and
+ * then the process ends at once so the loader returns to hbmenu. Skipping
+ * the graceful join is the point: a hung drawer must not trap the exit.
+ * Called from the game thread; does not return. */
+static void ExitToLauncher(void)
+{
+    NitroPort_Log("START+SELECT held 2 s: exiting to the Homebrew Launcher (frame %lu)",
+                  sFrame);
+    NitroPort_CardFlush();
+    FlushLog();
+    svcExitProcess();
+    while (1) {
+        svcSleepThread(100 * 1000000LL);
+    }
 }
 
 /* The game stopped itself. */
@@ -2478,13 +2536,44 @@ static void ReadProfile(HeartgoldSettings *settings)
     cfguExit();
 }
 
-/* One `key=value` from port.ini. Returns 1 and copies the trimmed value when
+/* The active config file, chosen at boot by SelectIniPath: port.ini by
+ * default, port_A.ini while START is held, port_B.ini while SELECT is held.
+ * Every IniValue/ScriptPath read goes through this path, so one boot with
+ * a held button is one alternate settings combination with no file swaps. */
+static char sIniPath[256];
+
+/* Pick the config file from the buttons held at launch. Called once, after
+ * the log is open (so the choice is logged) and before any IniValue read.
+ * START -> port_A.ini, SELECT -> port_B.ini, both -> port_A.ini; anything
+ * else -> port.ini. */
+static void SelectIniPath(void)
+{
+    uint32_t held;
+
+    snprintf(sIniPath, sizeof(sIniPath), "%s", INI_PATH);
+    hidScanInput();
+    held = hidKeysHeld();
+    if ((held & KEY_START) && (held & KEY_SELECT)) {
+        snprintf(sIniPath, sizeof(sIniPath), "%s", INI_PATH_A);
+        NitroPort_Log("[ini] START+SELECT held at boot: using port_A.ini");
+    } else if (held & KEY_START) {
+        snprintf(sIniPath, sizeof(sIniPath), "%s", INI_PATH_A);
+        NitroPort_Log("[ini] START held at boot: using port_A.ini");
+    } else if (held & KEY_SELECT) {
+        snprintf(sIniPath, sizeof(sIniPath), "%s", INI_PATH_B);
+        NitroPort_Log("[ini] SELECT held at boot: using port_B.ini");
+    } else {
+        NitroPort_Log("[ini] using port.ini");
+    }
+}
+
+/* One `key=value` from the active config file. Returns 1 and copies the trimmed value when
  * the key is present and not empty; 0 when the file or the key is missing.
  * The existing ScriptPath() keeps its own lenient reader; this one is for the
  * numeric settings that need an exact key. */
 static int IniValue(const char *key, char *value, size_t size)
 {
-    FILE *file = fopen(INI_PATH, "rb");
+    FILE *file = fopen(sIniPath, "rb");
     char line[256];
     size_t keyLen = strlen(key);
 
@@ -2770,11 +2859,12 @@ static void ReadDisplayOptions(void)
     NitroPort_ComposeSetBandPublish(sIniBandPubB, sIniBandPubBDiag);
 }
 
-/* `script=PATH` in port.ini, or the default script path. */
+/* `script=PATH` in port.ini (active file: port.ini/port_A.ini/port_B.ini),
+ * or the default script path. */
 static const char *ScriptPath(void)
 {
     static char path[256];
-    FILE *file = fopen(INI_PATH, "rb");
+    FILE *file = fopen(sIniPath, "rb");
     char line[256];
 
     if (file == NULL) {
@@ -3047,12 +3137,80 @@ static void DisplayErrorScreen(void)
     }
 }
 
+/* Past logs are never overwritten: before truncating log.txt, rename a
+ * non-empty previous log to a timestamped archive
+ * (log-YYYYMMDD-HHMMSS-<build>.txt, with -2/-3 on collision). Empty files
+ * are left alone so the emulator probe's truncate-then-boot leaves no
+ * empty archives behind. Failures are ignored: a missing archive must
+ * never stop the game. Returns true and stores the archive's basename in
+ * outBase when a rename happened. */
+static bool ArchivePreviousLog(char *outBase, size_t outSize)
+{
+    struct stat st;
+    time_t now;
+    struct tm *tm;
+    char stamp[32];
+    char safeBuild[128];
+    char archive[256];
+    size_t i;
+    int n;
+
+    if (outBase != NULL && outSize > 0) {
+        outBase[0] = '\0';
+    }
+    if (stat(LOG_PATH, &st) != 0 || st.st_size <= 0) {
+        return false;
+    }
+    now = time(NULL);
+    tm = localtime(&now);
+    if (tm != NULL) {
+        snprintf(stamp, sizeof(stamp), "%04d%02d%02d-%02d%02d%02d",
+                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                 tm->tm_hour, tm->tm_min, tm->tm_sec);
+    } else {
+        snprintf(stamp, sizeof(stamp), "tick-%llu",
+                 (unsigned long long)svcGetSystemTick());
+    }
+    /* FAT-safe build tag: keep [A-Za-z0-9-], flatten anything else. */
+    for (i = 0; i + 1 < sizeof(safeBuild) && HGSS_BUILD_ID[i] != '\0'; i++) {
+        char c = HGSS_BUILD_ID[i];
+        safeBuild[i] = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                       (c >= '0' && c <= '9') || c == '-' ? c : '-';
+    }
+    safeBuild[i] = '\0';
+    if (safeBuild[0] == '\0') {
+        snprintf(safeBuild, sizeof(safeBuild), "unknown");
+    }
+    snprintf(archive, sizeof(archive), DATA_DIR "/log-%s-%s.txt",
+             stamp, safeBuild);
+    if (stat(archive, &st) == 0) {
+        for (n = 2; n < 100; n++) {
+            char sized[256];
+            snprintf(sized, sizeof(sized), DATA_DIR "/log-%s-%s-%d.txt",
+                     stamp, safeBuild, n);
+            if (stat(sized, &st) != 0) {
+                snprintf(archive, sizeof(archive), "%s", sized);
+                break;
+            }
+        }
+    }
+    if (rename(LOG_PATH, archive) != 0) {
+        return false;
+    }
+    if (outBase != NULL && outSize > 0) {
+        const char *base = strrchr(archive, '/');
+        snprintf(outBase, outSize, "%s", base != NULL ? base + 1 : archive);
+    }
+    return true;
+}
+
 int main(int argc, char **argv)
 {
     HeartgoldSettings settings;
     const char *error;
     aptHookCookie hook;
     Thread thread;
+    char prevLogBase[160];
 
     (void)argc;
     (void)argv;
@@ -3078,6 +3236,8 @@ int main(int argc, char **argv)
 
     mkdir("sdmc:/3ds", 0777);
     mkdir(DATA_DIR, 0777);
+    prevLogBase[0] = '\0';
+    ArchivePreviousLog(prevLogBase, sizeof(prevLogBase));
     LightLock_Init(&sLogLock);
     sLogLockReady = true;
     sLog = fopen(LOG_PATH, "w");
@@ -3087,6 +3247,12 @@ int main(int argc, char **argv)
     }
 
     NitroPort_Log(HEARTGOLD_APP_NAME " starting (build %s)", HGSS_BUILD_ID);
+    if (prevLogBase[0] != '\0') {
+        NitroPort_Log("previous log preserved as %s", prevLogBase);
+    }
+    /* Alternate configs for fast A/B: START held here reads port_A.ini,
+     * SELECT reads port_B.ini. Logged, so any log traces to its file. */
+    SelectIniPath();
 #ifdef HGSS_A0_DIAG
     NitroPort_Log("[a0] instrumentation revision halfA-reasons-geometry-idle-v2");
 #endif

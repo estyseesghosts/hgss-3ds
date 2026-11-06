@@ -2547,6 +2547,108 @@ class BuildIdTests(unittest.TestCase):
         # Host-tool builds without the generated header still compile.
         self.assertIn('#define HGSS_BUILD_ID "unknown"', text)
 
+    def test_smdh_names_carry_the_build(self):
+        with patch.dict(os.environ, {}):
+            hg.GAME = hg.GAMES["soulsilver"]
+            try:
+                short, long, pub = hg.smdh_names(None)
+                self.assertEqual((short, long, pub),
+                                 ("pokesoulsilver-3ds", "SoulSilver on 3DS",
+                                  "pokesoulsilver-3ds"))
+                short, long, pub = hg.smdh_names(
+                    "abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag")
+                self.assertEqual(short, "SS-abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag")
+                self.assertEqual(long, "gxhot gxidx listcache statededup a0diag")
+                self.assertEqual(pub, "SS-abc1234-dirty")
+                # Two different builds never share a launcher name.
+                other, _, _ = hg.smdh_names("abc1234-dirty-gxhot")
+                self.assertNotEqual(short, other)
+                # Short enough for smdhtool's real slots (short[64] /
+                # long[128] / publisher[64] UTF-16 units): over-long fields
+                # overflow into the next language and garble every entry.
+                self.assertLessEqual(len(short), 63)
+                self.assertLessEqual(len(long), 127)
+                self.assertLessEqual(len(pub), 63)
+            finally:
+                hg.GAME = hg.GAMES["heartgold"]
+
+    def test_smdh_bytes_decode_to_the_names_in_every_language(self):
+        # smdhtool lays each language out as short[64] + long[128] +
+        # publisher[64] UTF-16 units at 0x8/0x88/0x188 + i*0x200 and copies
+        # without truncation: every slot must decode to exactly its string.
+        import shutil
+        tool = hg.devkitpro() / "tools" / "bin" / "smdhtool"
+        icon = hg.REPO / "hgss" / "game" / "assets" / "placeholder-icon.png"
+        if not tool.is_file() or not icon.is_file() or shutil.which("python3") is None:
+            self.skipTest("needs devkitPro smdhtool")
+        old_game, hg.GAME = hg.GAME, hg.GAMES["soulsilver"]
+        try:
+            names = hg.smdh_names("abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag")
+            with tempfile.TemporaryDirectory() as tmp:
+                elf = Path(tmp) / "pokesoulsilver-3ds.elf"
+                elf.write_bytes(b"elf")
+                old = os.environ.get("DEVKITPRO")
+                os.environ["DEVKITPRO"] = str(hg.devkitpro())
+                try:
+                    smdh = hg.make_smdh(elf, "abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag")
+                finally:
+                    if old is None:
+                        os.environ.pop("DEVKITPRO", None)
+                    else:
+                        os.environ["DEVKITPRO"] = old
+                self.assertIsNotNone(smdh)
+                data = Path(smdh).read_bytes()
+                for i in range(16):
+                    for off, units, want in ((0x8 + i * 0x200, 64, names[0]),
+                                             (0x88 + i * 0x200, 128, names[1]),
+                                             (0x188 + i * 0x200, 64, names[2])):
+                        raw = data[off:off + units * 2]
+                        got = raw.decode("utf-16-le").split("\0")[0]
+                        self.assertEqual(got, want, f"language slot {i}")
+        finally:
+            hg.GAME = old_game
+
+    def test_shell_archives_the_previous_log(self):
+        text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        self.assertIn("static bool ArchivePreviousLog(", text)
+        self.assertIn('DATA_DIR "/log-%s-%s.txt"', text)
+        self.assertIn("previous log preserved as %s", text)
+        # Empty files are left alone (the emulator probe truncates first).
+        self.assertIn("st.st_size <= 0", text)
+
+    def test_shell_offers_alternate_configs_at_boot(self):
+        text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        self.assertIn('DATA_DIR "/port_A.ini"', text)
+        self.assertIn('DATA_DIR "/port_B.ini"', text)
+        self.assertIn("static void SelectIniPath(void)", text)
+        self.assertIn("SelectIniPath();", text)
+        self.assertLess(text.index("SelectIniPath();"),
+                        text.index("ReadFrameCap();"))
+        # Every config read goes through the selected path.
+        self.assertIn('fopen(sIniPath, "rb")', text)
+        self.assertNotIn('fopen(INI_PATH, "rb")', text)
+
+    def test_shell_exits_to_the_launcher_on_start_select(self):
+        text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        self.assertIn("EXIT_HOLD_TICKS", text)
+        self.assertIn("(held & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)", text)
+        self.assertIn("~(HGSS_BUTTON_START | HGSS_BUTTON_SELECT)", text)
+        # A dedicated exit, not the HOME-close path: the combo ends the
+        # process for hbmenu instead of joining through sQuit/WaitForGame.
+        combo = text[text.index("START+SELECT held 2 s exits to the Homebrew Launcher"):]
+        combo = combo[:combo.index("X+R cycles the pixel-filter presets")]
+        self.assertIn("ExitToLauncher();", combo)
+        self.assertNotIn("sQuit = true;", combo)
+        self.assertNotIn("threadExit(0);", combo)
+        exit_fn = text[text.index("static void ExitToLauncher(void)\n{"):]
+        exit_fn = exit_fn[:exit_fn.index("/* The game stopped itself. */")]
+        self.assertIn("exiting to the Homebrew Launcher", exit_fn)
+        self.assertIn("NitroPort_CardFlush();", exit_fn)
+        self.assertIn("FlushLog();", exit_fn)
+        self.assertIn("svcExitProcess();", exit_fn)
+        self.assertNotIn("sQuit", exit_fn)
+        self.assertNotIn("aptMainLoop", exit_fn)
+
 
 class StageTests(unittest.TestCase):
     """Unique staged names: two builds never share a filename."""
@@ -2556,6 +2658,13 @@ class StageTests(unittest.TestCase):
                          "pokeheartgold-abc1234")
         self.assertEqual(st.staged_base("pokesoulsilver", "abc1234", True),
                          "pokesoulsilver-abc1234-dirty")
+
+    def test_staged_base_keeps_the_experiment_suffixes(self):
+        # Two builds from one commit with different flags stage apart.
+        self.assertEqual(st.staged_base("pokesoulsilver", "abc1234-dirty-gxhot-gxidx"),
+                         "pokesoulsilver-abc1234-dirty-gxhot-gxidx")
+        self.assertEqual(st.staged_base("pokesoulsilver", "abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag"),
+                         "pokesoulsilver-abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag")
 
     def test_pick_staged_path_skips_identical_dedupes_divergent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2577,10 +2686,26 @@ class StageTests(unittest.TestCase):
             src.write_bytes(MINIMAL_3DSX)
             (Path(tmp) / "pokeheartgold.build-info.txt").write_text(
                 "build: abc1234-dirty\nsha: " + "f" * 40 + "\nstatus:\n M x\n")
-            short, full, dirty, status, inferred = st.source_build_info(src)
-            self.assertEqual((short, full, dirty, inferred),
-                             ("abc1234", "f" * 40, True, False))
+            build, full, dirty, status, inferred = st.source_build_info(src)
+            self.assertEqual((build, full, dirty, inferred),
+                             ("abc1234-dirty", "f" * 40, True, False))
             self.assertIn("M x", status)
+
+    def test_source_build_info_keeps_the_experiment_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "pokesoulsilver.3dsx"
+            src.write_bytes(MINIMAL_3DSX)
+            (Path(tmp) / "pokesoulsilver.build-info.txt").write_text(
+                "build: abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag\n"
+                "sha: " + "f" * 40 + "\nstatus:\n")
+            build, full, dirty, status, inferred = st.source_build_info(src)
+            self.assertEqual(build, "abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag")
+            self.assertTrue(dirty)
+            self.assertFalse(inferred)
+            dest = Path(tmp) / "sd"
+            path, _ = st.stage_file(src, dest)
+            self.assertEqual(path.name,
+                             "pokesoulsilver-abc1234-dirty-gxhot-gxidx-listcache-statededup-a0diag.3dsx")
 
     def test_stage_file_validates_names_manifests_and_skips(self):
         import stat as statmod

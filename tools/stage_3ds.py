@@ -11,15 +11,19 @@ log traces to its commit):
 
 * HG stages to dist/sd-card/3ds/; SS stages to dist/sd-card/3ds/ and
   dist/soulsilver-sd-card/3ds/ (--also adds dirs for both).
-* Staged name: <base>-<shortsha>[-dirty].3dsx, e.g.
-  pokeheartgold-82c1ab05-dirty.3dsx. Same commit rebuilt clean gets the
-  same name; a different dirty state gets -2, -3, ... -- never an
-  overwrite of different bits, never a silent duplicate.
+* Staged name: <base>-<build>.3dsx, where <build> is the full experiment
+  tag (short SHA + -dirty + -gxhot/-gxidx/-listcache/-statededup/-a0diag
+  etc), e.g. pokeheartgold-82c1ab05-dirty-gxhot-gxidx.3dsx. Same tag
+  rebuilt byte-identical is skipped, not recopied; same tag with different
+  bits gets -2, -3, ... -- never an overwrite of different bits, never a
+  silent duplicate.
 * Byte-identical content under the same name is skipped, not recopied.
 * validate_3dsx must be [] or the file is refused.
 * Each staged file gets a <name>.build-info.txt sidecar (commit, dirty
   state, sizes, sha256, stage time). The binary itself logs its build id
-  at boot (main_3ds.c), so log.txt traces the same way.
+  at boot (main_3ds.c), so log.txt traces the same way. The SMDH inside
+  the .3dsx carries the same tag (tools/hgss_game.py smdh_names), so the
+  Homebrew Launcher shows a unique entry per build.
 * Everything is chmod 666 (VFAT SD cards).
 
 Prints the staged paths, sizes and sha256 for STATE.md, plus the exact
@@ -52,11 +56,14 @@ def sha256_of(path: Path) -> str:
 
 
 def source_build_info(src: Path) -> tuple[str, str, bool, str, bool]:
-    """(short, full, dirty, status, inferred) for a built .3dsx.
+    """(build tag, full SHA, dirty, status, inferred) for a built .3dsx.
 
     Prefers the .build-info.txt sidecar tools/hgss_game.py wrote next to
     it (build-time truth); falls back to the current checkout state and
-    marks the result inferred.
+    marks the result inferred. The build tag is the full experiment id
+    (short SHA + -dirty + -gxhot/-gxidx/.../-a0diag), not just the short
+    SHA: two builds from the same commit with different flags must stage
+    to different filenames.
     """
     sidecar = src.with_name(src.stem + ".build-info.txt")
     if sidecar.is_file():
@@ -74,17 +81,26 @@ def source_build_info(src: Path) -> tuple[str, str, bool, str, bool]:
                 key, value = line.split(": ", 1)
                 fields[key] = value
         build = fields.get("build", "unknown")
-        dirty = build.endswith("-dirty")
-        short = build[:-len("-dirty")] if dirty else build
-        return (short, fields.get("sha", "unknown"),
+        dirty = "-dirty" in build
+        # Short SHA is the tag up to the first suffix dash; the staged base
+        # keeps the whole tag so flags stay visible.
+        return (build, fields.get("sha", "unknown"),
                 dirty, "\n".join(status_lines), False)
     short, full, dirty, status = hg.git_build_info()
-    return (short, full, dirty, status, True)
+    return (hg.experiment_build_id(short, dirty), full, dirty, status, True)
 
 
-def staged_base(binary_stem: str, short: str, dirty: bool) -> str:
-    """Unique stem for a staged file: base + commit, -dirty when flagged."""
-    return f"{binary_stem}-{short}{'-dirty' if dirty else ''}"
+def staged_base(binary_stem: str, build: str, dirty: bool = False) -> str:
+    """Unique stem for a staged file: base + full experiment build tag.
+
+    `build` is the full tag from source_build_info (e.g.
+    "abc1234-dirty-gxhot-gxidx"); the legacy (short, dirty-flag) call form
+    staged_base("pokeheartgold", "abc1234", True) still works and yields
+    "pokeheartgold-abc1234-dirty".
+    """
+    if dirty and not build.endswith("-dirty") and "-dirty" not in build:
+        return f"{binary_stem}-{build}-dirty"
+    return f"{binary_stem}-{build}"
 
 
 def pick_staged_path(dest_dir: Path, base: str, digest: str) -> tuple[Path, bool]:
@@ -110,10 +126,10 @@ def stage_file(src: Path, dest_dir: Path) -> tuple[Path, bool]:
     if problems:
         raise SystemExit(f"stage_3ds: refusing {src.name}: "
                          f"validate_3dsx: {problems[0]}")
-    short, full, dirty, status, inferred = source_build_info(src)
+    build, full, dirty, status, inferred = source_build_info(src)
     digest = sha256_of(src)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    path, already = pick_staged_path(dest_dir, staged_base(src.stem, short, dirty),
+    path, already = pick_staged_path(dest_dir, staged_base(src.stem, build),
                                      digest)
     if not already:
         shutil.copy2(src, path)
@@ -123,7 +139,7 @@ def stage_file(src: Path, dest_dir: Path) -> tuple[Path, bool]:
     sidecar.write_text(
         f"file: {path.name}\n"
         f"source: {src}\n"
-        f"build: {short}{'-dirty' if dirty else ''}{' (inferred at stage)' if inferred else ''}\n"
+        f"build: {build}{' (inferred at stage)' if inferred else ''}\n"
         f"sha: {full}\n"
         f"dirty: {'yes' if dirty else 'no'}\n"
         f"staged_utc: {now}\n"

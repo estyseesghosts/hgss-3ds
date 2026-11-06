@@ -826,15 +826,56 @@ def three_dsx_command(tool: Path, elf: Path, dsx: Path,
     return command
 
 
-def make_smdh(binary: Path) -> Path | None:
-    """Build a generic SMDH beside the ELF, or None if the tool is absent."""
+def smdh_names(build_id: str | None = None) -> tuple[str, str, str]:
+    """Short, unique Homebrew Launcher names: (short, long, publisher).
+
+    Every build shows its commit + experiment flags in the launcher, so two
+    different .3dsx files never look identical there. Without a build id this
+    is the old generic triple. With one the entry reads, e.g.
+    "SS-9930261-dirty-a0diag" / "gxhot gxidx listcache statededup" /
+    "SS-9930261-dirty": game + commit + dirty + A0 in the title, the exact
+    geometry flag names in the description, game + commit as publisher.
+
+    Lengths are load-bearing, not cosmetic: smdhtool lays each language out
+    as short[64] + long[128] + publisher[64] UTF-16 units and copies without
+    truncation, so anything past 63/127/63 units overflows into the next
+    language's title and garbles every entry (seen on hardware with 72-char
+    titles). The caps below keep a spare unit for the NUL.
+    """
+    if not build_id:
+        return (GAME["app"], GAME["title"], GAME["app"])
+    game = "SS" if GAME["binary"] == "pokesoulsilver" else "HG"
+    # The tag is "{shortsha}[-dirty][-texprof][-texhint][-palhash][-gxhot]
+    # [-gxidx][-listcache][-statededup][-a0diag]" (experiment_build_id
+    # below): the SHA is first and never contains a dash.
+    short_sha = build_id.split("-")[0]
+    rest = build_id[len(short_sha):]
+    base = short_sha + ("-dirty" if rest.startswith("-dirty") else "")
+    flags = [part for part in ("gxhot", "gxidx", "listcache", "statededup",
+                               "a0diag")
+             if f"-{part}" in rest]
+    title = f"{game}-{build_id}"
+    long = " ".join(flags)
+    publisher = f"{game}-{base}"
+    return (title[:63], long[:127], publisher[:63])
+
+
+def make_smdh(binary: Path, build_id: str | None = None) -> Path | None:
+    """Build an SMDH beside the ELF, or None if the tool is absent.
+
+    build_id is the experiment_build_id() tag (short SHA + -dirty +
+    experiment suffixes); it goes into the SMDH short/long/publisher names
+    so the Homebrew Launcher shows a unique entry per build. None keeps the
+    old generic names (host-tool callers and tests).
+    """
     tool = devkitpro() / "tools" / "bin" / "smdhtool"
     icon = REPO / "hgss" / "game" / "assets" / "placeholder-icon.png"
     smdh = binary.with_suffix(".smdh")
     if not tool.is_file() or not icon.is_file():
         return None
-    proc = subprocess.run([str(tool), "--create", GAME["app"],
-                           GAME["title"], GAME["app"],
+    short, long, publisher = smdh_names(build_id)
+    proc = subprocess.run([str(tool), "--create", short,
+                           long, publisher,
                            str(icon), str(smdh)],
                           capture_output=True, text=True)
     if proc.returncode != 0 or not smdh.is_file():
@@ -1019,13 +1060,16 @@ def write_build_info(dsx: Path, game: str, target: str,
     return manifest
 
 
-def package_three_dsx(binary: Path, target: str) -> Path | None:
+def package_three_dsx(binary: Path, target: str,
+                      build_id: str | None = None) -> Path | None:
     """Package a linked 3DS ELF as a .3dsx next to it, or do nothing.
 
     Packaging is deliberately after the link: a static link with zero
     unresolved symbols is the Phase 2 bar, and the .3dsx is the runnable
     artifact for the Homebrew Launcher. A missing 3dsxtool is reported, not
-    fatal (the ELF is already the proof of the link).
+    fatal (the ELF is already the proof of the link). build_id (the
+    experiment tag) goes into the SMDH names so the launcher entry is
+    unique per build; None keeps the old generic names.
     """
     if target != "3ds":
         return None
@@ -1035,7 +1079,7 @@ def package_three_dsx(binary: Path, target: str) -> Path | None:
     if not tool.is_file():
         print(f"   note: {tool} not found; leaving {binary.name} unpackaged")
         return None
-    smdh = make_smdh(binary)
+    smdh = make_smdh(binary, build_id)
     proc = subprocess.run(three_dsx_command(tool, binary, dsx, smdh),
                           capture_output=True, text=True)
     if proc.returncode != 0:
@@ -1634,6 +1678,14 @@ def main(argv: list[str] | None = None) -> int:
     text = proc.stderr + proc.stdout
     unresolved = unresolved_symbols(text)
     (out / "link.log").write_text(text, encoding="utf-8")
+    # Timestamped copy: rebuilding the same --out must not silently lose the
+    # previous link log. link.log stays the latest; link-<utc>.log keeps
+    # every attempt.
+    try:
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        (out / f"link-{stamp}.log").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
     if proc.returncode == 0 and binary.is_file():
         print(f"   linked {binary}")
         table_ok, table_text = check_nns_volume_table(tools["nm"], tools["readelf"],
@@ -1646,7 +1698,7 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 1
         try:
-            dsx = package_three_dsx(binary, args.target)
+            dsx = package_three_dsx(binary, args.target, build_id)
         except ThreeDsxError as exc:
             print(f"   the .3dsx was not accepted: {exc}")
             return 1
