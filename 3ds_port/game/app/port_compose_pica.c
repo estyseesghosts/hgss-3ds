@@ -655,6 +655,9 @@ static uint32_t sSceneWaitingSerial;
  * presents/s. */
 static u64 sDbgNoNeed, sDbgWait2D, sDbgMidLate, sDbgNoBuf, sDbgDraws;
 static u64 sDbgNeedA, sDbgNeedB;
+/* Draw-trigger census: upper draws that advanced the 3D serial (vs 2D-set
+ * driven), and published serials skipped between scene-driven draws. */
+static u64 sDbgDrawsScene, sDbgSerialSkipped;
 static u64 sDbgPickTicks, sDbgPrepareTicks, sDbgStageTicks, sDbgEndTicks,
     sDbgSkipTicks;
 
@@ -662,7 +665,8 @@ void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
                                u64 *noBuf, u64 *draws, u64 *pickTicks,
                                u64 *prepareTicks, u64 *stageTicks,
                                u64 *endTicks, u64 *skipTicks,
-                               u64 *needA, u64 *needB)
+                               u64 *needA, u64 *needB,
+                               u64 *drawsScene, u64 *serialSkipped)
 {
     if (noNeed != NULL) *noNeed = sDbgNoNeed;
     if (wait2D != NULL) *wait2D = sDbgWait2D;
@@ -676,6 +680,8 @@ void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
     if (skipTicks != NULL) *skipTicks = sDbgSkipTicks;
     if (needA != NULL) *needA = sDbgNeedA;
     if (needB != NULL) *needB = sDbgNeedB;
+    if (drawsScene != NULL) *drawsScene = sDbgDrawsScene;
+    if (serialSkipped != NULL) *serialSkipped = sDbgSerialSkipped;
 }
 
 int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial)
@@ -4099,6 +4105,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         scr->shownRunSerial = runSerial;
         scr->shownUpSeq = s == 1 && panelUp != NULL ? panelUp->seq : 0u;
         if (screen3d && !mid) {   /* (an in-between scene: its scene's still to come) */
+            if (s == 0 && sceneSerial != scr->shownScene &&
+                (int32_t)(sceneSerial - scr->shownScene) > 0) {
+                sDbgDrawsScene++;
+                sDbgSerialSkipped += (u64)(sceneSerial - scr->shownScene - 1u);
+            }
             scr->shownScene = sceneSerial;
             sSceneWaiting = 0;
             sLast3D = sc != NULL && sets[s]->info.has3d && !sets[s]->info.displayOff;

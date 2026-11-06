@@ -121,7 +121,8 @@ void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
                                u64 *noBuf, u64 *draws, u64 *pickTicks,
                                u64 *prepareTicks, u64 *stageTicks,
                                u64 *endTicks, u64 *skipTicks,
-                               u64 *needA, u64 *needB);
+                               u64 *needA, u64 *needB,
+                               u64 *drawsScene, u64 *serialSkipped);
 /* Display-loop passes and sGpuWake signals (counted here, at the sites). */
 static u64 sDbgLoopIters, sDbgWakes;
 /* The display state's H-blank lines: captured once a V-blank, so a battle's
@@ -1560,20 +1561,21 @@ static void PerfLog(u64 now)
          * First line is cumulative since boot; later lines are intervals. */
         static u64 lastIters, lastWakes, lastNoNeed, lastWait2D, lastMidLate,
             lastNoBuf, lastDraws, lastPick, lastPrepare, lastStage, lastEnd,
-            lastSkip, lastNeedA, lastNeedB;
+            lastSkip, lastNeedA, lastNeedB, lastDrawsScene, lastSerialSkipped;
         static u32 lastVBlanks;
         u32 vblanks = NitroPort_ComposeVBlanks();
         u64 noNeed, wait2D, midLate, noBuf, draws;
         u64 pickTicks, prepareTicks, stageTicks, endTicks, skipTicks;
-        u64 needA, needB;
+        u64 needA, needB, drawsScene, serialSkipped;
         u64 dDraws, dSkips;
 
         NitroPort_ComposeDbgStats(&noNeed, &wait2D, &midLate, &noBuf, &draws,
                                   &pickTicks, &prepareTicks, &stageTicks,
-                                  &endTicks, &skipTicks, &needA, &needB);
+                                  &endTicks, &skipTicks, &needA, &needB,
+                                  &drawsScene, &serialSkipped);
         dDraws = draws - lastDraws;
         dSkips = noNeed - lastNoNeed;
-        NitroPort_Log("[perf] loop: %llu passes (%llu draws, %llu nonew, %llu wait2d, %llu midlate, %llu nobuf), %llu wakes; need upper %llu lower %llu; %u vblanks",
+        NitroPort_Log("[perf] loop: %llu passes (%llu draws, %llu nonew, %llu wait2d, %llu midlate, %llu nobuf), %llu wakes; need upper %llu lower %llu; %u vblanks; scene-draws %llu serials-skipped %llu",
                       (unsigned long long)(sDbgLoopIters - lastIters),
                       (unsigned long long)dDraws,
                       (unsigned long long)dSkips,
@@ -1583,10 +1585,14 @@ static void PerfLog(u64 now)
                       (unsigned long long)(sDbgWakes - lastWakes),
                       (unsigned long long)(needA - lastNeedA),
                       (unsigned long long)(needB - lastNeedB),
-                      (unsigned)(vblanks - lastVBlanks));
+                      (unsigned)(vblanks - lastVBlanks),
+                      (unsigned long long)(drawsScene - lastDrawsScene),
+                      (unsigned long long)(serialSkipped - lastSerialSkipped));
         lastVBlanks = vblanks;
         lastNeedA = needA;
         lastNeedB = needB;
+        lastDrawsScene = drawsScene;
+        lastSerialSkipped = serialSkipped;
         NitroPort_Log("[perf] compose-phase ms/draw: pick %.2f prepare %.2f stage %.2f end %.2f; skip %.2f ms/pass",
                       dDraws ? (double)(pickTicks - lastPick) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
                       dDraws ? (double)(prepareTicks - lastPrepare) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
