@@ -2464,15 +2464,17 @@ class BuildIdTests(unittest.TestCase):
             env = {"HGSS_TEXTURE_PROFILE": "1", "HGSS_TEXTURE_HINT": "1",
                    "HGSS_PALETTE_HASH": "1", "HGSS_GX3D_HOTLOOP": "1",
                    "HGSS_GX3D_INDEXED": "1", "HGSS_GX3D_LISTCACHE": "1",
-                   "HGSS_GX3D_STATEDEDUP": "1", "HGSS_A0_DIAG": "1"}
+                   "HGSS_GX3D_STATEDEDUP": "1", "HGSS_GX3D_FUSEHASH": "1",
+                   "HGSS_A0_DIAG": "1"}
             with patch.dict(os.environ, env):
                 text = hg.write_build_info(dsx, "heartgold", "3ds",
                                            ("abc1234", "f" * 40, True, "")).read_text()
             for line in ("texture_profile: yes", "texture_hint: yes",
                          "palette_hash: yes", "gx3d_hotloop: yes",
                          "gx3d_indexed: yes", "gx3d_listcache: yes",
-                         "gx3d_statededup: yes", "a0_diag: yes",
-                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-a0diag"):
+                         "gx3d_statededup: yes", "gx3d_fusehash: yes",
+                         "a0_diag: yes",
+                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-fusehash-a0diag"):
                 self.assertIn(line + "\n", text)
 
     def test_palette_hash_mode_invalidates_stale_sdk_object(self):
@@ -2509,7 +2511,7 @@ class BuildIdTests(unittest.TestCase):
                 with patch.dict(os.environ, {"HGSS_GX3D_LISTCACHE": "1"}):
                     hg.build_libraries(out, "3ds", out, 1)
                     self.assertFalse(obj.exists())
-                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "0,1,0\n")
+                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "0,1,0,0\n")
                     obj.write_bytes(b"cached")
                     hg.build_libraries(out, "3ds", out, 1)
                     self.assertTrue(obj.exists())
@@ -2517,7 +2519,13 @@ class BuildIdTests(unittest.TestCase):
                                               "HGSS_GX3D_STATEDEDUP": "1"}):
                     hg.build_libraries(out, "3ds", out, 1)
                     self.assertFalse(obj.exists())
-                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "1,0,1\n")
+                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "1,0,1,0\n")
+                with patch.dict(os.environ, {"HGSS_GX3D_HOTLOOP": "1",
+                                              "HGSS_GX3D_STATEDEDUP": "1",
+                                              "HGSS_GX3D_FUSEHASH": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(obj.exists())
+                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "1,0,1,1\n")
 
     def test_a0_mode_invalidates_stale_sdk_objects(self):
         with tempfile.TemporaryDirectory() as tmp:

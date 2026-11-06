@@ -707,6 +707,14 @@ static struct {
 static struct {
     uint64_t vertexTicks, hiddenTicks, matrixTicks;
     uint32_t vertexCalls, hiddenCalls, matrixCalls;
+    /* Run-path split (same sample): listcache_try vs skip_hidden_vertices,
+     * plus walked words per region (verify walk / scan fetches / insert
+     * full-hash). Decides the next diet; diag-only. */
+    uint64_t tryTicks, scanTicks, tryWalkW, scanFetchW, insertFullW;
+    uint32_t tryCalls, scanCalls;
+    /* Scan-inner split (same sample): word-walk/decode vs box
+     * verdict+state-apply vs insert bookkeeping+walk. */
+    uint64_t scanWalkTicks, scanBoxTicks, scanInsertTicks;
     uint32_t begins, opaque, shadow, lit, texgenHigh, simpleCandidate;
 } sA0Geo;
 #endif
@@ -740,6 +748,16 @@ static void diag_log(void)
                   (unsigned long long)sA0Geo.vertexTicks, sA0Geo.vertexCalls,
                   (unsigned long long)sA0Geo.hiddenTicks, sA0Geo.hiddenCalls,
                   (unsigned long long)sA0Geo.matrixTicks, sA0Geo.matrixCalls);
+    NitroPort_Log("[a0] runpath sampled 1/64 scenes wall ticks: try %llu/%u calls scan %llu/%u calls; walked words try-verify %llu scan-fetch %llu insert-full %llu",
+                  (unsigned long long)sA0Geo.tryTicks, sA0Geo.tryCalls,
+                  (unsigned long long)sA0Geo.scanTicks, sA0Geo.scanCalls,
+                  (unsigned long long)sA0Geo.tryWalkW,
+                  (unsigned long long)sA0Geo.scanFetchW,
+                  (unsigned long long)sA0Geo.insertFullW);
+    NitroPort_Log("[a0] scaninner sampled 1/64 scenes wall ticks: walk %llu box %llu insert %llu",
+                  (unsigned long long)sA0Geo.scanWalkTicks,
+                  (unsigned long long)sA0Geo.scanBoxTicks,
+                  (unsigned long long)sA0Geo.scanInsertTicks);
     NitroPort_Log("[a0] geo packet BEGIN census: %u runs opaque-attr %u shadow %u lit %u texgen-2/3 %u simple-candidate %u (overlap; eligibility still requires depth/clip/texture checks)",
                   sA0Geo.begins, sA0Geo.opaque, sA0Geo.shadow, sA0Geo.lit,
                   sA0Geo.texgenHigh, sA0Geo.simpleCandidate);
@@ -2048,6 +2066,12 @@ static uint32_t sWriteLocal, sWritePublished; /* the game's thread's */
 static uint32_t sReadSeen;                    /* sRingRead, as last looked at */
 static int sWorkerSleeping, sProducerWaiting;
 static NitroGx3dThreadOps sOps;
+#ifdef HGSS_A0_DIAG
+/* Sampling primitives for the worker cost split (shared with sites above
+ * submit_vertex's definition): 1 scene in 64, wall ticks via thread ops. */
+static uint64_t A0GeoTick(void) { return sOps.ticks ? sOps.ticks(sOps.context) : 0; }
+#define A0_GEO_SAMPLE() (sOps.ticks && ((sSwapsDone & 63u) == 0))
+#endif
 /* Scenes (SWAP_BUFFERS) handed on / finished, and left out. */
 static uint32_t sSwapsQueued, sSwapsDone, sSwapsSkipped;
 static int sSkipScene;
@@ -2447,11 +2471,15 @@ static int hidden_box_extrema(const int64_t base[4],const int64_t edge[3][4],
     return HIDDEN_BOX_OK;
 }
 #ifdef HGSS_GX3D_LISTCACHE
+/* FNV-1a constants (declared early: the hidden-scan fuses the full-range
+ * hash into its word visits, ahead of the cache section below). */
+#define LISTCACHE_FNV_OFFSET 2166136261u
+#define LISTCACHE_FNV_PRIME 16777619u
 static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
                              const int32_t keyCoord[3], unsigned foundOp,
                              const uint32_t *starts, unsigned nStarts,
                              StreamCursor *end, const VertexScan *v, unsigned n,
-                             uint32_t scEnd);
+                             uint32_t scEnd, uint32_t fusedFull);
 static int listcache_try(StreamCursor *sc);
 #endif
 static int skip_hidden_vertices(StreamCursor *sc)
@@ -2459,6 +2487,10 @@ static int skip_hidden_vertices(StreamCursor *sc)
     StreamCursor scan=*sc,end;
     VertexScan v;
     unsigned op,n,polys,k,j,outside=0x3fu;
+#ifdef HGSS_A0_DIAG
+    int a0w = A0_GEO_SAMPLE();
+    uint64_t a0t0 = a0w ? A0GeoTick() : 0, a0t1 = 0;
+#endif
     int behind=0;
     unsigned mode=(s.texparam>>30)&3u;
     const uint32_t *p;
@@ -2471,11 +2503,22 @@ static int skip_hidden_vertices(StreamCursor *sc)
     uint32_t lcEntry[257];
     unsigned lcEntries=0, lcFoundOp=0;
     int lcNoTag=0;
+    /* Fused full-range hash (Exp-16): every word of a single-entry run,
+     * hashed in linear order as the scan visits it, so the insert needs
+     * no second walk. Multi-entry runs fall back to the old walk. */
+    uint32_t fuseFull=LISTCACHE_FNV_OFFSET;
     lcCoord[0]=s.coord[0];lcCoord[1]=s.coord[1];lcCoord[2]=s.coord[2];
     lcEntry[lcEntries++]=sc->r;
 #endif
 
     sHiddenDiag.attempts++;
+#ifdef HGSS_GX3D_LISTCACHE
+#ifdef HGSS_GX3D_FUSEHASH
+    /* The run's first word (the insert walks from i0-1 = sc->c.i-1): the
+     * scan processes its remaining opcodes without fetching it. */
+    if(sc->c.i>0){uint32_t w0=sc->c.w[sc->c.i-1u];fuseFull^=w0;fuseFull*=LISTCACHE_FNV_PRIME;}
+#endif
+#endif
     /* Texture coordinates from normals or vertices: done as usual. */
     if(mode>=2u){sHiddenDiag.mode++;return 0;}
     /* The vertices' bounding box, where they end, and what they leave. */
@@ -2490,6 +2533,14 @@ static int skip_hidden_vertices(StreamCursor *sc)
             if(!word){
                 if(i>=count)break;
                 word=w[i++];
+#ifdef HGSS_GX3D_LISTCACHE
+#ifdef HGSS_GX3D_FUSEHASH
+                fuseFull^=word;fuseFull*=LISTCACHE_FNV_PRIME;
+#endif
+#endif
+#ifdef HGSS_A0_DIAG
+                if(a0w)sA0Geo.scanFetchW++;
+#endif
                 continue;
             }
             op=word&255u;
@@ -2503,14 +2554,31 @@ static int skip_hidden_vertices(StreamCursor *sc)
 #endif
                 goto found;
             }
-            if(r<0){sHiddenDiag.unsupported++;return 0;}
+            if(r<0){
+#ifdef HGSS_A0_DIAG
+                if(a0w)sA0Geo.scanWalkTicks+=A0GeoTick()-a0t0;
+#endif
+                sHiddenDiag.unsupported++;return 0;
+            }
             word>>=8;
+#ifdef HGSS_GX3D_LISTCACHE
+#ifdef HGSS_GX3D_FUSEHASH
+            /* Params are skipped, not fetched: hash them here, in order,
+             * so the fused hash covers exactly the linearized range. */
+            for(k=0;k<sParamCount[op];k++){fuseFull^=w[i+k];fuseFull*=LISTCACHE_FNV_PRIME;}
+#endif
+#endif
             i+=sParamCount[op];
         }
         scan.c.i=i;scan.c.word=word;
         /* On into the next entry (or a command of its own). */
         end=scan;
-        if(!stream_next(&scan,&op,&p)){sHiddenDiag.incomplete++;return 0;}   /* the rest isn't known yet */
+        if(!stream_next(&scan,&op,&p)){
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanWalkTicks+=A0GeoTick()-a0t0;
+#endif
+            sHiddenDiag.incomplete++;return 0;
+        }   /* the rest isn't known yet */
 #ifdef HGSS_GX3D_LISTCACHE
         if(scan.single)lcNoTag=1;   /* a decoded command: no source range */
         else if(lcEntries<sizeof(lcEntry)/sizeof(lcEntry[0]))lcEntry[lcEntries++]=scan.r;
@@ -2518,15 +2586,26 @@ static int skip_hidden_vertices(StreamCursor *sc)
 #endif
         r=scan_op(&v,op,p);
         if(r>0){
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanFetchW+=1u+sParamCount[op];
+#endif
 #ifdef HGSS_GX3D_LISTCACHE
             lcFoundOp=op;
 #endif
             goto found;
         }
-        if(r<0){sHiddenDiag.unsupported++;return 0;}
+        if(r<0){
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanWalkTicks+=A0GeoTick()-a0t0;
+#endif
+            sHiddenDiag.unsupported++;return 0;
+        }
     }
 found:
     n=v.n;
+#ifdef HGSS_A0_DIAG
+    if(a0w){sA0Geo.scanWalkTicks+=A0GeoTick()-a0t0;a0t1=A0GeoTick();}
+#endif
     if(!n){sHiddenDiag.empty++;return 0;}
     /* Each corner through the clip matrix, before the >> 12 (S): with
      * a = S >> 12, S_v + S_w < 0 makes v + w < 0, and S_v - S_w >= 4096
@@ -2542,14 +2621,34 @@ found:
             for(k=0;k<3;k++)edge[k][j]=((int64_t)hi[k]-lo[k])*s.xf.a[k*4+j];
         }
         int result=hidden_box_extrema(base,edge,&outside,&behind);
-        if(result==HIDDEN_BOX_RANGE){sHiddenDiag.saturated++;return 0;}
-        if(result==HIDDEN_BOX_INTERSECT){sHiddenDiag.intersects++;return 0;}
-        if(result==HIDDEN_BOX_MIXED){sHiddenDiag.mixed++;return 0;}
+        if(result==HIDDEN_BOX_RANGE){
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanBoxTicks+=A0GeoTick()-a0t1;
+#endif
+            sHiddenDiag.saturated++;return 0;
+        }
+        if(result==HIDDEN_BOX_INTERSECT){
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanBoxTicks+=A0GeoTick()-a0t1;
+#endif
+            sHiddenDiag.intersects++;return 0;
+        }
+        if(result==HIDDEN_BOX_MIXED){
+#ifdef HGSS_A0_DIAG
+            if(a0w)sA0Geo.scanBoxTicks+=A0GeoTick()-a0t1;
+#endif
+            sHiddenDiag.mixed++;return 0;
+        }
     }
     /* polygon_hidden deliberately keeps side-offscreen geometry for sun
      * shadows. The list shortcut must defer to that same path; only a shared
      * near/far rejection is guaranteed not to cast a retained shadow. */
-    if(sShadowCapture && !(outside & 0x30u)){sHiddenDiag.shadow++;return 0;}
+    if(sShadowCapture && !(outside & 0x30u)){
+#ifdef HGSS_A0_DIAG
+        if(a0w)sA0Geo.scanBoxTicks+=A0GeoTick()-a0t1;
+#endif
+        sHiddenDiag.shadow++;return 0;
+    }
     /* Hidden: what the commands leave behind, without the vertices (each
      * command only sets state; the last one of each kind is what stays). */
     s.coord[0]=xyz[0];s.coord[1]=xyz[1];s.coord[2]=xyz[2];
@@ -2575,10 +2674,17 @@ found:
     if(behind)sDiag.behind+=n;
     sDiag.polygons+=polys;
     sDiag.clipped+=polys;
+#ifdef HGSS_A0_DIAG
+    if(a0w){sA0Geo.scanBoxTicks+=A0GeoTick()-a0t1;a0t1=A0GeoTick();}
+#endif
 #ifdef HGSS_GX3D_LISTCACHE
-    if(!lcNoTag)
+    if(!lcNoTag){
         listcache_insert(sc->r,sc->c.i,sc->c.word,lcCoord,lcFoundOp,
-                         lcEntry,lcEntries,&end,&v,n,sc->end);
+                         lcEntry,lcEntries,&end,&v,n,sc->end,fuseFull);
+#ifdef HGSS_A0_DIAG
+        if(a0w)sA0Geo.scanInsertTicks+=A0GeoTick()-a0t1;
+#endif
+    }
 #endif
     /* Its END_VTXS or BEGIN_VTXS is next; no vertex of it is kept. */
     s.nverts=0;
@@ -2628,8 +2734,6 @@ found:
 #define LISTCACHE_MAX_SPAN 257u
 #define LISTCACHE_MAX_LEN 65536u
 #define LISTCACHE_AUDIT_SCENES 30u
-#define LISTCACHE_FNV_OFFSET 2166136261u
-#define LISTCACHE_FNV_PRIME 16777619u
 typedef struct {
     uint32_t ringStart;   /* absolute ring position of the packets entry */
     uint32_t seq;         /* nonzero once written (ringStart 0 is valid) */
@@ -2678,6 +2782,11 @@ static struct {
     unsigned sampleFails, resumeFails, audits, auditFails, untagged;
     unsigned tagCollide, singlesBegin;
     unsigned evictSame, evictAddr, evictChurn;
+    /* Fragmentation histograms (Exp-14): do multi-entry runs ever re-hit?
+     * Bucketed by jumps (resume entry index): 0, 1, 2, 3+. */
+    unsigned hitsJump[4], insertsJump[4];
+    /* Fused-hash self-verification mismatches (Exp-16, diag builds only). */
+    unsigned fuseMismatch;
 } sListDiag;
 
 static unsigned list_tag_slot(uint32_t ringStart)
@@ -2769,7 +2878,7 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
                              const int32_t keyCoord[3], unsigned foundOp,
                              const uint32_t *starts, unsigned nStarts,
                              StreamCursor *end, const struct VertexScan *v, unsigned n,
-                             uint32_t scEnd)
+                             uint32_t scEnd, uint32_t fusedFull)
 {
     ListTag *t0;
     ListCacheEntry *e;
@@ -2820,6 +2929,49 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
     }
     if(L-1u!=offs[nOffs-1])offs[nOffs++]=L-1u;
     e_hash=list_entry_slot(t0->src+(uintptr_t)(i0-1u)*4u,word0,keyCoord);
+#ifdef HGSS_GX3D_FUSEHASH
+    if(nStarts==1){
+        /* Single-entry range: words are contiguous in the start entry, and
+         * the scan hashed them in order already (fusedFull). Sample reads
+         * are direct; the second walk is gone. Multi-entry runs keep the
+         * old walk (cross-entry command words have no scanned values). */
+        for(m=0;m<nOffs;m++){
+            word=sRing[(r0+2u+(i0-1u)+offs[m])&RING_MASK];
+            sample^=word;sample*=LISTCACHE_FNV_PRIME;
+        }
+        full=fusedFull;
+#ifdef HGSS_A0_DIAG
+        if(A0_GEO_SAMPLE()){
+            /* Self-verification: the independent old walk must agree. On
+             * mismatch the walked values win (counted); the audit below
+             * would independently disable the cache anyway. */
+            uint32_t vf=LISTCACHE_FNV_OFFSET, vs=LISTCACHE_FNV_OFFSET;
+            uint32_t vm=0;
+            ListWalk vw;
+            if(list_walk_start(&vw,r0,i0-1u,scEnd)){
+                for(t=0;t<L;t++){
+                    uint32_t vwrd;
+                    if(!list_walk_next(&vw,&vwrd))break;
+                    vf^=vwrd;vf*=LISTCACHE_FNV_PRIME;
+                    if(vm<nOffs && t==offs[vm]){vs^=vwrd;vs*=LISTCACHE_FNV_PRIME;vm++;}
+                }
+                if(t==L && (vf!=full || vs!=sample)){
+                    sListDiag.fuseMismatch++;
+                    full=vf;sample=vs;
+                }
+            }
+        }
+#endif
+    } else {
+        if(!list_walk_start(&w,r0,i0-1u,scEnd))return;
+        m=0;
+        for(t=0;t<L;t++){
+            if(!list_walk_next(&w,&word))return;
+            full^=word;full*=LISTCACHE_FNV_PRIME;
+            if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
+        }
+    }
+#else
     if(!list_walk_start(&w,r0,i0-1u,scEnd))return;
     m=0;
     for(t=0;t<L;t++){
@@ -2827,6 +2979,10 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
         full^=word;full*=LISTCACHE_FNV_PRIME;
         if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
     }
+#endif
+#ifdef HGSS_A0_DIAG
+    if(A0_GEO_SAMPLE())sA0Geo.insertFullW+=L;
+#endif
     e=&sListCache[e_hash];
     if(e->used){
         sListDiag.evicts++;
@@ -2863,6 +3019,7 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
     e->normalLast=v->normalLast;
     e->n=n;
     sListDiag.inserts++;
+    {unsigned jb=E>3u?3u:E;sListDiag.insertsJump[jb]++;}
     c=list_census(t0->src,1);
     if(c){
         for(q=0;q<4;q++)if(c->lens[q]==L)break;
@@ -2954,6 +3111,9 @@ static int listcache_try(StreamCursor *sc)
         if(!list_walk_next(&w,&word)){sListDiag.resumeFails++;return 0;}
         if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
     }
+#ifdef HGSS_A0_DIAG
+    if(A0_GEO_SAMPLE())sA0Geo.tryWalkW+=L;
+#endif
     if(sample!=e->sample){sListDiag.sampleFails++;return 0;}
     if(sListAuditNow || sListAuditDue==0){
         uint32_t full=LISTCACHE_FNV_OFFSET;
@@ -3024,6 +3184,7 @@ static int listcache_try(StreamCursor *sc)
     sc->single=0;
     s.nverts=0;
     sListDiag.hits++;
+    {unsigned jb=e->jumps>3u?3u:e->jumps;sListDiag.hitsJump[jb]++;}
     c=list_census(tag->src,0);
     if(c){
         c->hits++;
@@ -3040,12 +3201,20 @@ static void listcache_log(void)
                   "sample-fail %u, resume-fail %u, untagged %u, audits %u (fail %u)%s; "
                   "tags collide %u, singles-begin %u; "
                   "evict same-key %u, same-coords %u, churn %u; "
+                  "jumps hits %u/%u/%u/%u inserts %u/%u/%u/%u; "
+                  "fuse-mismatch %u; "
                   "census %u sources, %u lists",
                   sListDiag.lookups, sListDiag.hits, sListDiag.inserts, sListDiag.evicts,
                   sListDiag.sampleFails, sListDiag.resumeFails, sListDiag.untagged,
                   sListDiag.audits, sListDiag.auditFails,
                   sListCacheDisabled?" DISABLED":"", sListDiag.tagCollide, sListDiag.singlesBegin,
-                  sListDiag.evictSame, sListDiag.evictAddr, sListDiag.evictChurn, srcs, lists);
+                  sListDiag.evictSame, sListDiag.evictAddr, sListDiag.evictChurn,
+                  sListDiag.hitsJump[0], sListDiag.hitsJump[1],
+                  sListDiag.hitsJump[2], sListDiag.hitsJump[3],
+                  sListDiag.insertsJump[0], sListDiag.insertsJump[1],
+                  sListDiag.insertsJump[2], sListDiag.insertsJump[3],
+                  sListDiag.fuseMismatch,
+                  srcs, lists);
     for(k=0;k<LISTCACHE_CENSUS && shown<8;k++)
         if(sListCensus[k].src){
             NitroPort_Log("[gx3d] listcache src %p: %u lists, %u hits, %u scenes",
@@ -3155,8 +3324,6 @@ static uint32_t sResumeI,sResumeWord;
  * passed over (skip_hidden_vertices), maybe into later entries: returns
  * the entry to go on with. */
 #ifdef HGSS_A0_DIAG
-static uint64_t A0GeoTick(void) { return sOps.ticks ? sOps.ticks(sOps.context) : 0; }
-#define A0_GEO_SAMPLE() (sOps.ticks && ((sSwapsDone & 63u) == 0))
 #define A0_VERTEX() do { \
     if (A0_GEO_SAMPLE()) { uint64_t t = A0GeoTick(); submit_vertex(); \
         sA0Geo.vertexTicks += A0GeoTick() - t; sA0Geo.vertexCalls++; } \
@@ -3240,15 +3407,30 @@ static uint32_t work_packets(uint32_t r,uint32_t end,uint32_t i,uint32_t word)
                     int hidden;
 #ifdef HGSS_A0_DIAG
                     int sample = A0_GEO_SAMPLE();
-                    uint64_t t = sample ? A0GeoTick() : 0;
+                    uint64_t t0 = sample ? A0GeoTick() : 0;
+                    uint64_t t1 = 0;
 #endif
 #ifdef HGSS_GX3D_LISTCACHE
-                    hidden = listcache_try(&sc) || skip_hidden_vertices(&sc);
+                    hidden = listcache_try(&sc);
+#ifdef HGSS_A0_DIAG
+                    if (sample) {
+                        t1 = A0GeoTick();
+                        sA0Geo.tryTicks += t1 - t0; sA0Geo.tryCalls++;
+                    }
+#endif
+                    if (!hidden) {
+                        hidden = skip_hidden_vertices(&sc);
+#ifdef HGSS_A0_DIAG
+                        if (sample) {
+                            sA0Geo.scanTicks += A0GeoTick() - t1; sA0Geo.scanCalls++;
+                        }
+#endif
+                    }
 #else
                     hidden = skip_hidden_vertices(&sc);
 #endif
 #ifdef HGSS_A0_DIAG
-                    if (sample) { sA0Geo.hiddenTicks += A0GeoTick() - t; sA0Geo.hiddenCalls++; }
+                    if (sample) { sA0Geo.hiddenTicks += A0GeoTick() - t0; sA0Geo.hiddenCalls++; }
 #endif
                 if(hidden){
                     if(sc.r!=r){
