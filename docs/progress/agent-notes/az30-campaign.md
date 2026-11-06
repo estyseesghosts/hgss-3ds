@@ -177,13 +177,37 @@ wall without stating the assumption. One primary hypothesis per experiment.
 - Draw equation: draws ≈ max(scenes-pub, upper-new) + lower-new (overlap).
   scenes-pub is the only scalable term (content-limited 2D otherwise).
 
-## Next: normal-keyed lighting cache
+## Next: normal-keyed lighting cache (Exp-6, building)
 
 - A0 census: 96% of packets runs LIT. Map geometry reuses few normal
   directions (axis boxes); same normal + same lights + same material =
   same lit color. Cache keyed by (normal, light-gen, material) with the
   SAME math (bit-exact, fixture-gated). Potential: lighting share of the
   34% vertex cost at ~5-10x per hit.
+- Design (no new flag, unconditional): 64-entry direct-mapped table keyed
+  by (generation, normal value, polygon attr); generation bumps at the 8
+  sites that used to clear the 1-entry cache (matrix/light/material
+  commands + reset). BEGIN_VTXS no longer clears: attr rides in the key,
+  so same-material runs reuse across polygons (the old clear was a
+  single-entry artifact). Hit/miss census in `[gx3d] shadecache`.
+- Correctness gates: `test_gx3d_listcache` bit-compare green (same math,
+  memoized on full dependency key). Replay path (`replay_polygon`) sets
+  colors directly, no shade between attr swap/restore — safe.
+- Candidate: `build/d1-shade-ss` (twin flags + shade change, fresh out dir).
+- Watch: shadecache hits/misses, worker ms/scene, skipped, draws, wall.
+- Result: 296k hits / 577k lookups (51%!) at frame 1104; worker 30.88ms
+  (vs 30.46), skipped 149 (same), draws 224 (same), composes 22.4/s (same).
+  Cache works; lighting is NOT the binding cost (clip transform + scan
+  dominate the vertex budget).
+- Conclusion (guide §15): KEEP, labeled honestly — work-elimination proof
+  positive (~300k shade computations skipped/interval, bit-exact same math),
+  performance proof neutral. 768B + ~20 lines, fixture-gated, zero-risk;
+  may help light-heavy scenes (battles). Tree stays lean otherwise.
+- Next decision: re-sample worker split (A0) on the current build, then
+  target the biggest share (clip transform float path and/or scan cost).
+- Metrology note: /tmp/azmeta.txt monitor matched a stale marker pattern
+  (`[40800] frame 40800` never advances); replaced by FRAMETIME-41400 wall
+  waiter on the live SD log to nail wall ticks/s.
 - Then: float transform (tolerance gate, last resort), drawer-hash diet
   for tick pace. R/host diet via wall A/B only; upload path already
   band-limited (dropped as a thread).
