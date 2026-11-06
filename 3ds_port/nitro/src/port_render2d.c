@@ -3249,6 +3249,7 @@ static u64 sGpuObjAtlasKey;
 /* Slice S5: the frame gate's DISPCNT value, logged once (it decides the
  * next fix: windows, BG0 display, or display mode keep takes off). */
 static int sGpuGateDspLogged = 0;
+static int sGpuGateKindLogged = 0;
 
 static void GpuObjAtlasFill(const Engine *e, u32 dispcnt, const ObjFrame *f, const int *takeObj, const int *takeCell,
                             int nTake)
@@ -4538,6 +4539,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                 }
                 if (kind[b] != BG_TEXT && kind[b] != BG_AFFINE) {
                     prof->gpuBgReject[NITRO_GPUBG_REJECT_MODE]++;
+                    if (!sGpuGateKindLogged) {
+                        sGpuGateKindLogged = 1;
+                        NitroPort_Log("[2d] gate kind: bg=%d kind=%d bgcnt=%04x dispcnt=%08x",
+                                      b, kind[b], (unsigned)Rd16(io, 8 + b * 2), dispcnt);
+                    }
                     continue;
                 }
                 if (kind[b] == BG_TEXT && (e->art[b] != NULL || ((e->partBgs >> b) & 1) || e->split[b])) {

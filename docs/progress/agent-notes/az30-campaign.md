@@ -487,6 +487,13 @@ wall without stating the assumption. One primary hypothesis per experiment.
   content phase on emulator (MODE-reject window?) with full
   tooling; then BG3-kind forensics from captures. No more hw
   conclusions from frame-aligned cross-platform reads.
+- RESULT az-slot3-02 (rebuild with forensic): replicates 01
+  (takes 827, region 181/323, drawer 32.3/s), zero `gate kind`
+  lines (no MODE rejects on emulator, as designed), screenshot
+  perfect. Added one-shot `[2d] gate kind` forensic at the MODE
+  reject (bg+kind+bgcnt+dispcnt, mirrors dsp-gate pattern) so the
+  next hardware run names BG3's kind directly. No behavior change;
+  render2d partial + listcache gates green.
 - NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
   hardware run gives audio split AND true ARM11 run-path ratios
   (walk:box:insert:try) to de-risk all future diets. Emulator
