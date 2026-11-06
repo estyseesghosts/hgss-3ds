@@ -517,6 +517,30 @@ wall without stating the assumption. One primary hypothesis per experiment.
   before generalizing: needs (1) EVA/EVB/brightness value census
   in bench, (2) tolerance-gated fixtures, (3) hardware proof.
   Revisit only with all three.
+- Box diet PARKED (no new telemetry to size it): point-run
+  shortcut (lo==hi → 4 mults, exact) is the only safe variant but
+  its share is uncounted and I won't add counters for it; int64→
+  float repeats Exp-7's convert-trap; 32-bit risks overflow the
+  existing RANGE guards were built for. ARM11 box share (31% of
+  scan-inner, from the batch run) keeps it first in line IF a
+  future profile splits it — not before.
+- Offs-divide idea KILLED by reading: m*(L-1)/8 divides by
+  CONSTANT 8 (compiler shifts; no libcall possible). No edit.
+- Skip-tuning (behind≥2 → ≥1) KILLED by reasoning: trades
+  completions for latency (fewer full scenes, fresher display).
+  Serves responsiveness, not the 30-presents goal. Noted as a
+  latency lever, not built.
+- AZAHAR LANES EXHAUSTED (honest inventory): worker micro-diets
+  banked/dead/parked; drawer need-gated; takes mapped (await hw
+  forensics); audio diet built+verified (awaits hw); box/try need
+  hw-split evidence (batch run has it — diet design is the open
+  work, not more telemetry); lower30/slot3/batch/lazy+fuse all
+  await user runs. No more emulator-only experiments until hw
+  reads out — churning single-digits would violate §15.
+- PENDING-HARDWARE QUEUE (all staged except adpcm): batch-profile
+  (staged ✓), slot3 (staged ✓), lower30 port_B (staged ✓),
+  adpcm-diet (d1-adpcm-ss built+verified, UNSTAGED — stage on
+  card return: twin exists there for the A/B).
 - NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
   hardware run gives audio split AND true ARM11 run-path ratios
   (walk:box:insert:try) to de-risk all future diets. Emulator
