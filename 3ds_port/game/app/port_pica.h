@@ -25,6 +25,16 @@ void NitroPort_PicaExit(void);
 int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped);
 void NitroPort_PicaTimes(u64 *build, u64 *wait, u64 *publish);
 void NitroPort_PicaTextureStats(u32 *converted, u64 *texels, u64 *ticks);
+#ifdef HGSS_TEXTURE_PROFILE
+/* Cumulative wall ticks in units of 256 system ticks, modulo 2^32.
+ * Individual fields are atomic but a snapshot can straddle a conversion. */
+typedef struct {
+    u32 lookups, hashes, conversions, newEntries, evictions, failures;
+    u32 search, hash, allocation, wait, convert, decode, flush;
+    u32 worst, worstParam, worstBytes;
+} PicaTextureProfile;
+void NitroPort_PicaTextureProfile(PicaTextureProfile *out);
+#endif
 /* The GPU command list's peak use (0-1) and the draws left out for want of
  * room in it, since last asked; NoteCmdUse after each C3D_FrameEnd. */
 void NitroPort_PicaCmdStats(float *peak, unsigned *cut);
@@ -135,7 +145,7 @@ void NitroPort_PicaBindVertices(const void *vertices);
 
 /* Prepare a scene's polygons for drawing (once per scene; a scene stays
  * prepared until the next): returns the triangle count, or -1. */
-int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene, unsigned *dropped);
+int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene, unsigned *dropped, int outlinesPossible);
 
 typedef struct PicaView {
     C3D_FrameBuf *fb;        /* the screen's render target (colour, depth/stencil) */
@@ -359,6 +369,10 @@ typedef struct ComposeStats {
     int lag;
 } ComposeStats;
 void NitroPort_ComposeStats(ComposeStats *stats);
+/* Half-A L5: engine-B band-diff upload accounting (off by default). */
+void NitroPort_ComposeSetBandPublish(int enabled, int diagnostic);
+void NitroPort_ComposeBandPublishStats(u64 *convBytes, u64 *flushBytes,
+                                       u32 *hinted, u32 *uploaded, u32 *subsetViol);
 /* The GPU still drawing a frame (it's given one and goes on with it while
  * the next is built): what draws on the screens itself waits for it. */
 int NitroPort_ComposeGpuBusy(void);

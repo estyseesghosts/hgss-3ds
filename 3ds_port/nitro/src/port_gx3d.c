@@ -51,6 +51,12 @@ typedef struct GeoState {
     Matrix pjStack, texStack;
     Matrix posStack[31], vecStack[31];
     int mode, pvLevel, pjLevel, texLevel, stackError;
+#ifdef HGSS_GX3D_STATEDEDUP
+    /* Matrix-stack generation (G5): bumped by matrix_command whenever it
+     * applies a matrix, slot or level change, never for a skipped
+     * redundant command. A future chunk key; today it proves the skip. */
+    uint32_t stackGen;
+#endif
     int32_t coord[3];
     int32_t texcoord[2], normal[3];
     uint16_t rgb, diffuse, ambient, specular, emission;
@@ -384,6 +390,14 @@ static void light_vertex(GeoVertex *v)
 {
     if(!v->lit){v->color=shade(v->normal);v->lit=1;}
 }
+#ifdef HGSS_GX3D_HOTLOOP
+static inline void light_polygon_vertices(GeoVertex *a, GeoVertex *b, GeoVertex *c)
+{
+    if (!a->lit) { a->color = shade(a->normal); a->lit = 1; }
+    if (!b->lit) { b->color = shade(b->normal); b->lit = 1; }
+    if (!c->lit) { c->color = shade(c->normal); c->lit = 1; }
+}
+#endif
 static void settle_lighting(void)
 {
     int i,n=s.nverts;
@@ -635,6 +649,17 @@ static NitroGx3dVertex to_screen(const GeoVertex *v)
 }
 /* Where the geometry went, logged every 120 scenes as a [gx3d] line: why a
  * scene can end up without triangles (all clipped, all culled, ...). */
+#ifdef HGSS_GX3D_STATEDEDUP
+struct MatrixDedupCounters {
+    unsigned modeSkip, loadSkip, identitySkip, restoreSkip, popSkip;
+};
+static struct MatrixDedupCounters sMatrixDedup;
+#endif
+#ifdef HGSS_GX3D_LISTCACHE
+static void listcache_log(void);
+/* One scene ended (a SWAP_BUFFERS): drives the periodic full-hash audit. */
+static void listcache_scene(void);
+#endif
 static struct {
     unsigned scenes, vertices, polygons, triangles;
     unsigned clipped, cullBoth, cullFacing, degenerate, overLimit, behind;
@@ -649,6 +674,16 @@ static struct {
     unsigned accepted, vertices, polygons;
 } sHiddenDiag;
 
+#ifdef HGSS_A0_DIAG
+/* Worker-owned samples: one scene in 64. Vertex time includes lighting,
+ * clipping and staging performed inside submit_vertex; all times are wall
+ * ticks, including preemption and timer overhead. */
+static struct {
+    uint64_t vertexTicks, hiddenTicks, matrixTicks;
+    uint32_t vertexCalls, hiddenCalls, matrixCalls;
+    uint32_t begins, opaque, shadow, lit, texgenHigh, simpleCandidate;
+} sA0Geo;
+#endif
 static void diag_log(void)
 {
     NitroPort_Log("[gx3d] %u scenes: %u vtx, %u polys -> %u tris (%u opaque, %u translucent, %u alpha0); "
@@ -673,6 +708,25 @@ static void diag_log(void)
                   sHiddenDiag.attempts, sHiddenDiag.accepted, sHiddenDiag.vertices, sHiddenDiag.polygons,
                   sHiddenDiag.mode, sHiddenDiag.incomplete, sHiddenDiag.unsupported, sHiddenDiag.empty,
                   sHiddenDiag.saturated, sHiddenDiag.intersects, sHiddenDiag.mixed, sHiddenDiag.shadow);
+#ifdef HGSS_A0_DIAG
+    NitroPort_Log("[a0] geo sampled 1/64 scenes wall ticks: vertex-inclusive %llu/%u calls hidden %llu/%u calls matrix %llu/%u calls (timer overhead included)",
+                  (unsigned long long)sA0Geo.vertexTicks, sA0Geo.vertexCalls,
+                  (unsigned long long)sA0Geo.hiddenTicks, sA0Geo.hiddenCalls,
+                  (unsigned long long)sA0Geo.matrixTicks, sA0Geo.matrixCalls);
+    NitroPort_Log("[a0] geo packet BEGIN census: %u runs opaque-attr %u shadow %u lit %u texgen-2/3 %u simple-candidate %u (overlap; eligibility still requires depth/clip/texture checks)",
+                  sA0Geo.begins, sA0Geo.opaque, sA0Geo.shadow, sA0Geo.lit,
+                  sA0Geo.texgenHigh, sA0Geo.simpleCandidate);
+    memset(&sA0Geo, 0, sizeof(sA0Geo));
+#endif
+#ifdef HGSS_GX3D_STATEDEDUP
+    NitroPort_Log("[gx3d] matrix-dedup: gen %u; redundant mode/load/identity/restore/pop %u/%u/%u/%u/%u",
+                  s.stackGen,
+                  sMatrixDedup.modeSkip, sMatrixDedup.loadSkip, sMatrixDedup.identitySkip,
+                  sMatrixDedup.restoreSkip, sMatrixDedup.popSkip);
+#endif
+#ifdef HGSS_GX3D_LISTCACHE
+    listcache_log();
+#endif
     memset(&sDiag, 0, sizeof(sDiag));
     memset(&sHiddenDiag, 0, sizeof(sHiddenDiag));
 }
@@ -777,6 +831,13 @@ static int polygon_culled(void)
     unsigned mask=(s.attr>>6)&3u;
     return mask && !(mask & (sPolygonFront?2u:1u));
 }
+#ifdef HGSS_GX3D_HOTLOOP
+static inline int polygon_culled_attr(uint32_t attr, int front)
+{
+    unsigned mask=(attr>>6)&3u;
+    return mask && !(mask & (front?2u:1u));
+}
+#endif
 /* Cull a screen-space triangle and stage what's left. 1 if it had no area
  * on the screen (edge on). */
 static int add_screen_triangle(const NitroGx3dVertex *aa,const NitroGx3dVertex *bb,
@@ -815,7 +876,11 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
         sDiag.clipped++;
         return;
     }
+#ifdef HGSS_GX3D_HOTLOOP
+    light_polygon_vertices(a,b,c);
+#else
     light_vertex(a);light_vertex(b);light_vertex(c);
+#endif
     /* S8: backface before projecting or clipping it. A polygon facing away
      * draws nothing wherever it is (its pieces share its plane), so the
      * screen projection and the Sutherland-Hodgman clip are pure cost for
@@ -824,7 +889,13 @@ static void stage_triangle(GeoVertex *a,GeoVertex *b,GeoVertex *c)
      * coarser: one culled polygon instead of its pieces. Lighting still
      * runs first: the replay record below reuses these colours. */
     sPolygonFront=polygon_front(a,b,c);
-    if(polygon_culled()){
+    if(
+#ifdef HGSS_GX3D_HOTLOOP
+       polygon_culled_attr(s.attr,sPolygonFront)
+#else
+       polygon_culled()
+#endif
+      ){
         if(sShadowCapture)keep_for_shadow(a,b,c);
         sDiag.cullFacing++;
         return;
@@ -1462,8 +1533,15 @@ static void submit_vertex(void)
          * its row 3 shifted already (ensure_clip). */
         int64_t x=src[0],y=src[1],z=src[2];
         int j;
+#ifdef HGSS_GX3D_HOTLOOP
+        const Matrix *xf=&s.xf;
+        const int64_t *trans=s.xfTrans;
+        for(j=0;j<4;j++)
+            vp->clip[j]=saturation((x*xf->a[j]+y*xf->a[4+j]+z*xf->a[8+j]+trans[j])>>12);
+#else
         for(j=0;j<4;j++)
             vp->clip[j]=saturation((x*s.xf.a[j]+y*s.xf.a[4+j]+z*s.xf.a[8+j]+s.xfTrans[j])>>12);
+#endif
     }
     vp->outside=(uint8_t)outcode(vp->clip);
     vp->hasScreen=0;
@@ -1556,16 +1634,81 @@ static int param_count(unsigned op)
     return sParamCount[op&255u];
 }
 /* Matrix commands (0x10-0x1c) on an engine's matrices: the engine's own
- * (s) or the game thread's shadow of them (sShadow). */
-static void matrix_command(GeoState *g,unsigned op,const uint32_t *p)
+ * (s) or the game thread's shadow of them (sShadow). Returns 1 when the
+ * command was applied (matrices, slots or levels may have changed, or the
+ * stack error was set), 0 when it proved redundant or was not a command.
+ * Callers skip their follow-ups (lighting-cache clear, GXSTAT refresh) on
+ * 0: every observable state is identical, so recomputing them is pure
+ * cost. The redundant cases only (G5, HGSS_GX3D_STATEDEDUP):
+ * - MTXMODE to the current mode (the original dirties nothing either);
+ * - MTX_LOAD/IDENTITY whose matrix already equals the selected one (and
+ *   the vector matrix in position-vector mode, which LOAD also sets);
+ * - RESTORE whose slot already equals the current matrices (levels and
+ *   slots untouched, so GXSTAT is unchanged);
+ * - POP with a zero offset whose slot already equals the current matrices
+ *   (the only POP that leaves the level unchanged; any other POP changes
+ *   pvLevel, which GXSTAT reports, and is never skipped).
+ * PUSH/STORE/MULT/SCALE/TRANS always apply: they change levels, slots or
+ * the matrix in ways a copy cannot prove away. */
+static int matrix_command(GeoState *g,unsigned op,const uint32_t *p)
 {
     Matrix m;
     switch(op){
-    case 0x10:g->mode=p[0]&3;return;
-    case 0x11:case 0x12:case 0x13:case 0x14:
+    case 0x10:
+#ifdef HGSS_GX3D_STATEDEDUP
+        if((p[0]&3u)==(unsigned)g->mode){sMatrixDedup.modeSkip++;return 0;}
+        g->stackGen++;
+        g->mode=p[0]&3;return 1;
+#else
+        g->mode=p[0]&3;return 0;
+#endif
+    case 0x11:
+        matrix_stack(g,op,0);
+        break;
+#ifdef HGSS_GX3D_STATEDEDUP
+    case 0x12:
+        if(g->mode==1||g->mode==2){
+            int index=g->pvLevel-signbits((uint32_t)p[0],6);
+            if(index==g->pvLevel && index>=0 && index<=30 &&
+               !memcmp(&g->posStack[index],&g->pos,sizeof(g->pos)) &&
+               !memcmp(&g->vecStack[index],&g->vec,sizeof(g->vec))){
+                sMatrixDedup.popSkip++;return 0;
+            }
+        }
+        matrix_stack(g,op,(int32_t)p[0]);break;
+    case 0x14:
+        if(g->mode==0){
+            if(!memcmp(&g->pjStack,&g->proj,sizeof(g->proj))){sMatrixDedup.restoreSkip++;return 0;}
+        }else if(g->mode==3){
+            if(!memcmp(&g->texStack,&g->tex,sizeof(g->tex))){sMatrixDedup.restoreSkip++;return 0;}
+        }else if(((uint32_t)p[0]&31u)<=30u &&
+               !memcmp(&g->posStack[p[0]&31u],&g->pos,sizeof(g->pos)) &&
+               !memcmp(&g->vecStack[p[0]&31u],&g->vec,sizeof(g->vec))){
+            sMatrixDedup.restoreSkip++;return 0;
+        }
+        matrix_stack(g,op,(int32_t)p[0]);break;
+    case 0x13:
+        matrix_stack(g,op,(int32_t)p[0]);break;
+#else
+    case 0x12:case 0x13:case 0x14:
         matrix_stack(g,op,op==0x11?0:(int32_t)p[0]);break;
-    case 0x15:identity(&m);set_matrix(g,&m,0);break;
-    case 0x16:case 0x17:m=read_matrix(op,p);set_matrix(g,&m,0);break;
+#endif
+    case 0x15:identity(&m);
+#ifdef HGSS_GX3D_STATEDEDUP
+        if(!memcmp(&m,selected(g),sizeof(m)) &&
+           (g->mode!=2 || !memcmp(&m,&g->vec,sizeof(m)))){
+            sMatrixDedup.identitySkip++;return 0;
+        }
+#endif
+        set_matrix(g,&m,0);break;
+    case 0x16:case 0x17:m=read_matrix(op,p);
+#ifdef HGSS_GX3D_STATEDEDUP
+        if(!memcmp(&m,selected(g),sizeof(m)) &&
+           (g->mode!=2 || !memcmp(&m,&g->vec,sizeof(m)))){
+            sMatrixDedup.loadSkip++;return 0;
+        }
+#endif
+        set_matrix(g,&m,0);break;
     case 0x18:case 0x19:case 0x1a:m=read_matrix(op,p);mul_matrix(g,&m,0);break;
     /* Scale (never the vector matrix) and translation: only the rows they
      * change worked out. */
@@ -1573,7 +1716,7 @@ static void matrix_command(GeoState *g,unsigned op,const uint32_t *p)
     case 0x1c:translate_rows(selected(g),p);
         if(g->mode==2)translate_rows(&g->vec,p);
         break;
-    default:return;
+    default:return 0;
     }
     /* The clip matrix is worked out again when a vertex, a test or the SDK
      * (NitroPort_Gx3dSyncResults) next needs it: models change matrices
@@ -1584,6 +1727,12 @@ static void matrix_command(GeoState *g,unsigned op,const uint32_t *p)
      * for commands that cannot affect it. Texture-coordinate math above still
      * runs normally. */
     if(g->mode!=3 && op!=0x11 && op!=0x13)g->clipDirty=1;
+#ifdef HGSS_GX3D_STATEDEDUP
+    g->stackGen++;
+    return 1;
+#else
+    return 0;
+#endif
 }
 /* GXSTAT from an engine's state: the box test result, the stack levels
  * and overflow. */
@@ -1708,11 +1857,21 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         }
         /* The vector matrix (lighting's) changes: colours owed first. */
         if((s.mode==1||s.mode==2) && op!=0x10u && op!=0x11u && op!=0x13u)settle_lighting();
+#ifdef HGSS_GX3D_STATEDEDUP
+        {
+            int mxChanged=matrix_command(&s,op,p);
+            if(mxChanged)sNormalCache.valid=0;
+            if(s.stackError&&!before)sDiag.stackErrors++;
+            /* Stack commands change GXSTAT (the shadow's, with a thread). */
+            if(mxChanged && op>=0x11u && op<=0x14u && sResults==&s)refresh_status(&s);
+        }
+#else
         matrix_command(&s,op,p);
         sNormalCache.valid=0;
         if(s.stackError&&!before)sDiag.stackErrors++;
         /* Stack commands change GXSTAT (the shadow's, with a thread). */
         if(op>=0x11u && op<=0x14u && sResults==&s)refresh_status(&s);
+#endif
         return;
     }
     switch(op){
@@ -1814,6 +1973,9 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
         sShadowCapture=NitroPort_SunShadows() && shadow_store();
         interp_swap();
         s.frameVertices=0;s.framePolygons=0;
+#ifdef HGSS_GX3D_LISTCACHE
+        listcache_scene();
+#endif
         if(++sDiag.scenes>=120)diag_log();
         break;
     }
@@ -1924,6 +2086,11 @@ static void enqueue(unsigned op,const uint32_t *p,unsigned n,uint32_t flags)
  * their parameters) as the game sent them; the next word is its length. */
 #define OP_PACKETS 0xF1u
 #define RING_PACKETS_MAX 8192u
+#ifdef HGSS_GX3D_LISTCACHE
+/* The source a packets block was handed over with (game thread): the
+ * list cache's cross-scene identity. Defined with the cache below. */
+static void listcache_note_packets(uint32_t ringStart, const uint32_t *words, uint32_t count);
+#endif
 static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
 {
     uint32_t need=2u+count, pos=sWriteLocal&RING_MASK;
@@ -1937,6 +2104,9 @@ static void enqueue_packets(const uint32_t *words,uint32_t count,uint32_t flags)
     sRing[pos]=OP_PACKETS|flags;
     sRing[pos+1]=count;
     memcpy(&sRing[pos+2],words,count*sizeof(*words));
+#ifdef HGSS_GX3D_LISTCACHE
+    listcache_note_packets(sWriteLocal,words,count);
+#endif
     sWriteLocal+=need;
     if(sWriteLocal-sWritePublished>=RING_PUBLISH_WORDS)publish();
 }
@@ -1984,8 +2154,12 @@ static size_t scan_packets(const uint32_t *words,size_t count,int *swapped)
             for(k=0;k<4;k++){
                 unsigned op=(word>>(k*8))&255u, what=sShadowOps[op];
                 if(what&1u){
+#ifdef HGSS_GX3D_STATEDEDUP
+                    if(matrix_command(&sShadow,op,p) && op>=0x11u && op<=0x14u)refresh_status(&sShadow);
+#else
                     matrix_command(&sShadow,op,p);
                     if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
+#endif
                 }else if(what&2u){
                     test_command(&sShadow,op,p);
                 }else if(what&8u){
@@ -2012,8 +2186,13 @@ static void produce(unsigned op,const uint32_t *p)
         return;
     }
     if(op>=0x10u && op<=0x1cu){
+#ifdef HGSS_GX3D_STATEDEDUP
+        int mxChanged=matrix_command(&sShadow,op,p);
+        if(mxChanged && op>=0x11u && op<=0x14u)refresh_status(&sShadow);
+#else
         matrix_command(&sShadow,op,p);
         if(op>=0x11u && op<=0x14u)refresh_status(&sShadow);
+#endif
     }else if(!n && op!=0x41u){
         return; /* NOP, or not a command */
     }
@@ -2235,6 +2414,14 @@ static int hidden_box_extrema(const int64_t base[4],const int64_t edge[3][4],
     *out=mask;*behind=hi[3]<4096;
     return HIDDEN_BOX_OK;
 }
+#ifdef HGSS_GX3D_LISTCACHE
+static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
+                             const int32_t keyCoord[3], unsigned foundOp,
+                             const uint32_t *starts, unsigned nStarts,
+                             StreamCursor *end, const VertexScan *v, unsigned n,
+                             uint32_t scEnd);
+static int listcache_try(StreamCursor *sc);
+#endif
 static int skip_hidden_vertices(StreamCursor *sc)
 {
     StreamCursor scan=*sc,end;
@@ -2244,6 +2431,17 @@ static int skip_hidden_vertices(StreamCursor *sc)
     unsigned mode=(s.texparam>>30)&3u;
     const uint32_t *p;
     int32_t *xyz=v.xyz,*lo=v.lo,*hi=v.hi;
+#ifdef HGSS_GX3D_LISTCACHE
+    /* The list cache's key (listcache_insert): where the list starts in
+     * its entry, and the pre-list coordinates (VTX_DIFF and partial
+     * writes are relative to them). */
+    int32_t lcCoord[3];
+    uint32_t lcEntry[257];
+    unsigned lcEntries=0, lcFoundOp=0;
+    int lcNoTag=0;
+    lcCoord[0]=s.coord[0];lcCoord[1]=s.coord[1];lcCoord[2]=s.coord[2];
+    lcEntry[lcEntries++]=sc->r;
+#endif
 
     sHiddenDiag.attempts++;
     /* Texture coordinates from normals or vertices: done as usual. */
@@ -2268,6 +2466,9 @@ static int skip_hidden_vertices(StreamCursor *sc)
             if(r>0){
                 end=scan;
                 end.c.i=i;end.c.word=word;   /* (that command not taken) */
+#ifdef HGSS_GX3D_LISTCACHE
+                lcFoundOp=op;
+#endif
                 goto found;
             }
             if(r<0){sHiddenDiag.unsupported++;return 0;}
@@ -2278,8 +2479,18 @@ static int skip_hidden_vertices(StreamCursor *sc)
         /* On into the next entry (or a command of its own). */
         end=scan;
         if(!stream_next(&scan,&op,&p)){sHiddenDiag.incomplete++;return 0;}   /* the rest isn't known yet */
+#ifdef HGSS_GX3D_LISTCACHE
+        if(scan.single)lcNoTag=1;   /* a decoded command: no source range */
+        else if(lcEntries<sizeof(lcEntry)/sizeof(lcEntry[0]))lcEntry[lcEntries++]=scan.r;
+        else lcNoTag=1;   /* too long: still scanned, just not cached */
+#endif
         r=scan_op(&v,op,p);
-        if(r>0)goto found;
+        if(r>0){
+#ifdef HGSS_GX3D_LISTCACHE
+            lcFoundOp=op;
+#endif
+            goto found;
+        }
         if(r<0){sHiddenDiag.unsupported++;return 0;}
     }
 found:
@@ -2332,11 +2543,525 @@ found:
     if(behind)sDiag.behind+=n;
     sDiag.polygons+=polys;
     sDiag.clipped+=polys;
+#ifdef HGSS_GX3D_LISTCACHE
+    if(!lcNoTag)
+        listcache_insert(sc->r,sc->c.i,sc->c.word,lcCoord,lcFoundOp,
+                         lcEntry,lcEntries,&end,&v,n,sc->end);
+#endif
     /* Its END_VTXS or BEGIN_VTXS is next; no vertex of it is kept. */
     s.nverts=0;
     *sc=end;
     return 1;
 }
+
+#ifdef HGSS_GX3D_LISTCACHE
+/* --------------------------------- cached display-list bounds (G3) ----
+ *
+ * The hidden-list shortcut rescans every skipped vertex stream every
+ * scene (~9k vertices/scene). A repeated in-memory display list is the
+ * same words from the same source each scene, so its object-space bounds
+ * and trailing command state are cached here, keyed by:
+ * - the source address its packets block was handed over with, plus the
+ *   list's offset in it (enqueue_packets tags each block; CPU FIFO
+ *   single-word writes have no source and are never cached),
+ * - the remaining opcode byte of BEGIN's command word (packet grouping),
+ * - the pre-list coordinates (VTX_DIFF and partial writes are relative),
+ * - an allocation epoch, bumped when a freed heap block overlaps a
+ *   cached range (the hook lives in the SDK patch stack, not here),
+ * - a sampled content hash (first, last, 8 strided words of the run),
+ *   re-verified from the ring on every hit.
+ * A hit transforms 8 box corners with the current matrix, runs the
+ * existing hidden test, applies the stored trailing state and resumes the
+ * cursor at the recorded terminator -- the vertex stream is never scanned.
+ * The diagnostic build additionally hashes the full extent every N scenes
+ * and auto-disables the cache on mismatch (stale-heap reuse is the known
+ * risk; when in doubt this code falls back to scanning).
+ *
+ * Threading: tags are written by the game's thread at handover, read by
+ * the geometry worker. Entries are worker-private except eviction
+ * (NoteFree/EpochBump from the game's thread), which only clears `used`:
+ * a torn lookup still faces the sampled-hash check, and identical bytes
+ * stay correct regardless. */
+#define LISTCACHE_ENTRIES 256u
+#define LISTCACHE_TAGS 512u
+#define LISTCACHE_CENSUS 64u
+#define LISTCACHE_MAX_SPAN 257u
+#define LISTCACHE_MAX_LEN 65536u
+#define LISTCACHE_AUDIT_SCENES 30u
+#define LISTCACHE_FNV_OFFSET 2166136261u
+#define LISTCACHE_FNV_PRIME 16777619u
+typedef struct {
+    uint32_t ringStart;   /* absolute ring position of the packets entry */
+    uint32_t seq;         /* nonzero once written (ringStart 0 is valid) */
+    uintptr_t src;        /* source address the block was handed over with */
+    uint32_t count;       /* its payload words */
+} ListTag;
+typedef struct {
+    int used;
+    uint32_t epoch;
+    uintptr_t src;        /* source byte address of BEGIN's param word - ... */
+    uint32_t keyWord;     /* ... plus BEGIN command word's remaining opcodes */
+    int32_t coord[3];     /* pre-list coordinates */
+    int32_t lo[3], hi[3]; /* object-space bounds */
+    uint32_t srcLen;      /* linearized payload words, list start to resume */
+    uint32_t jumps;       /* entry jumps from the start entry to resume */
+    uint32_t resI;        /* resume payload index (or the exhausted count) */
+    uint32_t resWord;     /* resume remaining-opcodes word */
+    unsigned endKind;     /* 0x40 or 0x41 */
+    uint32_t sample;      /* sampled hash of the linearized range */
+    uint32_t full;        /* full hash of the same range */
+    int32_t endCoord[3];
+    uint32_t texcoord; int haveTexcoord;
+    uint32_t normal; int haveNormal;
+    uint32_t color; int haveColor;
+    int normalLast;
+    unsigned n;
+} ListCacheEntry;
+/* Per source-block reuse statistics for the A0 census feed: how many
+ * distinct lists each block holds and how often they repeat. */
+typedef struct {
+    uintptr_t src;
+    unsigned lists, hits, scenes;
+    uint32_t lastSerial;
+    uint32_t lens[4];
+} ListCensus;
+static ListTag sListTags[LISTCACHE_TAGS];
+static unsigned sListTagHead;
+static uint32_t sListTagSeq;
+static ListCacheEntry sListCache[LISTCACHE_ENTRIES];
+static unsigned sListCacheNext;
+static uint32_t sListCacheEpoch;
+static int sListCacheDisabled;
+static unsigned sListAuditDue;
+static int sListAuditNow;
+static ListCensus sListCensus[LISTCACHE_CENSUS];
+static struct {
+    unsigned lookups, hits, inserts, evicts;
+    unsigned sampleFails, resumeFails, audits, auditFails, untagged;
+} sListDiag;
+
+static void listcache_note_packets(uint32_t ringStart, const uint32_t *words, uint32_t count)
+{
+    ListTag *t=&sListTags[sListTagHead];
+    sListTagHead=(sListTagHead+1u)%LISTCACHE_TAGS;
+    t->ringStart=ringStart;
+    t->seq=++sListTagSeq;
+    t->src=(uintptr_t)words;
+    t->count=count;
+}
+static ListTag *list_find_tag(uint32_t ringStart)
+{
+    unsigned k;
+    for(k=0;k<LISTCACHE_TAGS;k++)
+        if(sListTags[k].seq && sListTags[k].ringStart==ringStart)return &sListTags[k];
+    return 0;
+}
+/* One entry forward the way stream_next steps (PAD skip, SKIP/end
+ * bounds), landing only on packets entries. */
+static int list_jump_next(uint32_t *r, uint32_t end)
+{
+    uint32_t next=*r+entry_length(&sRing[*r&RING_MASK]), header;
+    if(next==end)return 0;
+    header=sRing[next&RING_MASK];
+    if(header==RING_PAD){
+        next=(next|RING_MASK)+1u;
+        if(next==end)return 0;
+        header=sRing[next&RING_MASK];
+    }
+    if(header&RING_SKIP)return 0;
+    if((header&255u)!=OP_PACKETS)return 0;
+    *r=next;
+    return 1;
+}
+typedef struct { uint32_t r, idx, count, end; } ListWalk;
+static int list_walk_start(ListWalk *w, uint32_t r0, uint32_t startIdx, uint32_t end)
+{
+    uint32_t header=sRing[r0&RING_MASK];
+    if((header&255u)!=OP_PACKETS || (header&RING_SKIP))return 0;
+    w->count=sRing[(r0+1u)&RING_MASK];
+    if(startIdx>w->count)return 0;
+    w->r=r0;w->idx=startIdx;w->end=end;
+    return 1;
+}
+static int list_walk_next(ListWalk *w, uint32_t *word)
+{
+    if(w->idx<w->count){
+        *word=sRing[(w->r+2u+w->idx)&RING_MASK];w->idx++;
+        return 1;
+    }
+    if(!list_jump_next(&w->r,w->end))return 0;
+    w->count=sRing[(w->r+1u)&RING_MASK];
+    if(!w->count)return 0;   /* never stored; defensive */
+    w->idx=0;
+    *word=sRing[(w->r+2u)&RING_MASK];w->idx=1;
+    return 1;
+}
+static ListCensus *list_census(uintptr_t src, int create)
+{
+    unsigned k;
+    for(k=0;k<LISTCACHE_CENSUS;k++)
+        if(sListCensus[k].src==src)return &sListCensus[k];
+    if(!create)return 0;
+    for(k=0;k<LISTCACHE_CENSUS;k++)
+        if(!sListCensus[k].src){
+            sListCensus[k].src=src;
+            return &sListCensus[k];
+        }
+    return 0;
+}
+static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
+                             const int32_t keyCoord[3], unsigned foundOp,
+                             const uint32_t *starts, unsigned nStarts,
+                             StreamCursor *end, const struct VertexScan *v, unsigned n,
+                             uint32_t scEnd)
+{
+    ListTag *t0;
+    ListCacheEntry *e;
+    ListCensus *c;
+    ListWalk w;
+    uint32_t k, E, count0, L=0, full=LISTCACHE_FNV_OFFSET, sample=LISTCACHE_FNV_OFFSET;
+    uint32_t offs[10], word, t, m=0;
+    unsigned nOffs=0, q;
+    uintptr_t expect;
+    if(sListCacheDisabled)return;
+    if(!nStarts || nStarts>LISTCACHE_MAX_SPAN)return;
+    if(foundOp!=0x40u && foundOp!=0x41u)return;
+    t0=list_find_tag(r0);
+    if(!t0)return;
+    expect=t0->src;
+    for(k=0;k<nStarts;k++){
+        ListTag *tk=list_find_tag(starts[k]);
+        if(!tk || tk->src!=expect)return;
+        expect=tk->src+(uintptr_t)tk->count*4u;
+    }
+    count0=sRing[(r0+1u)&RING_MASK];
+    if(i0==0u || i0-1u>=count0)return;
+    E=nStarts;   /* the resume entry's index in starts[] */
+    for(k=0;k<nStarts;k++)if(starts[k]==end->r){E=k;break;}
+    if(E>=nStarts)return;
+    {
+        uint32_t endCount=sRing[(end->r+1u)&RING_MASK];
+        if(end->c.i>endCount)return;
+        if(E==0){
+            /* The terminator is in the start entry: the range is the
+             * words from just past BEGIN to the resume point. */
+            if(end->c.i<i0-1u)return;
+            L=end->c.i-(i0-1u);
+        }else{
+            /* The resume entry was exhausted before the terminator's
+             * entry: whole start and middle entries plus the resume
+             * entry's consumed words. */
+            L=(count0-(i0-1u))+end->c.i;
+            for(k=1;k<E;k++)L+=sRing[(starts[k]+1u)&RING_MASK];
+        }
+        if(!L || L>LISTCACHE_MAX_LEN)return;
+    }
+    /* Sampled offsets: first, last, 8 strided; ascending, deduplicated. */
+    offs[nOffs++]=0u;
+    for(m=1;m<=8;m++){
+        uint32_t o=(uint32_t)((uint64_t)m*(L-1u)/8u);
+        if(o!=offs[nOffs-1])offs[nOffs++]=o;
+    }
+    if(L-1u!=offs[nOffs-1])offs[nOffs++]=L-1u;
+    if(!list_walk_start(&w,r0,i0-1u,scEnd))return;
+    m=0;
+    for(t=0;t<L;t++){
+        if(!list_walk_next(&w,&word))return;
+        full^=word;full*=LISTCACHE_FNV_PRIME;
+        if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
+    }
+    e=&sListCache[sListCacheNext];
+    sListCacheNext=(sListCacheNext+1u)%LISTCACHE_ENTRIES;
+    if(e->used)sListDiag.evicts++;
+    e->used=1;
+    e->epoch=sListCacheEpoch;
+    e->src=t0->src+(uintptr_t)(i0-1u)*4u;
+    e->keyWord=word0;
+    e->coord[0]=keyCoord[0];e->coord[1]=keyCoord[1];e->coord[2]=keyCoord[2];
+    e->lo[0]=v->lo[0];e->lo[1]=v->lo[1];e->lo[2]=v->lo[2];
+    e->hi[0]=v->hi[0];e->hi[1]=v->hi[1];e->hi[2]=v->hi[2];
+    e->srcLen=L;
+    e->jumps=E;
+    e->resI=end->c.i;
+    e->resWord=end->c.word;
+    e->endKind=foundOp;
+    e->sample=sample;
+    e->full=full;
+    e->endCoord[0]=v->xyz[0];e->endCoord[1]=v->xyz[1];e->endCoord[2]=v->xyz[2];
+    e->texcoord=v->texcoord;e->haveTexcoord=v->haveTexcoord;
+    e->normal=v->normal;e->haveNormal=v->haveNormal;
+    e->color=v->color;e->haveColor=v->haveColor;
+    e->normalLast=v->normalLast;
+    e->n=n;
+    sListDiag.inserts++;
+    c=list_census(t0->src,1);
+    if(c){
+        for(q=0;q<4;q++)if(c->lens[q]==L)break;
+        if(q>=4){
+            for(q=0;q<4;q++)if(!c->lens[q])break;
+            if(q<4){c->lens[q]=L;c->lists++;}
+            /* (more than 4 lengths from one block: counted once) */
+        }
+    }
+}
+/* The terminator the resume points at must still be an END_VTXS or a
+ * BEGIN_VTXS once the cached extent is replayed: grouping changes fail
+ * here instead of misdecoding the stream. */
+static int list_peek_end(uint32_t r, uint32_t idx, uint32_t word, unsigned endKind, uint32_t end)
+{
+    uint32_t count=sRing[(r+1u)&RING_MASK], header;
+    OpCursor tmp;
+    unsigned op;
+    const uint32_t *pp;
+    tmp.w=&sRing[(r+2u)&RING_MASK];tmp.count=count;tmp.i=idx;tmp.word=word;
+    if(next_op(&tmp,&op,&pp))return op==endKind;
+    {
+        uint32_t next=r+entry_length(&sRing[r&RING_MASK]);
+        if(next==end)return 0;
+        header=sRing[next&RING_MASK];
+        if(header==RING_PAD){
+            next=(next|RING_MASK)+1u;
+            if(next==end)return 0;
+            header=sRing[next&RING_MASK];
+        }
+        if(header&RING_SKIP)return 0;
+        if((header&255u)==OP_PACKETS){
+            tmp.w=&sRing[(next+2u)&RING_MASK];tmp.count=sRing[(next+1u)&RING_MASK];
+            tmp.i=0;tmp.word=0;
+            if(!next_op(&tmp,&op,&pp))return 0;
+            return op==endKind;
+        }
+        /* A decoded single command (BEGIN/END sent by direct writes). */
+        return (header&255u)==endKind;
+    }
+}
+static int listcache_try(StreamCursor *sc)
+{
+    ListTag *tag;
+    ListCacheEntry *e=0;
+    ListCensus *c;
+    ListWalk w;
+    unsigned k, mode, outside=0x3fu;
+    int behind=0, j;
+    uint32_t epoch, word, t, m=0, r, countR, L;
+    uint32_t offs[10], sample=LISTCACHE_FNV_OFFSET;
+    unsigned nOffs=0;
+    int64_t base[4], edge[3][4];
+    if(sListCacheDisabled)return 0;
+    sListDiag.lookups++;
+    mode=(s.texparam>>30)&3u;
+    if(mode>=2u)return 0;
+    if(sc->single)return 0;
+    tag=list_find_tag(sc->r);
+    if(!tag){sListDiag.untagged++;return 0;}
+    if(sc->c.i==0u)return 0;
+    {
+        uintptr_t cand=tag->src+(uintptr_t)(sc->c.i-1u)*4u;
+        for(k=0;k<LISTCACHE_ENTRIES;k++){
+            ListCacheEntry *c2=&sListCache[k];
+            if(c2->used && c2->src==cand && c2->keyWord==sc->c.word &&
+               c2->coord[0]==s.coord[0] && c2->coord[1]==s.coord[1] &&
+               c2->coord[2]==s.coord[2]){e=c2;break;}
+        }
+    }
+    if(!e)return 0;
+    epoch=__atomic_load_n(&sListCacheEpoch,__ATOMIC_SEQ_CST);
+    if(e->epoch!=epoch)return 0;
+    L=e->srcLen;
+    if(!L || L>LISTCACHE_MAX_LEN)return 0;
+    offs[nOffs++]=0u;
+    for(m=1;m<=8;m++){
+        uint32_t o=(uint32_t)((uint64_t)m*(L-1u)/8u);
+        if(o!=offs[nOffs-1])offs[nOffs++]=o;
+    }
+    if(L-1u!=offs[nOffs-1])offs[nOffs++]=L-1u;
+    r=sc->r;
+    if(!list_walk_start(&w,r,sc->c.i-1u,sc->end))return 0;
+    m=0;
+    for(t=0;t<L;t++){
+        if(!list_walk_next(&w,&word)){sListDiag.resumeFails++;return 0;}
+        if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
+    }
+    if(sample!=e->sample){sListDiag.sampleFails++;return 0;}
+    if(sListAuditNow || sListAuditDue==0){
+        uint32_t full=LISTCACHE_FNV_OFFSET;
+        if(!list_walk_start(&w,r,sc->c.i-1u,sc->end))return 0;
+        for(t=0;t<L;t++){
+            if(!list_walk_next(&w,&word)){sListDiag.resumeFails++;return 0;}
+            full^=word;full*=LISTCACHE_FNV_PRIME;
+        }
+        sListDiag.audits++;
+        sListAuditNow=0;
+        sListAuditDue=LISTCACHE_AUDIT_SCENES;
+        if(full!=e->full){
+            sListDiag.auditFails++;
+            sListCacheDisabled=1;
+            NitroPort_Log("[gx3d] listcache: full-hash mismatch, auto-disabled");
+            return 0;
+        }
+    }
+    /* The hit path: 8 box corners through the current matrix, then the
+     * existing hidden test. Never scans the stream. */
+    ensure_clip(&s);
+    for(j=0;j<4;j++){
+        base[j]=(int64_t)e->lo[0]*s.xf.a[j]+(int64_t)e->lo[1]*s.xf.a[4+j]+
+                (int64_t)e->lo[2]*s.xf.a[8+j]+s.xfTrans[j];
+        for(k=0;k<3;k++)edge[k][j]=((int64_t)e->hi[k]-e->lo[k])*s.xf.a[k*4+j];
+    }
+    {
+        int result=hidden_box_extrema(base,edge,&outside,&behind);
+        if(result!=HIDDEN_BOX_OK)return 0;
+    }
+    if(sShadowCapture && !(outside & 0x30u))return 0;
+    r=sc->r;
+    {
+        uint32_t header=sRing[r&RING_MASK];
+        if((header&255u)!=OP_PACKETS || (header&RING_SKIP)){sListDiag.resumeFails++;return 0;}
+    }
+    for(k=0;k<e->jumps;k++)if(!list_jump_next(&r,sc->end)){sListDiag.resumeFails++;return 0;}
+    countR=sRing[(r+1u)&RING_MASK];
+    if(e->resI>countR){sListDiag.resumeFails++;return 0;}
+    if(!list_peek_end(r,e->resI,e->resWord,e->endKind,sc->end)){sListDiag.resumeFails++;return 0;}
+    /* What the scanned list would have left behind. */
+    s.coord[0]=e->endCoord[0];s.coord[1]=e->endCoord[1];s.coord[2]=e->endCoord[2];
+    if(e->haveTexcoord){
+        s.texcoord[0]=signbits(e->texcoord,16);
+        s.texcoord[1]=signbits(e->texcoord>>16,16);
+        if(mode==0){
+            s.resolvedTexcoord[0]=s.texcoord[0];
+            s.resolvedTexcoord[1]=s.texcoord[1];
+        }else{
+            transform_texcoords(s.texcoord,1,s.resolvedTexcoord);
+        }
+    }
+    if(e->haveNormal){
+        for(j=0;j<3;j++)s.normal[j]=signbits(e->normal>>(j*10),10)*8;
+        s.normalValue=e->normal;
+    }
+    if(e->haveColor)s.rgb=e->color&0x7FFF;
+    if(e->haveNormal||e->haveColor)s.rgbPending=e->normalLast;
+    {
+        unsigned polys=polygons_of(s.primitive,e->n);
+        sDiag.vertices+=e->n;
+        if(behind)sDiag.behind+=e->n;
+        sDiag.polygons+=polys;
+        sDiag.clipped+=polys;
+    }
+    sc->r=r;
+    sc->c.w=&sRing[(r+2u)&RING_MASK];sc->c.count=countR;sc->c.i=e->resI;sc->c.word=e->resWord;
+    sc->single=0;
+    s.nverts=0;
+    sListDiag.hits++;
+    c=list_census(tag->src,0);
+    if(c){
+        c->hits++;
+        if(c->lastSerial!=sSerial){c->lastSerial=sSerial;c->scenes++;}
+    }
+    return 1;
+}
+static void listcache_log(void)
+{
+    unsigned k, shown=0, srcs=0, lists=0;
+    for(k=0;k<LISTCACHE_CENSUS;k++)
+        if(sListCensus[k].src){srcs++;lists+=sListCensus[k].lists;}
+    NitroPort_Log("[gx3d] listcache: %u lookups, %u hits, %u inserts (%u evicts), "
+                  "sample-fail %u, resume-fail %u, untagged %u, audits %u (fail %u)%s; "
+                  "census %u sources, %u lists",
+                  sListDiag.lookups, sListDiag.hits, sListDiag.inserts, sListDiag.evicts,
+                  sListDiag.sampleFails, sListDiag.resumeFails, sListDiag.untagged,
+                  sListDiag.audits, sListDiag.auditFails,
+                  sListCacheDisabled?" DISABLED":"", srcs, lists);
+    for(k=0;k<LISTCACHE_CENSUS && shown<8;k++)
+        if(sListCensus[k].src){
+            NitroPort_Log("[gx3d] listcache src %p: %u lists, %u hits, %u scenes",
+                          (void *)sListCensus[k].src,
+                          sListCensus[k].lists, sListCensus[k].hits, sListCensus[k].scenes);
+            shown++;
+        }
+}
+static void listcache_scene(void)
+{
+    if(sListAuditDue>0)sListAuditDue--;
+}
+static void listcache_reset(void)
+{
+    unsigned k;
+    for(k=0;k<LISTCACHE_ENTRIES;k++)sListCache[k].used=0;
+    for(k=0;k<LISTCACHE_TAGS;k++)sListTags[k].seq=0;
+    sListCacheEpoch++;
+    sListCacheDisabled=0;
+    sListCacheNext=0;
+    sListTagHead=0;
+    sListAuditDue=0;
+    sListAuditNow=0;
+}
+void NitroPort_Gx3dListCacheNoteAlloc(const void *ptr, unsigned long len)
+{
+    /* Handing out a block invalidates nothing: only a release can strand
+     * a cached range. Kept so the heap hook has a symmetric pair. */
+    (void)ptr;(void)len;
+}
+void NitroPort_Gx3dListCacheNoteFree(const void *ptr, unsigned long len)
+{
+    uintptr_t base=(uintptr_t)ptr, end=base+(uintptr_t)len;
+    unsigned k;
+    if(!ptr || !len)return;
+    if(end<base)end=(uintptr_t)-1;   /* wrapped: evict to the top */
+    for(k=0;k<LISTCACHE_ENTRIES;k++){
+        ListCacheEntry *e=&sListCache[k];
+        uintptr_t eb, ee;
+        if(!e->used)continue;
+        eb=e->src;ee=eb+(uintptr_t)e->srcLen*4u;
+        if(ee<eb)ee=(uintptr_t)-1;
+        if(base<ee && eb<end)e->used=0;
+    }
+    __atomic_store_n(&sListCacheEpoch,sListCacheEpoch+1u,__ATOMIC_SEQ_CST);
+}
+void NitroPort_Gx3dListCacheEpochBump(void)
+{
+    __atomic_store_n(&sListCacheEpoch,sListCacheEpoch+1u,__ATOMIC_SEQ_CST);
+}
+void NitroPort_Gx3dListCacheAuditNow(void)
+{
+    sListAuditNow=1;
+}
+void NitroPort_Gx3dListCacheStats(NitroGx3dListCacheStats *out)
+{
+    unsigned k, entries=0, srcs=0;
+    if(!out)return;
+    for(k=0;k<LISTCACHE_ENTRIES;k++)if(sListCache[k].used)entries++;
+    for(k=0;k<LISTCACHE_CENSUS;k++)if(sListCensus[k].src)srcs++;
+    out->lookups=sListDiag.lookups;
+    out->hits=sListDiag.hits;
+    out->inserts=sListDiag.inserts;
+    out->evicts=sListDiag.evicts;
+    out->sampleFails=sListDiag.sampleFails;
+    out->resumeFails=sListDiag.resumeFails;
+    out->audits=sListDiag.audits;
+    out->auditFails=sListDiag.auditFails;
+    out->untagged=sListDiag.untagged;
+    out->disabled=(uint32_t)sListCacheDisabled;
+    out->entries=entries;
+    out->censusSources=srcs;
+}
+#endif /* HGSS_GX3D_LISTCACHE */
+
+#ifdef HGSS_GX3D_STATEDEDUP
+uint32_t NitroPort_Gx3dStackGeneration(void)
+{
+    return s.stackGen;
+}
+void NitroPort_Gx3dMatrixDedupStats(NitroGx3dMatrixDedupStats *out)
+{
+    if(!out)return;
+    out->modeSkip=sMatrixDedup.modeSkip;
+    out->loadSkip=sMatrixDedup.loadSkip;
+    out->identitySkip=sMatrixDedup.identitySkip;
+    out->restoreSkip=sMatrixDedup.restoreSkip;
+    out->popSkip=sMatrixDedup.popSkip;
+    out->generation=s.stackGen;
+}
+#endif
 
 /* Where the worker goes on after a skip that ended in a later entry: in
  * the block of packets there, from (sResumeI, sResumeWord). */
@@ -2351,6 +3076,17 @@ static uint32_t sResumeI,sResumeWord;
  * aren't looked at. After a BEGIN_VTXS, vertices all out of the view are
  * passed over (skip_hidden_vertices), maybe into later entries: returns
  * the entry to go on with. */
+#ifdef HGSS_A0_DIAG
+static uint64_t A0GeoTick(void) { return sOps.ticks ? sOps.ticks(sOps.context) : 0; }
+#define A0_GEO_SAMPLE() (sOps.ticks && ((sSwapsDone & 63u) == 0))
+#define A0_VERTEX() do { \
+    if (A0_GEO_SAMPLE()) { uint64_t t = A0GeoTick(); submit_vertex(); \
+        sA0Geo.vertexTicks += A0GeoTick() - t; sA0Geo.vertexCalls++; } \
+    else submit_vertex(); \
+} while (0)
+#else
+#define A0_VERTEX() submit_vertex()
+#endif
 static uint32_t work_packets(uint32_t r,uint32_t end,uint32_t i,uint32_t word)
 {
     const uint32_t *w=&sRing[(r+2u)&RING_MASK];
@@ -2391,24 +3127,52 @@ static uint32_t work_packets(uint32_t r,uint32_t end,uint32_t i,uint32_t word)
             }
             case 0x23:
                 s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);s.coord[2]=signbits(p[1],16);
-                submit_vertex();i+=2;break;
+                A0_VERTEX();i+=2;break;
             case 0x24:
                 s.coord[0]=signbits(p[0],10)*64;s.coord[1]=signbits(p[0]>>10,10)*64;
                 s.coord[2]=signbits(p[0]>>20,10)*64;
-                submit_vertex();i++;break;
-            case 0x25:s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);submit_vertex();i++;break;
-            case 0x26:s.coord[0]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);submit_vertex();i++;break;
-            case 0x27:s.coord[1]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);submit_vertex();i++;break;
+                A0_VERTEX();i++;break;
+            case 0x25:s.coord[0]=signbits(p[0],16);s.coord[1]=signbits(p[0]>>16,16);A0_VERTEX();i++;break;
+            case 0x26:s.coord[0]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);A0_VERTEX();i++;break;
+            case 0x27:s.coord[1]=signbits(p[0],16);s.coord[2]=signbits(p[0]>>16,16);A0_VERTEX();i++;break;
             case 0x28:
                 s.coord[0]+=signbits(p[0],10);s.coord[1]+=signbits(p[0]>>10,10);s.coord[2]+=signbits(p[0]>>20,10);
-                submit_vertex();i++;break;
+                A0_VERTEX();i++;break;
             case 0x40:{
                 StreamCursor sc;
                 work_op(o,p,0);
+#ifdef HGSS_A0_DIAG
+                {
+                    int opaque = ((s.attr >> 16) & 31u) == 31u;
+                    int shadow = ((s.attr >> 4) & 3u) == 3u;
+                    int lit = (s.attr & 15u) != 0;
+                    int texgenHigh = ((s.texparam >> 30) & 3u) >= 2u;
+                    sA0Geo.begins++;
+                    sA0Geo.opaque += opaque;
+                    sA0Geo.shadow += shadow;
+                    sA0Geo.lit += lit;
+                    sA0Geo.texgenHigh += texgenHigh;
+                    sA0Geo.simpleCandidate += opaque && !shadow && !lit && !texgenHigh;
+                }
+#endif
                 i++;
                 sc.r=r;sc.end=end;sc.single=0;
                 sc.c.w=w;sc.c.count=count;sc.c.i=i;sc.c.word=word;
-                if(skip_hidden_vertices(&sc)){
+                {
+                    int hidden;
+#ifdef HGSS_A0_DIAG
+                    int sample = A0_GEO_SAMPLE();
+                    uint64_t t = sample ? A0GeoTick() : 0;
+#endif
+#ifdef HGSS_GX3D_LISTCACHE
+                    hidden = listcache_try(&sc) || skip_hidden_vertices(&sc);
+#else
+                    hidden = skip_hidden_vertices(&sc);
+#endif
+#ifdef HGSS_A0_DIAG
+                    if (sample) { sA0Geo.hiddenTicks += A0GeoTick() - t; sA0Geo.hiddenCalls++; }
+#endif
+                if(hidden){
                     if(sc.r!=r){
                         /* Ended in a later entry: go on there; in a block
                          * of packets where it stopped, a command of its own
@@ -2423,12 +3187,21 @@ static uint32_t work_packets(uint32_t r,uint32_t end,uint32_t i,uint32_t word)
                     }
                     i=sc.c.i;word=sc.c.word;
                 }
+                }
                 break;
             }
             case 0x70:case 0x71:case 0x72:
                 /* Tests are the game's (the shadow's) only. */
                 i+=sParamCount[o];break;
             default:
+#ifdef HGSS_A0_DIAG
+                if(o>=0x10 && o<=0x1c && A0_GEO_SAMPLE()) {
+                    uint64_t t=A0GeoTick();
+                    work_op(o,p,0);
+                    sA0Geo.matrixTicks+=A0GeoTick()-t;
+                    sA0Geo.matrixCalls++;
+                } else
+#endif
                 work_op(o,p,0);
                 i+=sParamCount[o];
                 break;
@@ -2624,6 +3397,9 @@ void NitroPort_Gx3dReset(void)
     s.pendingAttr=s.attr;
     s.boxVisible=1;s.ready=1;
     s.clipDirty=1;
+#ifdef HGSS_GX3D_LISTCACHE
+    listcache_reset();
+#endif
     {
         int i;
         for(i=0;i<4;i++)s.lightHalf[i][2]=-4096/2; /* light vectors (0,0,0) */

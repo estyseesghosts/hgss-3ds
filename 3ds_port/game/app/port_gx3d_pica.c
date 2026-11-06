@@ -62,6 +62,10 @@ static unsigned sDrawsCut;   /* draws left out for want of room ([perf]) */
  * no vertices, and may not from other faults. */
 static const char *sStage="idle";
 static u32 sLastDrawFirst,sLastDrawCount,sDraws;
+#ifdef HGSS_GX3D_INDEXED
+static const uint16_t *sIndexDraw;
+static int sIndexedDraw;
+#endif
 static void stage(const char *s){__atomic_store_n(&sStage,s,__ATOMIC_RELAXED);}
 static void draw_arrays(int first,int count)
 {
@@ -73,7 +77,11 @@ static void draw_arrays(int first,int count)
     __atomic_store_n(&sLastDrawFirst,(u32)first,__ATOMIC_RELAXED);
     __atomic_store_n(&sLastDrawCount,(u32)count,__ATOMIC_RELAXED);
     __atomic_fetch_add(&sDraws,1,__ATOMIC_RELAXED);
-    C3D_DrawArrays(GPU_TRIANGLES,first,count);
+#ifdef HGSS_GX3D_INDEXED
+    if(sIndexedDraw)C3D_DrawElements(GPU_TRIANGLES,count,C3D_UNSIGNED_SHORT,sIndexDraw+first);
+    else
+#endif
+        C3D_DrawArrays(GPU_TRIANGLES,first,count);
 }
 void NitroPort_PicaStage(const char *s){stage(s);}
 const char *NitroPort_PicaStageNow(unsigned *first,unsigned *count,unsigned *draws)
@@ -362,6 +370,12 @@ static u32 sFogColor;
 static C3D_FogLut sFogLut;
 static uint8_t sFogDensityRear;
 static NitroGx3dGpuVertex *sVertices[2];
+#ifdef HGSS_GX3D_INDEXED
+static uint16_t *sIndices[2];
+static NitroGx3dGpuVertex *sCompactTmp[2];
+static int sIndexed[2];
+static size_t sIndexCounts[2];
+#endif
 /* The finished images, read back: three, as one may be waiting to be
  * converted and another being converted (NitroPort_Gx3dSubmitRGBA8) while
  * the next is drawn into the third. */
@@ -379,6 +393,9 @@ static unsigned sEdgeChecks=60,sEdgeScenesWithIds;
 static int sBuffer;
 static NitroGx3dBatch *sBatches;
 static TexEntry sTextures[TEX_CACHE_ENTRIES];
+#ifdef HGSS_TEXTURE_HINT
+#include "port_texture_hint.h"
+#endif
 static size_t sTextureBytes;
 static uint32_t sFrame;
 static NitroGx3dTexBanks sBanks;
@@ -386,6 +403,20 @@ static NitroGx3dTexBanks sBanks;
  * time it took, for the [perf] line. */
 static volatile u32 sTexConverted;
 static volatile u64 sTexTexels,sTexTicks;
+#ifdef HGSS_TEXTURE_PROFILE
+static PicaTextureProfile sTexProfile;
+#define TP_ADD(field, value) __atomic_fetch_add(&sTexProfile.field, (u32)(value), __ATOMIC_RELAXED)
+#define TP_TICKS(field, start) TP_ADD(field, (svcGetSystemTick() - (start)) >> 8)
+void NitroPort_PicaTextureProfile(PicaTextureProfile *out)
+{
+#define TP_READ(field) out->field=__atomic_load_n(&sTexProfile.field,__ATOMIC_RELAXED)
+    TP_READ(lookups); TP_READ(hashes); TP_READ(conversions); TP_READ(newEntries);
+    TP_READ(evictions); TP_READ(failures); TP_READ(search); TP_READ(hash);
+    TP_READ(allocation); TP_READ(wait); TP_READ(convert); TP_READ(decode); TP_READ(flush);
+    TP_READ(worst); TP_READ(worstParam); TP_READ(worstBytes);
+#undef TP_READ
+}
+#endif
 
 static void free_texture(TexEntry *e)
 {
@@ -435,6 +466,14 @@ static void clean_up(void)
     for(i=0;i<2;i++){
         if(sVertices[i])linearFree(sVertices[i]);
         sVertices[i]=NULL;
+#ifdef HGSS_GX3D_INDEXED
+        if(sIndices[i])linearFree(sIndices[i]);
+        sIndices[i]=NULL;
+        if(sCompactTmp[i])free(sCompactTmp[i]);
+        sCompactTmp[i]=NULL;
+        sIndexed[i]=0;
+        sIndexCounts[i]=0;
+#endif
     }
     for(i=0;i<IMAGE_SLOTS;i++){
         if(sImages[i])linearFree(sImages[i]);
@@ -601,6 +640,14 @@ int NitroPort_PicaInit(void)
             continue;
         }
         if(!sVertices[i])return init_failed("the vertex buffers");
+#ifdef HGSS_GX3D_INDEXED
+        sIndices[i]=linearAlloc(NITRO_GX3D_PICA_MAX_VERTICES*sizeof(uint16_t));
+        if(!sIndices[i])return init_failed("the indexed vertex buffers");
+        /* CPU-only pack scratch: one scene's vertices, kept per slot like
+         * the vertex buffers themselves (same lifetime discipline). */
+        sCompactTmp[i]=malloc(NITRO_GX3D_PICA_MAX_VERTICES*sizeof(NitroGx3dGpuVertex));
+        if(!sCompactTmp[i])return init_failed("the indexed pack scratch");
+#endif
     }
     sBatches=malloc((MAX_BATCHES+SHADOW_BATCHES)*sizeof(*sBatches));
     if(!sBatches)return init_failed("the batches");
@@ -632,8 +679,21 @@ static TexEntry *evict_one(void)
         if(sFramesOwn && (int32_t)(e->lastFrame-sFlightFrame)>0)continue;   /* (this frame's) */
         if(!oldest || e->lastFrame<oldest->lastFrame)oldest=e;
     }
-    if(oldest && in_flight(oldest->lastFrame))settle();
-    if(oldest)free_texture(oldest);
+    if(oldest && in_flight(oldest->lastFrame)){
+#ifdef HGSS_TEXTURE_PROFILE
+        u64 start=svcGetSystemTick();
+#endif
+        settle();
+#ifdef HGSS_TEXTURE_PROFILE
+        TP_TICKS(wait,start);
+#endif
+    }
+    if(oldest){
+#ifdef HGSS_TEXTURE_PROFILE
+        TP_ADD(evictions,1);
+#endif
+        free_texture(oldest);
+    }
     return oldest;
 }
 
@@ -665,6 +725,17 @@ static int any_holes(const uint32_t *t,size_t n)
  * through NitroPort_Gx3dFilterTexels for the bilinear filter, or 2x2 until
  * its xBRZ is done (xbrz_work). 0 if there's no memory for the conversion. */
 static u32 sConversionSeq;
+#ifdef HGSS_TEXTURE_PROFILE
+static void profile_decode(uint32_t param,uint32_t palette,uint32_t *out)
+{
+    u64 start=svcGetSystemTick();
+    NitroPort_Gx3dDecodeTextureTiled(&sBanks,param,palette,out);
+    TP_TICKS(decode,start);
+}
+#define CONVERSION_DECODE(param,palette,out) profile_decode((param),(palette),(out))
+#else
+#define CONVERSION_DECODE(param,palette,out) NitroPort_Gx3dDecodeTextureTiled(&sBanks,(param),(palette),(out))
+#endif
 static int convert_texture(TexEntry *e,unsigned width,unsigned height)
 {
     uint32_t *lin,*out;
@@ -677,7 +748,7 @@ static int convert_texture(TexEntry *e,unsigned width,unsigned height)
         out=scratch(&sTexTiled,&sTexTiledWords,n*4u);
         lin=scratch(&sTexLinear,&sTexLinearWords,n);
         if(!lin||!out)return 0;
-        NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
+        CONVERSION_DECODE(e->param,e->palette,out);
         NitroPort_Gx3dUntileRGBA8(out,width,height,lin);
         e->holes=any_holes(lin,n);
         NitroPort_Gx3dFilterTexelsTiled(lin,width,height,2u,out);
@@ -694,13 +765,13 @@ static int convert_texture(TexEntry *e,unsigned width,unsigned height)
          * formats; half what the GPU reads in each of a frame's passes) */
         out=scratch(&sTexTiled,&sTexTiledWords,(size_t)width*height);
         if(!out)return 0;
-        NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
+        CONVERSION_DECODE(e->param,e->palette,out);
         e->holes=any_holes(out,(size_t)width*height);
         NitroPort_Gx3dPackRGBA5551(out,(uint16_t*)e->tex.data,(size_t)width*height);
         return 1;
     }
     if(!e->filtered){
-        NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,(uint32_t*)e->tex.data);
+        CONVERSION_DECODE(e->param,e->palette,(uint32_t*)e->tex.data);
         e->holes=any_holes((const uint32_t*)e->tex.data,(size_t)width*height);
         return 1;
     }
@@ -709,7 +780,7 @@ static int convert_texture(TexEntry *e,unsigned width,unsigned height)
     out=scratch(&sTexTiled,&sTexTiledWords,(size_t)width*height);
     lin=scratch(&sTexLinear,&sTexLinearWords,(size_t)width*height);
     if(!lin||!out)return 0;
-    NitroPort_Gx3dDecodeTextureTiled(&sBanks,e->param,e->palette,out);
+    CONVERSION_DECODE(e->param,e->palette,out);
     NitroPort_Gx3dUntileRGBA8(out,width,height,lin);
     e->holes=any_holes(lin,(size_t)width*height);
     NitroPort_Gx3dFilterTexelsTiled(lin,width,height,e->scale,(uint32_t*)e->tex.data);
@@ -839,6 +910,9 @@ static void xbrz_work(void)
  * memory for it. sBoundCut is set for it. */
 static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
 {
+#ifdef HGSS_TEXTURE_PROFILE
+    u64 profileStart=svcGetSystemTick(), profileStage;
+#endif
     TexEntry *e=NULL,*free_slot=NULL;
     unsigned width=NitroPort_Gx3dTexWidth(param);
     unsigned height=NitroPort_Gx3dTexHeight(param);
@@ -847,18 +921,33 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     int i;
     sBoundCut=0;
     sBoundHoles=1;
+#ifdef HGSS_TEXTURE_HINT
+    e=find_texture_hint(param,palette,&free_slot);
+#else
     for(i=0;i<TEX_CACHE_ENTRIES;i++){
         TexEntry *c=&sTextures[i];
         if(c->used && c->param==param && c->palette==palette){e=c;break;}
         if(!c->used && !free_slot)free_slot=c;
     }
+#endif
+#ifdef HGSS_TEXTURE_PROFILE
+    TP_ADD(lookups,1);
+    TP_TICKS(search,profileStart);
+#endif
     if(e && e->checkedFrame==sFrame){
         e->lastFrame=sFrame;
         sBoundCut=e->filtered?127:0;
         sBoundHoles=e->holes;
         return &e->tex;
     }
+#ifdef HGSS_TEXTURE_PROFILE
+    profileStage=svcGetSystemTick();
+#endif
     hash=NitroPort_Gx3dTextureHash(&sBanks,param,palette);
+#ifdef HGSS_TEXTURE_PROFILE
+    TP_ADD(hashes,1);
+    TP_TICKS(hash,profileStage);
+#endif
     if(e && e->hash==hash){
         e->checkedFrame=e->lastFrame=sFrame;
         sBoundCut=e->filtered?127:0;
@@ -869,8 +958,19 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
     sRecvTexKnown=0;
     /* (changed: made again where it is; drawn since the GPU last caught
      * up, this frame's draws included, while it has a frame) */
-    if(e && sFlightFrame!=sSafeFrame && (int32_t)(e->lastFrame-sSafeFrame)>0)settle();
+    if(e && sFlightFrame!=sSafeFrame && (int32_t)(e->lastFrame-sSafeFrame)>0){
+#ifdef HGSS_TEXTURE_PROFILE
+        profileStage=svcGetSystemTick();
+#endif
+        settle();
+#ifdef HGSS_TEXTURE_PROFILE
+        TP_TICKS(wait,profileStage);
+#endif
+    }
     if(!e){
+#ifdef HGSS_TEXTURE_PROFILE
+        profileStage=svcGetSystemTick();
+#endif
         /* 2x2 texels a texel when sharp, if it fits (the PICA's 1024 and
          * the cache), else as it is; 16 bits a texel where that's exact */
         unsigned scale=(sTexMode>=2 && width*2u<=1024u && height*2u<=1024u)?2u:1u;
@@ -887,7 +987,12 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         }
         if(!free_slot){
             free_slot=evict_one();
-            if(!free_slot)return NULL;
+            if(!free_slot){
+#ifdef HGSS_TEXTURE_PROFILE
+                TP_TICKS(allocation,profileStage); TP_ADD(failures,1);
+#endif
+                return NULL;
+            }
         }
         e=free_slot;
         memset(e,0,sizeof(*e));
@@ -900,7 +1005,12 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
                 scale=1u;
                 break;
             }
-            if(!evict_one())return NULL;
+            if(!evict_one()){
+#ifdef HGSS_TEXTURE_PROFILE
+                TP_TICKS(allocation,profileStage); TP_ADD(failures,1);
+#endif
+                return NULL;
+            }
         }
         e->scale=scale;
         e->packed=packed;
@@ -914,14 +1024,37 @@ static C3D_Tex *get_texture(uint32_t param,uint32_t palette)
         e->palette=palette;
         e->bytes=bytes*scale*scale;
         sTextureBytes+=e->bytes;
+#ifdef HGSS_TEXTURE_PROFILE
+        TP_ADD(newEntries,1);
+        TP_TICKS(allocation,profileStage);
+#endif
     }
     {
         u64 start=svcGetSystemTick();
         if(!convert_texture(e,width,height)){
+#ifdef HGSS_TEXTURE_PROFILE
+            TP_TICKS(convert,start); TP_ADD(failures,1);
+#endif
             free_texture(e);
             return NULL;
         }
+#ifdef HGSS_TEXTURE_PROFILE
+        TP_TICKS(convert,start);
+        profileStage=svcGetSystemTick();
+#endif
         C3D_TexFlush(&e->tex);
+#ifdef HGSS_TEXTURE_PROFILE
+        TP_TICKS(flush,profileStage);
+        TP_ADD(conversions,1);
+        {
+            u32 elapsed=(u32)((svcGetSystemTick()-profileStart)>>8);
+            if(elapsed>__atomic_load_n(&sTexProfile.worst,__ATOMIC_RELAXED)){
+                __atomic_store_n(&sTexProfile.worstParam,param,__ATOMIC_RELAXED);
+                __atomic_store_n(&sTexProfile.worstBytes,(u32)e->bytes,__ATOMIC_RELAXED);
+                __atomic_store_n(&sTexProfile.worst,elapsed,__ATOMIC_RELEASE);
+            }
+        }
+#endif
         sTexTicks+=svcGetSystemTick()-start;
         sTexTexels+=(u64)width*height;
         sTexConverted++;
@@ -992,9 +1125,20 @@ enum {
     DRAW_COMBINER=1u<<4
 };
 static unsigned sDrawStateSet;
+#ifdef HGSS_GX3D_STATEDEDUP
+/* G5: the stencil op is also loop-invariant within a pass (the tests above
+ * already are). Skip re-issuing an identical op; every pass starts by
+ * forgetting it in draw_state_reset, so no state leaks across the
+ * outline/shadow/compositor boundaries (O3-3D-2). */
+static int sStencilOpKnown;
+static GPU_STENCILOP sStencilOpFail, sStencilOpZFail, sStencilOpZPass;
+#endif
 static void draw_state_reset(void)
 {
     sDrawStateSet=0;
+#ifdef HGSS_GX3D_STATEDEDUP
+    sStencilOpKnown=0;
+#endif
 }
 static void set_alpha_test(int enable,GPU_TESTFUNC function,int ref)
 {
@@ -1055,6 +1199,18 @@ static void set_combiner_cached(uint32_t attr,int textured)
     sDrawState.combinerAttr=attr;
     sDrawState.combinerTextured=textured;
     sDrawStateSet|=DRAW_COMBINER;
+}
+static void set_stencil_op(GPU_STENCILOP fail,GPU_STENCILOP zfail,GPU_STENCILOP zpass)
+{
+#ifdef HGSS_GX3D_STATEDEDUP
+    if(sStencilOpKnown && sStencilOpFail==fail && sStencilOpZFail==zfail &&
+       sStencilOpZPass==zpass)return;
+    sStencilOpFail=fail;
+    sStencilOpZFail=zfail;
+    sStencilOpZPass=zpass;
+    sStencilOpKnown=1;
+#endif
+    C3D_StencilOp(fail,zfail,zpass);
 }
 
 /* DS 5-bit colour to 8 bits. */
@@ -1283,6 +1439,23 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     count=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
                                      NITRO_GX3D_PICA_MAX_VERTICES,
                                      sBatches,MAX_BATCHES,&nbatches,&lost);
+#ifdef HGSS_GX3D_INDEXED
+    sIndexed[slot]=0;
+    sIndexCounts[slot]=0;
+    if(NitroPort_Gx3dIndexedEligible(sShadowWanted,sDisp3d,1,sCompactTmp[slot]!=NULL) &&
+       NitroPort_Gx3dHasLocalReuse(sVertices[slot],count,sBatches,nbatches)){
+        size_t originalCount=count;
+        size_t compact=NitroPort_Gx3dCompactBatches(sVertices[slot],count,sBatches,nbatches,
+                                                    sIndices[slot],NITRO_GX3D_PICA_MAX_VERTICES,
+                                                    sCompactTmp[slot]);
+        /* 0 with input means the pack was impossible: keep arrays. */
+        if(compact!=0 || originalCount==0){
+            sIndexCounts[slot]=originalCount;
+            count=compact;
+            sIndexed[slot]=1;
+        }
+    }
+#endif
     if(dropped)*dropped+=lost;
     normalize_depth(sVertices[slot],count,scene->swap_param);
     setup_fog();
@@ -1332,6 +1505,10 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
         NitroPort_PicaSetView(&identity,0.0f,1.0f);
     }
     NitroPort_PicaBindVertices(sVertices[slot]);
+#ifdef HGSS_GX3D_INDEXED
+    sIndexedDraw=sIndexed[slot];
+    sIndexDraw=sIndices[slot];
+#endif
     buffers=C3D_GetBufInfo();
     (void)buffers;
     C3D_CullFace(GPU_CULL_NONE);
@@ -1344,6 +1521,10 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
     if(count){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(count*sizeof(NitroGx3dGpuVertex)));
+#ifdef HGSS_GX3D_INDEXED
+        if(sIndexed[slot])GSPGPU_FlushDataCache(sIndices[slot],
+                                                (u32)(sIndexCounts[slot]*sizeof(uint16_t)));
+#endif
     }
     for(b=0;b<nbatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
@@ -1371,7 +1552,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
          * it): the DS doesn't draw a translucent pixel over a translucent
          * one of the same polygon ID. Opaque pixels set it to 0xFF. */
         set_stencil_test(true,GPU_ALWAYS,0xFF,0xFF,0xFF);
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+        set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         if(!batch->translucent){
             set_alpha_test(true,GPU_GREATER,0);
             set_alpha_blend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,
@@ -1438,7 +1619,7 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
             set_alpha_test(true,GPU_GREATER,batch->translucent?254:0);
             set_depth_test(true,GPU_EQUAL,0);
             set_stencil_test(true,GPU_ALWAYS,(int)((attr>>24)&63u),0xFF,0xFF);
-            C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+            set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
             draw_arrays((int)batch->first,(int)batch->count);
         }
     }
@@ -1447,6 +1628,10 @@ int NitroPort_PicaRender(const NitroGx3dScene *scene, unsigned *dropped)
      * the GPU reads here is flushed already (vertices above, textures in
      * get_texture). No C3D_FrameSync either: it waits for a V-blank. */
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
+#ifdef HGSS_GX3D_INDEXED
+    sIndexedDraw=0;
+    sIndexDraw=NULL;
+#endif
     NitroPort_PicaNoteCmdUse();
     t1=svcGetSystemTick();
     /* An image buffer not waiting to be converted nor being converted:
@@ -1569,26 +1754,110 @@ static int shadow_finite(void)
     }
     return isfinite(sShadow.bias)!=0;
 }
-int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped)
+#ifdef HGSS_A0_DIAG
+/* Display-thread owned; sample every prepared scene and convert ticks only
+ * at reporting. Timings are wall time and include preemption. */
+static struct {
+    u64 batchTicks, compactTicks, depthFlushTicks;
+    u64 batchVertexBytes, compactVertexBytes, indexBytes, flushedBytes;
+    unsigned scenes, indexed, noReuse, shadowBlocked, edgeBlocked, edgeOption, scratchMissing;
+} sA0Pica;
+#endif
+int NitroPort_PicaPrepareScene(const NitroGx3dScene *scene,unsigned *dropped,int outlinesPossible)
 {
     u64 t0=svcGetSystemTick();
+#ifdef HGSS_A0_DIAG
+    u64 a0Stage;
+#endif
     unsigned lost=0;
     u32 clear;
     int slot;
+    (void)outlinesPossible;
     if(dropped)*dropped=scene ? scene->dropped : 0;
     if(!sProgramReady||!scene)return -1;
     scene_registers(scene);
     slot=sBuffer;
     sBuffer^=1;
+#ifdef HGSS_A0_DIAG
+    a0Stage=svcGetSystemTick();
+#endif
     sPreparedCount=NitroPort_Gx3dBuildBatches(scene,sVertices[slot],
                                               NITRO_GX3D_PICA_MAX_VERTICES,
                                               sBatches,MAX_BATCHES,&sPreparedBatches,&lost);
+#ifdef HGSS_A0_DIAG
+    sA0Pica.batchTicks+=svcGetSystemTick()-a0Stage;
+    sA0Pica.batchVertexBytes+=(u64)sPreparedCount*sizeof(NitroGx3dGpuVertex);
+    a0Stage=svcGetSystemTick();
+#endif
+#ifdef HGSS_GX3D_INDEXED
+    sIndexed[slot]=0;
+    sIndexCounts[slot]=0;
+#ifdef HGSS_A0_DIAG
+    if(sShadowWanted) sA0Pica.shadowBlocked++;
+    if(outlinesPossible && (sDisp3d & (1u << 5))) sA0Pica.edgeBlocked++;
+    if(sEdgeMarking) sA0Pica.edgeOption++;
+    if(!sCompactTmp[slot]) sA0Pica.scratchMissing++;
+#endif
+    if(NitroPort_Gx3dIndexedEligible(sShadowWanted,sDisp3d,outlinesPossible,sCompactTmp[slot]!=NULL) &&
+       NitroPort_Gx3dHasLocalReuse(sVertices[slot],sPreparedCount,sBatches,sPreparedBatches)){
+        size_t originalCount=sPreparedCount;
+        size_t compact=NitroPort_Gx3dCompactBatches(sVertices[slot],sPreparedCount,
+                                                    sBatches,sPreparedBatches,sIndices[slot],
+                                                    NITRO_GX3D_PICA_MAX_VERTICES,
+                                                    sCompactTmp[slot]);
+        if(compact!=0 || originalCount==0){
+            sIndexCounts[slot]=originalCount;
+            sPreparedCount=compact;
+            sIndexed[slot]=1;
+        }
+    }
+#ifdef HGSS_A0_DIAG
+    else if(NitroPort_Gx3dIndexedEligible(sShadowWanted,sDisp3d,outlinesPossible,sCompactTmp[slot]!=NULL))
+        sA0Pica.noReuse++;
+#endif
+#endif
+#ifdef HGSS_A0_DIAG
+    sA0Pica.compactTicks+=svcGetSystemTick()-a0Stage;
+#ifdef HGSS_GX3D_INDEXED
+    if(sIndexed[slot]) {
+        sA0Pica.indexed++;
+        sA0Pica.compactVertexBytes+=(u64)sPreparedCount*sizeof(NitroGx3dGpuVertex);
+        sA0Pica.indexBytes+=(u64)sIndexCounts[slot]*sizeof(uint16_t);
+    }
+#endif
+    a0Stage=svcGetSystemTick();
+#endif
     if(dropped)*dropped+=lost;
     normalize_depth(sVertices[slot],sPreparedCount,scene->swap_param);
     if(sPreparedCount){
         GSPGPU_FlushDataCache(sVertices[slot],
                         (u32)(sPreparedCount*sizeof(NitroGx3dGpuVertex)));
+#ifdef HGSS_GX3D_INDEXED
+        if(sIndexed[slot])GSPGPU_FlushDataCache(sIndices[slot],
+                                                (u32)(sIndexCounts[slot]*sizeof(uint16_t)));
+#endif
     }
+#ifdef HGSS_A0_DIAG
+    sA0Pica.depthFlushTicks+=svcGetSystemTick()-a0Stage;
+    sA0Pica.flushedBytes+=(u64)sPreparedCount*sizeof(NitroGx3dGpuVertex);
+#ifdef HGSS_GX3D_INDEXED
+    if(sIndexed[slot]) sA0Pica.flushedBytes+=(u64)sIndexCounts[slot]*sizeof(uint16_t);
+#endif
+    if(++sA0Pica.scenes==120) {
+        NitroPort_Log("[a0] pica 120 scenes wall ms: batches %.2f compact %.2f depth+flush %.2f; bytes: batch-vertex %llu compact-vertex %llu indices %llu flushed %llu",
+                      (double)sA0Pica.batchTicks*1000.0/(double)SYSCLOCK_ARM11,
+                      (double)sA0Pica.compactTicks*1000.0/(double)SYSCLOCK_ARM11,
+                      (double)sA0Pica.depthFlushTicks*1000.0/(double)SYSCLOCK_ARM11,
+                      (unsigned long long)sA0Pica.batchVertexBytes,
+                      (unsigned long long)sA0Pica.compactVertexBytes,
+                      (unsigned long long)sA0Pica.indexBytes,
+                      (unsigned long long)sA0Pica.flushedBytes);
+        NitroPort_Log("[a0] pica indexed: %u scenes, no-reuse %u, blocked shadow %u scene-edges %u scratch %u; global-edge-option %u (reasons may overlap)",
+                      sA0Pica.indexed, sA0Pica.noReuse, sA0Pica.shadowBlocked, sA0Pica.edgeBlocked,
+                      sA0Pica.scratchMissing, sA0Pica.edgeOption);
+        memset(&sA0Pica,0,sizeof(sA0Pica));
+    }
+#endif
     sPrepared=slot;
     sPreparedSerial++;   /* (the outline passes' lists are for another) */
     sPreparedSwap=scene->swap_param;
@@ -2214,7 +2483,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
         C3D_SetViewport(0,0,fb->width,fb->height);
         begin_pass(view,&shifted);
         draw_state_reset();
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+        set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         set_alpha_blend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
         for(b=0;b<sPreparedBatches;b++){
             const NitroGx3dBatch *batch=&sBatches[b];
@@ -2245,7 +2514,7 @@ static void mark_edges(const PicaView *view,const NitroGx3dEdgeSetup *edges)
         C3D_SetViewport(0,0,fb->width,fb->height);
         begin_pass(view,&view->rect);
         draw_state_reset();
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
+        set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
         if(edges->antialias){
             C3D_BlendingColor(0x88000000u);   /* 17/32 */
             set_alpha_blend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,
@@ -2540,7 +2809,7 @@ static void draw_shadow_receivers(const PicaView *view)
     /* Compare only bit 0: reference 0xFE compares as 0, whereas the
      * opaque pass's 0xFF compares as 1. REPLACE writes 0xFE after shading. */
     set_stencil_test(true,GPU_NOTEQUAL,0xFE,0x01,0xFF);
-    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+    set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
     set_alpha_blend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_ZERO,GPU_ZERO,GPU_ONE);
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
@@ -2559,7 +2828,7 @@ static void draw_shadow_receivers(const PicaView *view)
      * scene's own program and may write stencil again. */
     C3D_BindProgram(&sProgram);
     begin_pass(view,&view->rect);
-    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+    set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
 }
 
 void NitroPort_PicaDrawScene(const PicaView *view)
@@ -2598,6 +2867,10 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     fog_begin();
     sBoundTexKnown=0;
     NitroPort_PicaBindVertices(sVertices[sPrepared]);
+#ifdef HGSS_GX3D_INDEXED
+    sIndexedDraw=sIndexed[sPrepared];
+    sIndexDraw=sIndices[sPrepared];
+#endif
     C3D_SetFrameBuf(view->fb);
     C3D_SetViewport(0,0,view->fb->width,view->fb->height);
     begin_pass(view,&view->rect);
@@ -2607,7 +2880,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     set_alpha_test(true,GPU_GREATER,0);
     /* The opaque polygons, as the classic path draws them (see there);
      * then the sun shadows' light over them, if there are. */
-    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+    set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
     for(b=0;b<sPreparedBatches;b++){
         const NitroGx3dBatch *batch=&sBatches[b];
         uint32_t attr=batch->polygon_attr;
@@ -2697,7 +2970,7 @@ void NitroPort_PicaDrawScene(const PicaView *view)
         if(!room_for_draw())break;
         bind_batch_cached(batch,b);
         batch_fog(attr);
-        C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
+        set_stencil_op(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_REPLACE);
         set_alpha_test(true,GPU_GREATER,0);
         set_stencil_test(true,GPU_NOTEQUAL,(int)(64u|((attr>>24)&63u)),0xFF,0xFF);
         if(blend){
@@ -2720,5 +2993,9 @@ void NitroPort_PicaDrawScene(const PicaView *view)
     scissor_off();
     NitroPort_PicaProfileMark("the translucent polygons");
     stage("the scene drawn");
+#ifdef HGSS_GX3D_INDEXED
+    sIndexedDraw=0;
+    sIndexDraw=NULL;
+#endif
 }
 #endif

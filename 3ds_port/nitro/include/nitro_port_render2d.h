@@ -162,6 +162,51 @@ int NitroPort_Render2DSplitIfChanged(int engine, uint16_t *under, NitroRender2DS
  * a screen not drawn (the lower menu's panel showing the map) whose
  * brightness still counts (the menu fades with it). */
 unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
+/* Half-A L1/L3 switches, owned by the shell's port.ini: referenced-range
+ * engine-B hashing (off by default) and its full-hash diagnostic. */
+void NitroPort_Render2DSetReferenceHash(int enabled, int diagnostic);
+/* Half-A L4: engine-B band redraw (off by default) and its diagnostic. */
+void NitroPort_Render2DSetPartialB(int enabled, int diagnostic);
+void NitroPort_Render2DSetPartialBChar(int enabled);
+void NitroPort_Render2DPartialBCharStats(uint64_t *takes);
+/* L4's dirty band for the frame (kind 2 = band [y0, y1)); consumed by the
+ * L5 publish path. */
+void NitroPort_Render2DPartialBand(int engine, int *kind, int *y0, int *y1);
+/* L4 attribution: takes, unchanged skips, whole fallbacks, band scanlines. */
+void NitroPort_Render2DPartialBStats(uint64_t *frames, uint64_t *objTakes, uint64_t *bgTakes,
+                                     uint64_t *unchangedZero, uint64_t *fallbacks,
+                                     uint64_t *partialLines, unsigned *diagMismatch);
+/* L4 engagement debug: why Try bails (-1) and whether Refresh keeps state. */
+void NitroPort_Render2DPartialBDebug(uint64_t *tryUnmodelled, uint64_t *tryUnderMismatch,
+                                     uint64_t *refreshAdopts, uint64_t *refreshInvalidates,
+                                     uint64_t *epilogueInvalidates, uint64_t *epilogueEntries,
+                                     uint64_t *tryPostRender, uint64_t *rangeEntryB);
+#ifdef HGSS_A0_DIAG
+/* L4 whole-fallback attribution. Branch reasons are exclusive; rest
+ * subterms may overlap when more than one input changes. */
+typedef struct NitroPartialBReasons {
+    uint64_t shared, rest, extPal, objWide, bgKind, bgRegs, bgLines, bgChar;
+    uint64_t bgNoMap, bgNoBand, bgWide, mixed;
+    uint64_t restLayout, restRegs, restVramCnt, restPower, restPalette, restLines, restOther;
+    uint64_t regWords[28], lineWords[28]; /* overlapping changes by I/O offset */
+    uint64_t bgCharLayer[4];
+    uint32_t regChangedBits[28], regBefore[28], regAfter[28];
+} NitroPartialBReasons;
+void NitroPort_Render2DPartialBReasons(NitroPartialBReasons *out);
+/* A0 redraw attribution: per-engine counts of which legacy term triggered
+ * each decision, plus hashed bytes and rendered scanlines. */
+typedef struct NitroRedrawStats {
+    uint64_t flat, reuseHit, reuseScroll, forced, firstNote;
+    uint64_t layoutChanged, regsChanged, paletteChanged, oamChanged, miscChanged;
+    uint64_t vramChanged, unchanged;
+    uint64_t vramBytes, scanlines, smallBytes;
+} NitroRedrawStats;
+void NitroPort_Render2DRedrawStats(int engine, NitroRedrawStats *out);
+#endif
+/* Half-A L3 accounting: bytes hashed by the referenced-range engine-B
+ * signature vs the full-hash path, and diagnostic disagreements. */
+void NitroPort_Render2DRefHashStats(uint64_t *refBytes, uint64_t *fullBytes,
+                                    unsigned *disagreements);
 
 /* Slice S5 reject reasons: why a text BG stays on the software path.
  * Indices into NitroRender2DProfile.gpuBgReject (GpuBgOf's checks, in

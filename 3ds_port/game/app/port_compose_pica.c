@@ -1056,26 +1056,18 @@ static int compose_init(const ComposeConfig *config, int small)
         NitroPort_Log("[compose] not enough memory for a second command list");
         goto fail;
     }
-    /* The lower screen as the menu, after everything the display needs:
-     * without the memory for its picture, the lower screen stays the DS's,
-     * filling the screen. */
+    /* Half-A A-M1: the lower screen's menu/map textures stay unallocated
+     * here (2 x 512x256x2 B + 2 x 256x256x2 B = 768 KiB of linear memory
+     * held back for 3D textures now and the Half-B atlas later). They are
+     * materialized on first menu demand in the lower-screen decision below;
+     * until then the lower screen stays the DS's, exactly as when the old
+     * eager allocation failed. HGSS never demands them. */
     for (i = 0; i < 2; i++) {
-        sMenuTexData[i] = linearAlloc((size_t)MENU_TEX_W * MENU_TEX_H * 2u);
-        sMapTexData[i] = linearAlloc((size_t)MAP_TEX_W * MAP_TEX_H * 2u);
+        sMenuTexData[i] = NULL;
+        sMapTexData[i] = NULL;
     }
-    if (!sMenuTexData[0] || !sMenuTexData[1] || !sMapTexData[0] || !sMapTexData[1]) {
-        NitroPort_Log("[compose] no linear memory for the lower screen's menu: the DS's lower screen instead");
-        for (i = 0; i < 2; i++) {
-            if (sMenuTexData[i]) {
-                linearFree(sMenuTexData[i]);
-                sMenuTexData[i] = NULL;
-            }
-            if (sMapTexData[i]) {
-                linearFree(sMapTexData[i]);
-                sMapTexData[i] = NULL;
-            }
-        }
-    }
+    NitroPort_Log("[compose] lower menu/map textures lazy: 768 KiB linear held back until first menu use (%lu KB free)",
+                  (unsigned long)(linearSpaceFree() / 1024u));
     /* (last, as it can do without: BG quads on the GPU,
      * NitroPort_ComposeDrawsBgs; the OBJ atlas allocates itself lazily) */
     sBgsAvailable = 1;
@@ -1176,6 +1168,48 @@ uint32_t NitroPort_ComposePublished(int engine)
 {
     (void)engine;
     return __atomic_load_n(&sSeq, __ATOMIC_ACQUIRE);
+}
+
+/* ------------------------------------------------- Half-A L5: engine-B
+ * band-diff publish.
+ *
+ * Engine B already publishes through publish_bands below (1 texel a
+ * pixel): an unchanged picture converts and flushes 0 bytes, and a
+ * changed one converts only the bands the shadow diff found. This switch
+ * (off by default, port.ini bandPubB) adds accounting that proves it per
+ * engine (converted/flushed bytes, uploaded bands), plus a checked hint:
+ * L4's dirty band must cover changes since the previous picture. An older
+ * texture set may also need historical bands; the diff still uploads them.
+ * A shell-side writer can add current changes outside the hint.
+ * Nothing about the upload changes when the switch is off. */
+static int sBandPublishB = 0, sBandPublishDiag = 0;
+static u64 sBandConvBytes[2], sBandFlushBytes[2];
+static u32 sBandHinted[2], sBandUploaded[2], sBandSubsetViol[2];
+
+/* Half-A L5's band, from nitro_port_render2d.h. kind 2 is a band [y0, y1). */
+
+void NitroPort_ComposeSetBandPublish(int enabled, int diagnostic)
+{
+    int on = enabled != 0, diag = diagnostic != 0;
+
+    if (on == sBandPublishB && diag == sBandPublishDiag) {
+        return;
+    }
+    sBandPublishB = on;
+    sBandPublishDiag = diag;
+    NitroPort_Log("[compose] bandPubB=%s (engine-B band-diff upload accounting; default off)",
+                  on ? "on" : "off");
+    NitroPort_Log("[compose] bandPubBDiag=%s (dirty-band subset violations logged)", diag ? "on" : "off");
+}
+
+void NitroPort_ComposeBandPublishStats(u64 *convBytes, u64 *flushBytes,
+                                       u32 *hinted, u32 *uploaded, u32 *subsetViol)
+{
+    if (convBytes) *convBytes = sBandConvBytes[1];
+    if (flushBytes) *flushBytes = sBandFlushBytes[1];
+    if (hinted) *hinted = sBandHinted[1];
+    if (uploaded) *uploaded = sBandUploaded[1];
+    if (subsetViol) *subsetViol = sBandSubsetViol[1];
 }
 
 static u32 widen5(u32 v)
@@ -1340,18 +1374,29 @@ static void publish_bands(int e, const ComposeLayers *l, Screen *scr, LayerSet *
     NitroPublishShadow *sh = &sShadow[e];
     uint16_t *c16 = sConverted16[e];
     size_t band;
-    uint32_t gen, any;
-    int bands, b, from, known, hasOver, overH, overBands;
+    uint32_t gen, any, prevUnderGen = 0;
+    int bands, b, from, known, shadowValid, hasOver, overH, overBands;
+    /* Half-A L5: L4's dirty band for this frame (kind 2), when enabled
+     * for engine B. The diff below stays authoritative; the hint only
+     * proves the upload stays inside it. */
+    int hintKind = 0, hintY0 = 0, hintY1 = 0;
 
     if (h <= 0 || h > NITRO_PUBLISH_MAX_H || (h & 7) || (w & 7) ||
         (size_t)w * (size_t)h > NITRO_PUBLISH_MAX_PIXELS) {
         publish_whole(e, l, scr, set, w, h);
         return;
     }
+    if (sBandPublishB && e == 1) {
+        NitroPort_Render2DPartialBand(1, &hintKind, &hintY0, &hintY1);
+        if (hintKind == 2) {
+            sBandHinted[1]++;
+        }
+    }
     bands = h / 4;
     band = (size_t)w * 4u;
     gen = ++sh->gen;
     known = set->pub.heldBy == sh && set->pub.heldWidth == w && set->pub.heldHeight == h;
+    shadowValid = sh->underValid && sh->width == w && sh->height == h;
 
     /* What changed since the last picture. */
     if (!sh->underValid || sh->width != w || sh->height != h) {
@@ -1392,14 +1437,43 @@ static void publish_bands(int e, const ComposeLayers *l, Screen *scr, LayerSet *
             NitroPort_Tile16(c16 + (size_t)t0 * 8u * w, w, rows, (uint16_t *)set->under + (size_t)t0 * 8u * scr->texW,
                              scr->texW);
             flush_texture((uint16_t *)set->under + (size_t)t0 * 8u * scr->texW, (u32)scr->texW * (u32)rows * 2u);
+            if (sBandPublishB && e == 1) {
+                sBandConvBytes[1] += (u64)w * (u64)rows * 2u;
+                sBandFlushBytes[1] += (u64)scr->texW * (u64)rows * 2u;
+            }
             from = -1;
         }
     }
     set->pub.heldBy = sh;
     set->pub.heldWidth = w;
     set->pub.heldHeight = h;
+    prevUnderGen = set->pub.underGen;
     set->pub.underGen = gen;
     set->pub.over16 = 0;   /* (RGBA8 here) */
+    if (sBandPublishB && e == 1 && hintKind == 2 && known && prevUnderGen != 0 && shadowValid) {
+        /* An older texture set needs historical uploads outside this frame's
+         * hint. Only a change marked with the current generation challenges
+         * the hint; the physical upload count still includes stale bands. */
+        int uploaded = 0, bad = 0;
+
+        for (b = 0; b < bands; b++) {
+            if (sh->underChanged[b] <= prevUnderGen) {
+                continue;
+            }
+            uploaded++;
+            if (sh->underChanged[b] == gen && (b * 4 < hintY0 || b * 4 + 4 > hintY1)) {
+                bad++;
+            }
+        }
+        sBandUploaded[1] += (u32)uploaded;
+        if (bad != 0) {
+            sBandSubsetViol[1] += (u32)bad;
+            if (sBandPublishDiag) {
+                NitroPort_Log("[compose] bandPubB subset violation: %d band(s) outside [%d, %d)",
+                              bad, hintY0, hintY1);
+            }
+        }
+    }
     hasOver = l->has3d && l->over != NULL;
     if (!hasOver) {
         /* (not drawn nor kept: all of it again when there is one) */
@@ -2505,6 +2579,43 @@ static void master_brightness(const Screen *scr, const ComposeLayers *info)
 int NitroPort_ComposeLowerMenuShown(void)
 {
     return __atomic_load_n(&sScreens[1].shownMenu, __ATOMIC_ACQUIRE);
+}
+
+/* Half-A A-M1: materialize the lower menu/map textures on first menu
+ * demand (see the lazy init in compose_init). Returns 1 with all four
+ * textures live, else 0 with none (the DS's lower screen instead, as when
+ * the old eager allocation failed). Runs on the compositor's thread, like
+ * the menu-texture uploads below it. */
+static int EnsureLowerMenuTextures(void)
+{
+    int i;
+
+    if (sMenuTexData[0] != NULL) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        sMenuTexData[i] = linearAlloc((size_t)MENU_TEX_W * MENU_TEX_H * 2u);
+        sMapTexData[i] = linearAlloc((size_t)MAP_TEX_W * MAP_TEX_H * 2u);
+    }
+    if (!sMenuTexData[0] || !sMenuTexData[1] || !sMapTexData[0] || !sMapTexData[1]) {
+        NitroPort_Log("[compose] no linear memory for the lower screen's menu: the DS's lower screen instead");
+        for (i = 0; i < 2; i++) {
+            if (sMenuTexData[i]) {
+                linearFree(sMenuTexData[i]);
+                sMenuTexData[i] = NULL;
+            }
+            if (sMapTexData[i]) {
+                linearFree(sMapTexData[i]);
+                sMapTexData[i] = NULL;
+            }
+        }
+        NitroPort_LowerMenuSetAvailable(0);
+        return 0;
+    }
+    NitroPort_Log("[compose] lower menu/map textures materialized: 768 KiB linear (%lu KB free)",
+                  (unsigned long)(linearSpaceFree() / 1024u));
+    NitroPort_LowerMenuSetAvailable(1);
+    return 1;
 }
 
 /* The menu's picture into the texture not used last, when it's changed:
@@ -3693,10 +3804,15 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         has3d = !(s == 0 && keptBlack) && !(s == 1 && keptShown && sMenuFade >= 16) && screen3d && set->info.has3d &&
                 !set->info.displayOff && scene != NULL;
         /* The lower screen as the menu: in the field (the game says), with
-         * its textures; or kept shown while the game swaps what's under it
-         * (its panel black or the map: whatever the DS's lower screen is
-         * then). The 3D on that screen goes in the panel (an app shown
-         * there: the summary's Pokemon), not with the map. */
+         * its textures (materialized on first demand: A-M1); or kept shown
+         * while the game swaps what's under it (its panel black or the map:
+         * whatever the DS's lower screen is then). The 3D on that screen
+         * goes in the panel (an app shown there: the summary's Pokemon),
+         * not with the map. */
+        if (s == 1 && sMenuTexData[0] == NULL &&
+            ((!set->info.displayOff && NitroPort_LowerMenuOn()) || keptShown)) {
+            EnsureLowerMenuTextures();
+        }
         menu[s] = s == 1 && sMenuTexData[0] != NULL &&
                   ((!set->info.displayOff && NitroPort_LowerMenuOn()) || keptShown);
         if (menu[s] && (sMenuPanel == NITRO_LOWERMENU_PANEL_MAP || sMenuFade >= 16)) {
@@ -3792,7 +3908,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     /* (an in-between scene has its scene's serial: told apart) */
     if (scene != NULL && (!sScenePrepared || sceneSerial * 2u + (mid ? 1u : 0u) != sPreparedScene)) {
         prepareTicks = svcGetSystemTick();
-        NitroPort_PicaPrepareScene(scene, NULL);
+        /* Preparation must preserve array vertices whenever any later pass
+         * can use the outline buffers, even if this eye disables outlines. */
+        NitroPort_PicaPrepareScene(scene, NULL, sEdgeDepth[0] != NULL);
         prepareTicks = svcGetSystemTick() - prepareTicks;
         sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;

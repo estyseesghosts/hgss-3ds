@@ -1,7 +1,18 @@
 #include <nitro_port_gx3d_vertex.h>
+#include <stddef.h>
 #include <string.h>
 #include <math.h>
 static uint8_t color8(unsigned v) { return (uint8_t)((v<<3)|(v>>2)); }
+
+static int gpu_vertex_equal(const NitroGx3dGpuVertex *a,
+                            const NitroGx3dGpuVertex *b)
+{
+    unsigned i;
+    for (i = 0; i < 4; ++i) if (a->position[i] != b->position[i]) return 0;
+    for (i = 0; i < 4; ++i) if (a->color[i] != b->color[i]) return 0;
+    for (i = 0; i < 2; ++i) if (a->uv[i] != b->uv[i]) return 0;
+    return 1;
+}
 /* PICA depth is mapped to 0 (near) ... 1 (far) by citro3d's
  * viewport mapping. With GPU_LESS and a maximum-depth clear, near wins. */
 float NitroPort_Gx3dDepthValue(const NitroGx3dVertex *vertex,
@@ -356,6 +367,65 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
     if(batch_count)*batch_count=nb;
     if(dropped)*dropped=lost;
     return count;
+}
+
+/* G2 compaction window: strip/fan reuse is adjacent, so a bounded window
+ * keeps the pack O(window * n) instead of O(n^2). A distant duplicate is
+ * left duplicated; the pixels are identical either way. */
+#define GX3D_COMPACT_WINDOW 32u
+
+int NitroPort_Gx3dHasLocalReuse(const NitroGx3dGpuVertex *vertices, size_t vertex_count,
+                               const NitroGx3dBatch *batches, size_t batch_count)
+{
+    size_t b, probes = 0;
+    if (!vertices || !batches) return 0;
+    for (b = 0; b < batch_count && probes < 256; b++) {
+        size_t first = batches[b].first, count = batches[b].count;
+        size_t j, step;
+        if (first > vertex_count || count > vertex_count - first) return 0;
+        step = count > 32 ? count / 32 : 1;
+        for (j = 1; j < count && probes < 256; j += step, probes++) {
+            size_t k, lo = j > 6 ? j - 6 : 0;
+            for (k = lo; k < j; k++)
+                if (gpu_vertex_equal(&vertices[first + k], &vertices[first + j])) return 1;
+        }
+    }
+    return 0;
+}
+
+size_t NitroPort_Gx3dCompactBatches(NitroGx3dGpuVertex *vertices,
+                                    size_t vertex_count,
+                                    NitroGx3dBatch *batches, size_t batch_count,
+                                    uint16_t *indices, size_t index_capacity,
+                                    NitroGx3dGpuVertex *tmp)
+{
+    size_t b, dst = 0, written = 0;
+    /* 0 with nonzero input means "could not pack": the caller keeps the
+     * plain arrays path. Nothing observable is mutated on that path. */
+    if (!vertices || !batches || !indices || !tmp ||
+        index_capacity < vertex_count || vertex_count > 65535u)
+        return 0;
+    for (b = 0; b < batch_count; ++b) {
+        if (batches[b].first + batches[b].count > vertex_count)
+            return 0;
+    }
+    memcpy(tmp, vertices, vertex_count * sizeof(*tmp));
+    for (b = 0; b < batch_count; ++b) {
+        size_t src_first = batches[b].first;
+        size_t src_count = batches[b].count;
+        size_t begin = dst, j;
+        for (j = 0; j < src_count; ++j) {
+            NitroGx3dGpuVertex v = tmp[src_first + j];
+            size_t k, lo = dst > begin + GX3D_COMPACT_WINDOW ? dst - GX3D_COMPACT_WINDOW : begin;
+            for (k = lo; k < dst; ++k)
+                if (gpu_vertex_equal(&vertices[k], &v)) break;
+            if (k == dst) vertices[dst++] = v;
+            indices[written++] = (uint16_t)k;
+        }
+        batches[b].first = (uint32_t)(written - src_count);
+        batches[b].count = (uint32_t)src_count;
+    }
+    return dst;
 }
 
 size_t NitroPort_Gx3dBuildShadowBatches(const NitroGx3dScene *scene, size_t first,

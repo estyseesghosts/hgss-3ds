@@ -383,11 +383,88 @@ static bool VBlankStart(s32 priority);
 static void VBlankStop(void);
 static void GpuComposeLoop(void);
 
+#ifdef HGSS_A0_DIAG
+static void A0ThreadRunning(const char *role);
+/* Lowest-priority probes count completed batches, not CPU cycles. Their
+ * startup calibration measures the available idle rate on each core; OS
+ * scheduling and the requested core-1 share are part of that baseline. */
+static Thread sA0IdleThread[2];
+static volatile bool sA0IdleRunning;
+static bool sA0IdleAlive[2];
+typedef struct { u64 count; unsigned char padding[56]; } A0IdleCounter;
+static A0IdleCounter sA0IdleCounter[2] __attribute__((aligned(64)));
+static u64 sA0IdleCal[2], sA0IdleLast[2];
+static u64 sA0IdleCalTicks;
+
+static void A0IdleMain(void *arg)
+{
+    int core = (int)(uintptr_t)arg;
+
+    while (__atomic_load_n(&sA0IdleRunning, __ATOMIC_RELAXED)) {
+        for (unsigned i = 0; i < 4096; i++) __asm__ volatile("" ::: "memory");
+        __atomic_fetch_add(&sA0IdleCounter[core].count, 4096u, __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(&sA0IdleAlive[core], false, __ATOMIC_RELEASE);
+    threadExit(0);
+}
+
+static void A0IdleStart(void)
+{
+    u64 start;
+    u64 before[2];
+
+    __atomic_store_n(&sA0IdleRunning, true, __ATOMIC_RELAXED);
+    for (int core = 0; core < 2; core++) {
+        __atomic_store_n(&sA0IdleAlive[core], true, __ATOMIC_RELEASE);
+        sA0IdleThread[core] = threadCreate(A0IdleMain, (void *)(uintptr_t)core,
+                                           8 * 1024, 0x3f, core, false);
+        if (!sA0IdleThread[core])
+            __atomic_store_n(&sA0IdleAlive[core], false, __ATOMIC_RELEASE);
+    }
+    for (int core = 0; core < 2; core++)
+        before[core] = __atomic_load_n(&sA0IdleCounter[core].count, __ATOMIC_RELAXED);
+    start = svcGetSystemTick();
+    svcSleepThread(250000000LL);
+    sA0IdleCalTicks = svcGetSystemTick() - start;
+    for (int core = 0; core < 2; core++)
+        sA0IdleCal[core] = __atomic_load_n(&sA0IdleCounter[core].count, __ATOMIC_RELAXED) - before[core];
+    NitroPort_Log("[a0] idle calibration: %llu ticks core0 %llu core1 %llu counts (250ms before workers; system share included)",
+                  (unsigned long long)sA0IdleCalTicks,
+                  (unsigned long long)sA0IdleCal[0], (unsigned long long)sA0IdleCal[1]);
+    if (!sA0IdleThread[0] || !sA0IdleThread[1])
+        NitroPort_Log("[a0] idle probe creation failed for at least one core");
+}
+
+static void A0IdleStop(void)
+{
+    __atomic_store_n(&sA0IdleRunning, false, __ATOMIC_RELAXED);
+    for (int core = 0; core < 2; core++) {
+        if (sA0IdleThread[core]) {
+            u64 start = svcGetSystemTick();
+            while (__atomic_load_n(&sA0IdleAlive[core], __ATOMIC_ACQUIRE) &&
+                   svcGetSystemTick() - start < SYSCLOCK_ARM11)
+                svcSleepThread(1000000LL);
+            if (__atomic_load_n(&sA0IdleAlive[core], __ATOMIC_ACQUIRE) ||
+                R_FAILED(threadJoin(sA0IdleThread[core], 1000000000LL))) {
+                NitroPort_Log("[a0] idle probe %d did not stop", core);
+                sThreadsStuck = true;
+            }
+            /* Keep the stack until process exit: some hardware has reported
+             * a completed join before a thread fully exits. */
+            sA0IdleThread[core] = NULL;
+        }
+    }
+}
+#else
+#define A0ThreadRunning(role) ((void)0)
+#endif
+
 static void GpuMain(void *arg)
 {
     s32 priority = 0x30;
 
     (void)arg;
+    A0ThreadRunning("display");
     if (!NitroPort_PicaInit()) {
         NitroPort_Log("[gx3d] citro3d init failed; there is no display");
         sGpuRunning = false;
@@ -479,6 +556,7 @@ static uint64_t GeoTicks(void *arg) { (void)arg; return svcGetSystemTick(); }
 static void GeoMain(void *arg)
 {
     (void)arg;
+    A0ThreadRunning("geometry");
     NitroPort_Gx3dThreadMain(&sGeoRunning);
     threadExit(0);
 }
@@ -627,6 +705,10 @@ typedef struct Drawer {
     volatile bool quit;
     volatile bool aOnTop;
     volatile u32 stamp;
+    volatile bool offerB;
+    u32 lastBStamp;
+    bool lastAOnTop;
+    volatile unsigned bSkips;
     u32 images;
     /* [perf]: the frames it was handed, and where their time went (all
      * written on the drawer's thread, read by the game's thread at the log). */
@@ -638,7 +720,7 @@ typedef struct Drawer {
     volatile u64 screenRenderTicks[2]; /* physical top/bottom, wall ticks */
     volatile unsigned screenRenderCalls[2];
     u64 logTicks, logRenderTicks, logPublishTicks;
-    unsigned logCount, logDrawn;
+    unsigned logCount, logDrawn, logBskips;
     u64 logScreenRenderTicks[2];
     unsigned logScreenRenderCalls[2];
 } Drawer;
@@ -647,6 +729,11 @@ static Drawer sDrawers[2];
 static int sDrawerCount;
 static bool sAOnTop;
 static volatile bool sMustDraw[2] = { true, true };
+#ifdef HGSS_A0_DIAG
+/* A0: forced full redraws bypassing the unchanged check (toast, publish
+ * failure, resume). Indexed by physical screen (0 = top, 1 = bottom). */
+static volatile unsigned sA0MustDraw[2];
+#endif
 /* How many drawers were handed the frame in flight. The last one to finish
  * wakes the display thread: one compose per game frame on an Old 3DS (one
  * drawer, both screens), one for the pair on a New 3DS. */
@@ -680,6 +767,33 @@ static const char *sToastLabel;
 static volatile u64 sToastUntil;
 static volatile bool sToastDirty;
 
+/* Half-A lower-screen experiments.  All are off unless explicitly selected
+ * in port.ini; the ordinary build retains the established policy. */
+static int sIniLower30;
+static int sIniDrawerAB;
+static int sIniRefHashB;
+static int sIniRefHashDiag;
+static int sIniPartialB;
+static int sIniPartialBDiag;
+static int sIniPartialBChar;
+static int sIniBandPubB;
+static int sIniBandPubBDiag;
+
+#ifdef HGSS_A0_DIAG
+/* A0 thread topology (O3THR-0): first line of each worker, logging the
+ * effective core and priority. Requested placement is static in the
+ * creation calls below; a hardware drop proves by these lines which
+ * core-1 workers actually exist and run. */
+static void A0ThreadRunning(const char *role)
+{
+    s32 prio = -1;
+
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    NitroPort_Log("[a0] thread %s: running on core %d at prio 0x%02x",
+                  role, (int)svcGetProcessorID(), (unsigned)prio);
+}
+#endif
+
 
 static bool OnTop(int engine, bool aOnTop)
 {
@@ -694,6 +808,7 @@ uint32_t NitroPort_Gx3dStamp(void)
 static void VBlankMain(void *unused)
 {
     (void)unused;
+    A0ThreadRunning("vblank");
     while (__atomic_load_n(&sVBlankRunning, __ATOMIC_ACQUIRE)) {
         gspWaitForVBlank();
         if (!__atomic_load_n(&sVBlankRunning, __ATOMIC_ACQUIRE)) {
@@ -891,6 +1006,9 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
     }
     if (sMustDraw[top ? 0 : 1]) {
         sMustDraw[top ? 0 : 1] = false;
+#ifdef HGSS_A0_DIAG
+        __atomic_fetch_add(&sA0MustDraw[top ? 0 : 1], 1u, __ATOMIC_RELAXED);
+#endif
         NitroPort_Render2DSplit(engine, layers->under, &split);
         drawn = 1;
     } else {
@@ -986,6 +1104,8 @@ static void DrawerMain(void *arg)
 {
     Drawer *d = arg;
 
+    A0ThreadRunning("drawer");
+
     for (;;) {
         u64 start;
         bool drawA = false, drawB = false;
@@ -1008,21 +1128,15 @@ static void DrawerMain(void *arg)
             __atomic_fetch_add(&d->screenRenderTicks[screen], t, __ATOMIC_RELAXED);
             __atomic_fetch_add(&d->screenRenderCalls[screen], 1u, __ATOMIC_RELAXED);
         }
-        if (d->screens & ENGINE_B) {
-            u64 t = svcGetSystemTick();
-            int screen = OnTop(1, d->aOnTop) ? 0 : 1;
-
-            drawB = RenderScreen(1, d->aOnTop, d->stamp);
-            t = svcGetSystemTick() - t;
-            __atomic_fetch_add(&d->renderTicks, t, __ATOMIC_RELAXED);
-            __atomic_fetch_add(&d->screenRenderTicks[screen], t, __ATOMIC_RELAXED);
-            __atomic_fetch_add(&d->screenRenderCalls[screen], 1u, __ATOMIC_RELAXED);
-        }
+        /* Publish A before doing any lower-screen work.  On the single
+         * Old-3DS drawer this is the important ordering: a slow B render may
+         * not hold an otherwise complete upper picture hostage. */
         __atomic_store_n(&d->reading, false, __ATOMIC_RELEASE);
         if (d->screens & ENGINE_A) {
             u64 t = svcGetSystemTick();
 
-            if ((drawA ? ShowScreen(0, d->aOnTop) : !sMustDraw[OnTop(0, d->aOnTop) ? 0 : 1])) {
+            if ((drawA ? ShowScreen(0, d->aOnTop) :
+                 !sMustDraw[OnTop(0, d->aOnTop) ? 0 : 1])) {
                 NitroPort_Compose2DCurrent(OnTop(0, d->aOnTop) ? 0 : 1, d->stamp);
             }
             __atomic_fetch_add(&d->publishTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
@@ -1030,10 +1144,37 @@ static void DrawerMain(void *arg)
         if (d->screens & ENGINE_A) {
             NitroPort_Compose2DDone(d->stamp);
         }
-        if (d->screens & ENGINE_B) {
+        if ((d->screens & ENGINE_B) && d->offerB) {
             u64 t = svcGetSystemTick();
+            int screen = OnTop(1, d->aOnTop) ? 0 : 1;
+            u32 now = NitroPort_ComposeVBlanks();
+            u32 age = now - d->stamp;
+            /* A deferred lower screen contributes no fresh picture. */
+            drawB = false;
+            int coherent = !sIniDrawerAB || d->lastAOnTop != d->aOnTop ||
+                           NitroPort_Render2DMasterBright(0, 1) !=
+                           NitroPort_Render2DMasterBright(1, 1);
 
-            if ((drawB ? ShowScreen(1, d->aOnTop) : !sMustDraw[OnTop(1, d->aOnTop) ? 0 : 1])) {
+            /* A newly available upper snapshot wins for at most two ticks.
+             * At age three B is forced, and swaps/fades always take the pair. */
+            if (sIniDrawerAB && age > 0 && age < 3 && !coherent) {
+                __atomic_fetch_add(&d->bSkips, 1u, __ATOMIC_RELAXED);
+                d->offerB = false;
+                drawB = false;
+            } else {
+                drawB = RenderScreen(1, d->aOnTop, d->stamp);
+                d->lastBStamp = d->stamp;
+                d->lastAOnTop = d->aOnTop;
+            }
+            if (d->offerB) {
+                u64 t2 = svcGetSystemTick() - t;
+                __atomic_fetch_add(&d->renderTicks, t2, __ATOMIC_RELAXED);
+                __atomic_fetch_add(&d->screenRenderTicks[screen], t2, __ATOMIC_RELAXED);
+                __atomic_fetch_add(&d->screenRenderCalls[screen], 1u, __ATOMIC_RELAXED);
+            }
+            t = svcGetSystemTick();
+            if (d->offerB && (drawB ? ShowScreen(1, d->aOnTop) :
+                              !sMustDraw[OnTop(1, d->aOnTop) ? 0 : 1])) {
                 NitroPort_Compose2DCurrent(OnTop(1, d->aOnTop) ? 0 : 1, d->stamp);
             }
             __atomic_fetch_add(&d->publishTicks, svcGetSystemTick() - t, __ATOMIC_RELAXED);
@@ -1162,12 +1303,13 @@ static bool DrawFrame(void)
             __atomic_add_fetch(&sDrawFramePending, 1, __ATOMIC_ACQ_REL);
             d->aOnTop = sAOnTop;
             d->stamp = NitroPort_ComposeVBlanks();
+            d->offerB = !sIniLower30 || ((d->stamp & 1u) == 0);
             d->images = images;
             if (d->screens & ENGINE_A) {
                 NitroPort_Render2DTakeState(0);
                 NitroPort_Compose2DHanded(d->stamp);
             }
-            if (d->screens & ENGINE_B) {
+            if ((d->screens & ENGINE_B) && d->offerB) {
                 NitroPort_Render2DTakeState(1);
             }
             __atomic_store_n(&d->reading, true, __ATOMIC_RELEASE);
@@ -1334,6 +1476,24 @@ static double PerfMsPer(u64 ticks, double count)
     return count > 0.0 ? (double)ticks * 1000.0 / (double)SYSCLOCK_ARM11 / count : 0.0;
 }
 
+#ifdef HGSS_TEXTURE_PROFILE
+/* Cumulative since boot so the first report includes cold-start conversions.
+ * Allocation includes eviction/wait; wait overlaps allocation. Quantization
+ * is 256 ticks per call, and counters wrap modulo 2^32 units. */
+static void PerfTextureProfile(void)
+{
+    PicaTextureProfile p;
+    const double ms=256000.0/(double)SYSCLOCK_ARM11;
+    NitroPort_PicaTextureProfile(&p);
+    NitroPort_Log("[texprof] cumulative lookups %lu hashes %lu conversions %lu new %lu evictions %lu failures %lu",
+                  p.lookups,p.hashes,p.conversions,p.newEntries,p.evictions,p.failures);
+    NitroPort_Log("[texprof] cumulative wall ms search %.2f hash %.2f alloc %.2f wait %.2f convert %.2f decode %.2f flush %.2f (alloc includes wait; convert includes decode)",
+                  p.search*ms,p.hash*ms,p.allocation*ms,p.wait*ms,p.convert*ms,p.decode*ms,p.flush*ms);
+    NitroPort_Log("[texprof] worst miss wall %.2f ms param %08lx bytes %lu (cumulative; snapshot may straddle conversion)",
+                  p.worst*ms,p.worstParam,p.worstBytes);
+}
+#endif
+
 static void PerfLog(u64 now)
 {
     u64 build, wait, publish, texels, texTicks, busy, producerWait, longest;
@@ -1347,6 +1507,9 @@ static void PerfLog(u64 now)
 
     NitroPort_PicaTimes(&build, &wait, &publish);
     NitroPort_PicaTextureStats(&converted, &texels, &texTicks);
+#ifdef HGSS_TEXTURE_PROFILE
+    PerfTextureProfile();
+#endif
     NitroPort_ComposeStats(&st);
     NitroPort_PicaCmdStats(&cmdPeak, &cmdCut);
     NitroPort_Gx3dThreadStats(&busy, &scenes, &skipped);
@@ -1359,6 +1522,10 @@ static void PerfLog(u64 now)
          * one has a complete interval to divide by. */
         sPerfHave = true;
         sPerfLastTick = now;
+#ifdef HGSS_A0_DIAG
+        for (i = 0; i < 2; i++)
+            sA0IdleLast[i] = __atomic_load_n(&sA0IdleCounter[i].count, __ATOMIC_RELAXED);
+#endif
         sPerfSoundTicks = soundTicks;
         sPerfAudioDropped = (u32)ndspGetDroppedFrames();
         sPerfAudioFrames = (u32)ndspGetFrameCount();
@@ -1402,6 +1569,7 @@ static void PerfLog(u64 now)
             d->logPublishTicks = __atomic_load_n(&d->publishTicks, __ATOMIC_RELAXED);
             d->logCount = __atomic_load_n(&d->count, __ATOMIC_RELAXED);
             d->logDrawn = __atomic_load_n(&d->drawn, __ATOMIC_RELAXED);
+            d->logBskips = __atomic_load_n(&d->bSkips, __ATOMIC_RELAXED);
             for (int screen = 0; screen < 2; screen++) {
                 d->logScreenRenderTicks[screen] = __atomic_load_n(&d->screenRenderTicks[screen], __ATOMIC_RELAXED);
                 d->logScreenRenderCalls[screen] = __atomic_load_n(&d->screenRenderCalls[screen], __ATOMIC_RELAXED);
@@ -1582,14 +1750,15 @@ static void PerfLog(u64 now)
         u64 publish = __atomic_load_n(&d->publishTicks, __ATOMIC_RELAXED) - d->logPublishTicks;
         unsigned count = __atomic_load_n(&d->count, __ATOMIC_RELAXED) - d->logCount;
         unsigned drawn = __atomic_load_n(&d->drawn, __ATOMIC_RELAXED) - d->logDrawn;
+        unsigned bskips = __atomic_load_n(&d->bSkips, __ATOMIC_RELAXED) - d->logBskips;
 
         NitroPort_Log("[perf] drawer %d (core %d, %s): %.1f frames/s, %.2f ms/frame, "
-                      "%.2f ms render, %.2f ms publish, %u drawn",
+                      "%.2f ms render, %.2f ms publish, %u drawn, %u lower deferred",
                       i, d->core,
                       d->screens == (ENGINE_A | ENGINE_B) ? "both screens"
                       : (d->screens == ENGINE_A) == sAOnTop ? "upper" : "lower",
                       PerfPerSecond(count, seconds), PerfMsPer(ticks, count),
-                      PerfMsPer(render, count), PerfMsPer(publish, count), drawn);
+                      PerfMsPer(render, count), PerfMsPer(publish, count), drawn, bskips);
         for (int screen = 0; screen < 2; screen++) {
             u64 st = __atomic_load_n(&d->screenRenderTicks[screen], __ATOMIC_RELAXED);
             unsigned sc = __atomic_load_n(&d->screenRenderCalls[screen], __ATOMIC_RELAXED);
@@ -1604,6 +1773,7 @@ static void PerfLog(u64 now)
         d->logPublishTicks += publish;
         d->logCount += count;
         d->logDrawn += drawn;
+        d->logBskips += bskips;
     }
     {
         /* Slice A: where the drawer render time goes (both engines combined;
@@ -1679,11 +1849,141 @@ static void PerfLog(u64 now)
          * run can say whether the split is still right. The game heap's
          * high-water is the number that matters: shrink it and it OOMs. */
         struct mallinfo mi = mallinfo();
+        unsigned long freeKB = (unsigned long)(linearSpaceFree() / 1024u);
+        static unsigned long sLinearLowKB;
 
         NitroPort_Log("[perf] mem: linear_free=%lu KB game_heap_used=%lu KB",
-                      (unsigned long)(linearSpaceFree() / 1024u),
+                      freeKB,
                       (unsigned long)(mi.uordblks / 1024u));
+        /* Half-A A-M1: name when linear drops (correlate the tick with scene
+         * transitions vs texture-cache growth in the [gx3d] line). */
+        if (sLinearLowKB == 0 || freeKB < sLinearLowKB) {
+            if (sLinearLowKB != 0 && sLinearLowKB - freeKB >= 256) {
+                NitroPort_Log("[perf] mem: linear low-water %lu KB (was %lu KB)",
+                              freeKB, sLinearLowKB);
+            }
+            sLinearLowKB = freeKB;
+        }
+        /* Half-A L3: referenced-range bytes vs the full 304 KiB sweep. */
+        if (sIniRefHashB || sIniRefHashDiag) {
+            uint64_t refB, fullB;
+            unsigned disag;
+
+            NitroPort_Render2DRefHashStats(&refB, &fullB, &disag);
+            NitroPort_Log("[perf] refHashB: %llu referenced bytes, %llu full-hash bytes, %u disagreements",
+                          (unsigned long long)refB, (unsigned long long)fullB, disag);
+        }
+        /* Half-A L4/L5: band takes vs whole renders; uploaded bytes. */
+        if (sIniPartialB || sIniPartialBDiag) {
+            uint64_t frames, objTakes, bgTakes, unchZero, fallbacks, partLines;
+            uint64_t tryUnmodelled, tryUnderMismatch, refreshAdopts, refreshInvalidates;
+            uint64_t epilogueInvalidates, epilogueEntries, tryPostRender, rangeEntryB;
+            unsigned diagMismatch;
+
+            NitroPort_Render2DPartialBStats(&frames, &objTakes, &bgTakes, &unchZero,
+                                            &fallbacks, &partLines, &diagMismatch);
+            NitroPort_Render2DPartialBDebug(&tryUnmodelled, &tryUnderMismatch,
+                                            &refreshAdopts, &refreshInvalidates,
+                                            &epilogueInvalidates, &epilogueEntries,
+                                            &tryPostRender, &rangeEntryB);
+            NitroPort_Log("[perf] partialB-dbg: %llu try-unmodelled, %llu try-under-mismatch, %llu refresh-adopts, %llu refresh-invalidates, %llu epilogue-invalidates, %llu epilogue-entries, %llu try-post-render, %llu range-entries",
+                          (unsigned long long)tryUnmodelled, (unsigned long long)tryUnderMismatch,
+                          (unsigned long long)refreshAdopts, (unsigned long long)refreshInvalidates,
+                          (unsigned long long)epilogueInvalidates, (unsigned long long)epilogueEntries,
+                          (unsigned long long)tryPostRender, (unsigned long long)rangeEntryB);
+            NitroPort_Log("[perf] partialB: %llu frames (%llu obj-band, %llu bg-band, %llu unchanged, %llu whole), %llu band lines, %u mismatches",
+                          (unsigned long long)frames, (unsigned long long)objTakes,
+                          (unsigned long long)bgTakes, (unsigned long long)unchZero,
+                          (unsigned long long)fallbacks, (unsigned long long)partLines,
+                          diagMismatch);
+            if (sIniPartialBChar) {
+                uint64_t charTakes;
+                NitroPort_Render2DPartialBCharStats(&charTakes);
+                NitroPort_Log("[perf] partialB-char: %llu text-character bands",
+                              (unsigned long long)charTakes);
+            }
+        }
+        if (sIniBandPubB || sIniBandPubBDiag) {
+            uint64_t convB, flushB;
+            uint32_t hinted, uploaded, viol;
+
+            NitroPort_ComposeBandPublishStats(&convB, &flushB, &hinted, &uploaded, &viol);
+            NitroPort_Log("[perf] bandPubB: %llu converted, %llu flushed bytes, %u hinted, %u uploaded bands, %u subset violations",
+                          (unsigned long long)convB, (unsigned long long)flushB,
+                          hinted, uploaded, viol);
+        }
+#ifdef HGSS_A0_DIAG
+        {
+            NitroRedrawStats r0, r1;
+            NitroPartialBReasons p;
+            unsigned mustTop, mustBottom;
+
+            NitroPort_Render2DRedrawStats(0, &r0);
+            NitroPort_Render2DRedrawStats(1, &r1);
+            NitroPort_Render2DPartialBReasons(&p);
+            mustTop = __atomic_load_n(&sA0MustDraw[0], __ATOMIC_RELAXED);
+            mustBottom = __atomic_load_n(&sA0MustDraw[1], __ATOMIC_RELAXED);
+            NitroPort_Log("[a0] redraw A: flat %llu reuseHit %llu reuseScroll %llu forced %llu firstNote %llu layout %llu regs %llu pal %llu oam %llu misc %llu vram %llu unchanged %llu",
+                          (unsigned long long)r0.flat, (unsigned long long)r0.reuseHit,
+                          (unsigned long long)r0.reuseScroll, (unsigned long long)r0.forced,
+                          (unsigned long long)r0.firstNote, (unsigned long long)r0.layoutChanged,
+                          (unsigned long long)r0.regsChanged, (unsigned long long)r0.paletteChanged,
+                          (unsigned long long)r0.oamChanged, (unsigned long long)r0.miscChanged,
+                          (unsigned long long)r0.vramChanged, (unsigned long long)r0.unchanged);
+            NitroPort_Log("[a0] redraw B: flat %llu reuseHit %llu reuseScroll %llu forced %llu firstNote %llu layout %llu regs %llu pal %llu oam %llu misc %llu vram %llu unchanged %llu mustDraw %u",
+                          (unsigned long long)r1.flat, (unsigned long long)r1.reuseHit,
+                          (unsigned long long)r1.reuseScroll, (unsigned long long)r1.forced,
+                          (unsigned long long)r1.firstNote, (unsigned long long)r1.layoutChanged,
+                          (unsigned long long)r1.regsChanged, (unsigned long long)r1.paletteChanged,
+                          (unsigned long long)r1.oamChanged, (unsigned long long)r1.miscChanged,
+                          (unsigned long long)r1.vramChanged, (unsigned long long)r1.unchanged,
+                          mustBottom);
+            NitroPort_Log("[a0] redraw bytes/scanlines A: small %llu vram %llu scan %llu; B: small %llu vram %llu scan %llu; mustDraw top %u",
+                          (unsigned long long)r0.smallBytes, (unsigned long long)r0.vramBytes,
+                          (unsigned long long)r0.scanlines, (unsigned long long)r1.smallBytes,
+                          (unsigned long long)r1.vramBytes, (unsigned long long)r1.scanlines,
+                          mustTop);
+            NitroPort_Log("[a0] partialB whole: shared %llu rest %llu extpal %llu obj-wide %llu bg-kind %llu bg-regs %llu bg-lines %llu bg-char %llu bg-no-map %llu bg-no-band %llu bg-wide %llu mixed %llu",
+                          (unsigned long long)p.shared, (unsigned long long)p.rest, (unsigned long long)p.extPal,
+                          (unsigned long long)p.objWide, (unsigned long long)p.bgKind,
+                          (unsigned long long)p.bgRegs, (unsigned long long)p.bgLines,
+                          (unsigned long long)p.bgChar, (unsigned long long)p.bgNoMap,
+                          (unsigned long long)p.bgNoBand, (unsigned long long)p.bgWide,
+                          (unsigned long long)p.mixed);
+            NitroPort_Log("[a0] partialB rest terms: layout %llu regs %llu vramcnt %llu power %llu palette %llu lines %llu other %llu (terms can overlap)",
+                          (unsigned long long)p.restLayout, (unsigned long long)p.restRegs,
+                          (unsigned long long)p.restVramCnt, (unsigned long long)p.restPower,
+                          (unsigned long long)p.restPalette, (unsigned long long)p.restLines,
+                          (unsigned long long)p.restOther);
+            NitroPort_Log("[a0] partialB bg-char layers: %llu/%llu/%llu/%llu",
+                          (unsigned long long)p.bgCharLayer[0], (unsigned long long)p.bgCharLayer[1],
+                          (unsigned long long)p.bgCharLayer[2], (unsigned long long)p.bgCharLayer[3]);
+            for (int i = 0; i < 28; i++) {
+                if (p.regWords[i] || p.lineWords[i])
+                    NitroPort_Log("[a0] partialB reg offset %02x: regs %llu lines %llu changed %08lx last %08lx->%08lx",
+                                  i * 4, (unsigned long long)p.regWords[i],
+                                  (unsigned long long)p.lineWords[i],
+                                  (unsigned long)p.regChangedBits[i], (unsigned long)p.regBefore[i],
+                                  (unsigned long)p.regAfter[i]);
+            }
+        }
+#endif
     }
+#ifdef HGSS_A0_DIAG
+    if (sA0IdleCalTicks && now > sPerfLastTick) {
+        double idle[2] = { -1.0, -1.0 };
+        for (i = 0; i < 2; i++) {
+            u64 count = __atomic_load_n(&sA0IdleCounter[i].count, __ATOMIC_RELAXED);
+            u64 delta = count - sA0IdleLast[i];
+            sA0IdleLast[i] = count;
+            if (sA0IdleCal[i])
+                idle[i] = 100.0 * (double)delta * (double)sA0IdleCalTicks /
+                          ((double)sA0IdleCal[i] * (double)(now - sPerfLastTick));
+        }
+        NitroPort_Log("[a0] idle probes: core0 %.1f%% core1 %.1f%% of calibrated idle throughput (-1 unavailable; includes system-share effects)",
+                      idle[0], idle[1]);
+    }
+#endif
     sPerfLastTick = now;
 }
 
@@ -2047,6 +2347,7 @@ static ndspWaveBuf sAudioWave[AUDIO_BLOCKS];
 static void AudioThread(void *arg)
 {
     (void)arg;
+    A0ThreadRunning("audio");
     while (sAudioRunning) {
         int slot = -1;
         int i;
@@ -2297,6 +2598,15 @@ static void ReadDisplayOptions(void)
     sIniDisplayCore = -1;
     sIniAudioCore = -1;
     sIniSched = 0;
+    sIniLower30 = 0;
+    sIniDrawerAB = 0;
+    sIniRefHashB = 0;
+    sIniRefHashDiag = 0;
+    sIniPartialB = 0;
+    sIniPartialBDiag = 0;
+    sIniPartialBChar = 0;
+    sIniBandPubB = 0;
+    sIniBandPubBDiag = 0;
     if (IniValue("filter", value, sizeof(value))) {
         if (strcmp(value, "sharp") == 0) {
             sIniFilter = COMPOSE_FILTER_SHARP;
@@ -2362,7 +2672,71 @@ static void ReadDisplayOptions(void)
         }
     }
     if (IniValue("lower30", value, sizeof(value))) {
-        NitroPort_Log("[perf] port.ini lower30=%s ignored; both engines are offered every tick", value);
+        if (!IniOnOff(value, &sIniLower30)) {
+            NitroPort_Log("[perf] port.ini lower30=%s is not on/off; using off", value);
+            sIniLower30 = 0;
+        }
+        NitroPort_Log("[perf] lower30=%s (engine B offered every other tick; input remains per tick)",
+                      sIniLower30 ? "on" : "off");
+    }
+    if (IniValue("drawerAB", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniDrawerAB)) {
+            NitroPort_Log("[perf] port.ini drawerAB=%s is not on/off; using off", value);
+            sIniDrawerAB = 0;
+        }
+        NitroPort_Log("[perf] drawerAB=%s (A publishes before B; mixed-rate pair)",
+                      sIniDrawerAB ? "on" : "off");
+    }
+    if (IniValue("refHashB", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniRefHashB)) {
+            NitroPort_Log("[perf] port.ini refHashB=%s is not on/off; using off", value);
+            sIniRefHashB = 0;
+        }
+        if (sIniRefHashB) {
+            NitroPort_Log("[perf] refHashB=on (referenced engine-B ranges)");
+        }
+    }
+    if (IniValue("refHashDiag", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniRefHashDiag)) {
+            NitroPort_Log("[perf] port.ini refHashDiag=%s is not on/off; using off", value);
+            sIniRefHashDiag = 0;
+        }
+    }
+    if (IniValue("partialB", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniPartialB)) {
+            NitroPort_Log("[perf] port.ini partialB=%s is not on/off; using off", value);
+            sIniPartialB = 0;
+        }
+        NitroPort_Log("[perf] partialB=%s (engine-B band redraw; default off)",
+                      sIniPartialB ? "on" : "off");
+    }
+    if (IniValue("partialBDiag", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniPartialBDiag)) {
+            NitroPort_Log("[perf] port.ini partialBDiag=%s is not on/off; using off", value);
+            sIniPartialBDiag = 0;
+        }
+    }
+    if (IniValue("partialBChar", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniPartialBChar)) {
+            NitroPort_Log("[perf] port.ini partialBChar=%s is not on/off; using off", value);
+            sIniPartialBChar = 0;
+        }
+        NitroPort_Log("[perf] partialBChar=%s (text character dirty bands; default off)",
+                      sIniPartialBChar ? "on" : "off");
+    }
+    if (IniValue("bandPubB", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniBandPubB)) {
+            NitroPort_Log("[perf] port.ini bandPubB=%s is not on/off; using off", value);
+            sIniBandPubB = 0;
+        }
+        NitroPort_Log("[perf] bandPubB=%s (engine-B band-diff upload accounting; default off)",
+                      sIniBandPubB ? "on" : "off");
+    }
+    if (IniValue("bandPubBDiag", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniBandPubBDiag)) {
+            NitroPort_Log("[perf] port.ini bandPubBDiag=%s is not on/off; using off", value);
+            sIniBandPubBDiag = 0;
+        }
     }
     if (IniValue("o3dsched", value, sizeof(value))) {
         if (strcmp(value, "default") == 0) {
@@ -2390,6 +2764,10 @@ static void ReadDisplayOptions(void)
     }
     NitroPort_Log("[perf] display options: filter %d, stereo %d, wide %d, texscale %d",
                   sIniFilter, sIniStereo, sIniWide, sIniTexScale);
+    NitroPort_Render2DSetReferenceHash(sIniRefHashB, sIniRefHashDiag);
+    NitroPort_Render2DSetPartialBChar(sIniPartialBChar);
+    NitroPort_Render2DSetPartialB(sIniPartialB, sIniPartialBDiag);
+    NitroPort_ComposeSetBandPublish(sIniBandPubB, sIniBandPubBDiag);
 }
 
 /* `script=PATH` in port.ini, or the default script path. */
@@ -2486,6 +2864,8 @@ static void GameThread(void *arg)
 {
     static ERRF_ExceptionData exceptionData;
     static uint8_t exceptionStack[8192] __attribute__((aligned(16)));
+
+    A0ThreadRunning("game");
 
     sGameThreadAlive = true;
     threadOnException(HgssOnException, exceptionStack + sizeof(exceptionStack), &exceptionData);
@@ -2707,6 +3087,12 @@ int main(int argc, char **argv)
     }
 
     NitroPort_Log(HEARTGOLD_APP_NAME " starting (build %s)", HGSS_BUILD_ID);
+#ifdef HGSS_A0_DIAG
+    NitroPort_Log("[a0] instrumentation revision halfA-reasons-geometry-idle-v2");
+#endif
+#ifdef HGSS_GX3D_INDEXED
+    NitroPort_Log("[gx3d] indexed eligibility revision scene-outline-buffers-reuse-probe-v2");
+#endif
     {
         bool isNew3ds = false;
 
@@ -2738,6 +3124,9 @@ int main(int argc, char **argv)
          * Idempotent with the display block's call below. */
         RequestCore1Share();
     }
+#ifdef HGSS_A0_DIAG
+    if (!sNew3ds) A0IdleStart();
+#endif
     if (R_SUCCEEDED(ndspInit())) {
         sAudio = true;
         ndspSetOutputMode(NDSP_OUTPUT_STEREO);
@@ -2874,6 +3263,9 @@ int main(int argc, char **argv)
                       (unsigned long)ndspGetDroppedFrames(),
                       (unsigned long)ndspGetFrameCount());
     }
+#ifdef HGSS_A0_DIAG
+    A0IdleStop();
+#endif
     NitroPort_Log("stopping (frame %lu)", sFrame);
     NitroPort_CardFlush();
     if (sGpuStopFailed || sThreadsStuck) {

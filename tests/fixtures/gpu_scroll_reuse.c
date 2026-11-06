@@ -221,22 +221,22 @@ static void vram_signature_case(void)
         const u8 *io = NitroPort_IoReg + (r->engine ? 0x1000 : 0);
         for (unsigned end = 0; end < 2; end++) {
             unsigned offset = end ? r->length - 1 : 0;
-            u32 before = EngineVramSignature(r->engine, io);
+            u32 before = EngineVramSignature(r->engine, io, NitroPort_Oam);
             r->bytes[offset] ^= 1;
-            if (EngineVramSignature(r->engine, io) == before)
+            if (EngineVramSignature(r->engine, io, NitroPort_Oam) == before)
                 fprintf(stderr, "signature collision region=%u offset=%u\n", i, offset);
-            CHECK(EngineVramSignature(r->engine, io) != before);
+            CHECK(EngineVramSignature(r->engine, io, NitroPort_Oam) != before);
             r->bytes[offset] ^= 1;
-            CHECK(EngineVramSignature(r->engine, io) == before);
+            CHECK(EngineVramSignature(r->engine, io, NitroPort_Oam) == before);
         }
     }
     /* LCDC display mode consumes the selected 128-KiB bank as well. */
     for (unsigned bank = 0; bank < 4; bank++) {
         wr32(0, (2u << 16) | (bank << 18));
         u8 *p = NitroPort_LcdcVram + bank * 0x20000 + 0x1ffff;
-        u32 before = EngineVramSignature(0, NitroPort_IoReg);
+        u32 before = EngineVramSignature(0, NitroPort_IoReg, NitroPort_Oam);
         *p ^= 1;
-        CHECK(EngineVramSignature(0, NitroPort_IoReg) != before);
+        CHECK(EngineVramSignature(0, NitroPort_IoReg, NitroPort_Oam) != before);
         *p ^= 1;
     }
 }

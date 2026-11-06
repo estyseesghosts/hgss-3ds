@@ -1,6 +1,30 @@
 # Current state
 
-**In progress (2026-11-04): W2 battle dialogue mirror fix, `4ae58a6` + patch 1910.**
+**In progress (2026-11-06): Half A (Old 3DS speed plan) wave 1+2
+integration and A0 diagnostic start, on top of `584305e`, all
+uncommitted.** Lane G (geometry) and Lane L (lower screen) were built
+by subagents; lead integrated, hardened, and wired build IDs, then
+started A0. See [the session record](agent-notes/halfA-session-2026-11-06.md);
+lane reports: [G wave 1](agent-notes/halfA-laneG-wave1.md),
+[L wave 1](agent-notes/halfA-laneL-wave1.md),
+[G wave 2](agent-notes/halfA-laneG-wave2.md),
+[L wave 2](agent-notes/halfA-laneL-wave2.md),
+[wave-1 integration](agent-notes/halfA-integration-wave1.md),
+[wave-2 integration + L4 dormancy](agent-notes/halfA-integration-wave2.md).
+`check_patches.py`: 87/87. Targeted suites green (Flag/BuildId 20,
+PerformanceWaveThree 6, gpu_scroll_reuse 1, new lane fixtures 10);
+`git diff --check` clean. Full `make test`/`port-tests` not run
+(container-only parts fail on macOS). Not staged for hardware; the
+only blocking open question is L4's in-game dormancy
+(0 band takes in Azahar despite bit-exact fixtures), next step is a
+clean A0 rebuild + re-smoke reading tryPostRender and the new A0
+redraw/mustDraw lines. G4, L6-conditional, and the rest of A0 (ledger,
+idle probe, stage counters, census) plus the D1 device drop are still
+open. The 2026-11-04 W2 battle-mirror item below is unchanged and still
+open alongside this work. (What follows is the previous current-state
+text, kept for continuity.)
+
+**Earlier item (2026-11-04): W2 battle dialogue mirror fix, `4ae58a6` + patch 1910.**
 The GPU-BG veto tested an overlay name that exists nowhere in `main.lsf`,
 so battles took quads and dialogue mirrored — the owner confirmed the
 mirror on Old 3DS hardware on pre-fix `b93c6ad`, ruling out an emulator

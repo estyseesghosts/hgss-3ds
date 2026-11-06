@@ -5,6 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #define NITRO_GX3D_PICA_MAX_VERTICES (3u * NITRO_GX3D_MAX_TRIANGLES)
+/* The indexed representation cannot feed the outline or shadow passes.
+ * Use the captured scene's edge-enable bit, not the global option alone. */
+static inline int NitroPort_Gx3dIndexedEligible(int shadowWanted, uint32_t disp3dcnt,
+                                               int outlinesPossible, int scratchAvailable)
+{
+    return !shadowWanted && !(outlinesPossible && (disp3dcnt & (1u << 5))) && scratchAvailable;
+}
 typedef struct NitroGx3dGpuVertex {
     float position[4];          /* clip-space x,y,z,w; perspective preserved */
     uint8_t color[4];           /* RGBA8 from RGB555, alpha is opaque for PR1 */
@@ -59,6 +66,26 @@ size_t NitroPort_Gx3dBuildBatches(const NitroGx3dScene *scene,
                                   NitroGx3dGpuVertex *out, size_t capacity,
                                   NitroGx3dBatch *batches, size_t max_batches,
                                   size_t *batch_count, unsigned *dropped);
+
+/* Optional G2 submission packing.  The input is the ordinary ordered
+ * triangle list.  Vertices are deduplicated within each state batch and the
+ * batch ranges become index ranges; draw order and batch boundaries remain
+ * unchanged.  Reads come from tmp (caller scratch for vertex_count
+ * entries), writes go to vertices, so overlapping batch ranges are safe.
+ * The match scan is a bounded window: strip/fan reuse is adjacent, distant
+ * duplicates are left duplicated, and either way the pixels are identical.
+ * Returns the compact vertex count, or 0 when packing is impossible (the
+ * caller then keeps the plain arrays path); on a 0 return with nonzero
+ * input nothing observable is mutated. */
+size_t NitroPort_Gx3dCompactBatches(NitroGx3dGpuVertex *vertices,
+                                    size_t vertex_count,
+                                    NitroGx3dBatch *batches, size_t batch_count,
+                                    uint16_t *indices, size_t index_capacity,
+                                    NitroGx3dGpuVertex *tmp);
+/* Cheap, bounded advisory probe. A false negative keeps array draws; it
+ * never changes geometry or ordering. */
+int NitroPort_Gx3dHasLocalReuse(const NitroGx3dGpuVertex *vertices, size_t vertex_count,
+                               const NitroGx3dBatch *batches, size_t batch_count);
 
 /* The scene's shadow-only triangles (shadow_triangles) for the sun
  * shadows' map, as NitroPort_Gx3dBuildBatches has the opaque ones: into
@@ -146,4 +173,58 @@ void NitroPort_Gx3dSimulateGpuSized(const NitroGx3dScene *scene, uint16_t *out55
  * (remaster.txt: shadows, grade, sun; NitroPort_PicaLook): sun shadows,
  * the colour grade, the sun fixed (degrees) or by the clock. */
 void NitroPort_Gx3dSimulateLook(int shadows, int grade, int fixedSun, float elevation, float azimuth);
+
+/* Half-A lane G, wave 2 (HGSS_GX3D_LISTCACHE, off unless the build defines
+ * it): cached display-list bounds. A vertex-bearing command run (BEGIN_VTXS
+ * to its END_VTXS or next BEGIN_VTXS) is keyed by the source address and
+ * length its words were handed over with, an allocation epoch, and a
+ * sampled content hash; the entry stores its object-space bounding box and
+ * the command state the hidden-list shortcut leaves behind. A hit
+ * transforms 8 box corners and runs the existing hidden test without
+ * scanning the vertex stream. Entries are plain .bss (no allocator use on
+ * the geometry path); when the flag is off none of this exists.
+ *
+ * Invalidation (the game-heap hook is NOT here: hooking OS_AllocFromHeap /
+ * OS_FreeToHeap in upstream lib/NitroSDK/src/os/os_alloc.c is a patch-stack
+ * job for the lead; see the report). Until it lands, the cache is still
+ * sound: the sampled hash is re-verified on every hit, and the diagnostic
+ * build re-hashes the full extent every N scenes and auto-disables on
+ * mismatch. The Note* calls below are that hook's targets. */
+#ifdef HGSS_GX3D_LISTCACHE
+/* A game-heap block was handed out / released (byte address and length).
+ * A release evicts overlapping cached ranges and bumps the epoch; a
+ * hand-out only records for the census. Safe to call from the game's
+ * thread while the geometry thread runs: eviction clears entries, and a
+ * torn lookup still faces the sampled-hash check. */
+void NitroPort_Gx3dListCacheNoteAlloc(const void *ptr, unsigned long len);
+void NitroPort_Gx3dListCacheNoteFree(const void *ptr, unsigned long len);
+/* Drop every entry at once (a coarse epoch bump without addresses). */
+void NitroPort_Gx3dListCacheEpochBump(void);
+/* Verify the next cache hit with a full-extent hash instead of waiting for
+ * the periodic audit (tests and the diagnostic build). */
+void NitroPort_Gx3dListCacheAuditNow(void);
+/* Cumulative counters, for the diagnostic log and tests. */
+typedef struct NitroGx3dListCacheStats {
+    uint32_t lookups, hits, inserts, evicts;
+    uint32_t sampleFails, resumeFails, audits, auditFails;
+    uint32_t untagged, disabled, entries, censusSources;
+} NitroGx3dListCacheStats;
+void NitroPort_Gx3dListCacheStats(NitroGx3dListCacheStats *out);
+#endif
+
+/* Half-A lane G, wave 2 (HGSS_GX3D_STATEDEDUP, off unless the build defines
+ * it): matrix-stack generation and redundant state skips. Every applied
+ * matrix/stack command bumps the generation (a future chunk key); a
+ * restore/load that provably leaves the stack unchanged is skipped, with
+ * no change to GXSTAT, the clip matrix or the lighting caches. */
+#ifdef HGSS_GX3D_STATEDEDUP
+/* The engine's matrix-stack generation (bumps on every applied matrix or
+ * stack-level/slot change, never on a skipped redundant command). */
+uint32_t NitroPort_Gx3dStackGeneration(void);
+typedef struct NitroGx3dMatrixDedupStats {
+    uint32_t modeSkip, loadSkip, identitySkip, restoreSkip, popSkip;
+    uint32_t generation;
+} NitroGx3dMatrixDedupStats;
+void NitroPort_Gx3dMatrixDedupStats(NitroGx3dMatrixDedupStats *out);
+#endif
 #endif

@@ -4358,7 +4358,7 @@ static void SnapshotOver(NitroRender2DSplit *split, BlendLineState *blendState, 
  * on the 3D itself and the master brightness are left to the compositor
  * (split->tint3d, split->masterBright). */
 static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *out, NitroRender2DSplit *split,
-                                                              int fixedWidth)
+                                                              int fixedWidth, int y0, int y1)
 {
     /* Each engine has its own (they may be drawn at the same time, on two
      * CPU cores). */
@@ -5077,7 +5077,7 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         split->scroll3dLines = 0;
     }
 
-    for (y = 0; y < e->height; y++) {
+    for (y = y0 < 0 ? 0 : y0; y < (y1 < 0 ? e->height : y1); y++) {
         u16 *row = out + y * width;
         BOOL objs;
         Target t;
@@ -5384,12 +5384,12 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     if(gx3dPixels)NitroPort_Gx3dReleaseImage(gx3dPixels);
 }
 
-static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split)
+static void DrawEngine(Engine *e, u16 *out, NitroRender2DSplit *split, int y0, int y1)
 {
     if (e->width == W) {
-        DrawEngineT(e, out, split, W);
+        DrawEngineT(e, out, split, W, y0, y1);
     } else {
-        DrawEngineT(e, out, split, 0);
+        DrawEngineT(e, out, split, 0, y0, y1);
     }
 }
 
@@ -5626,20 +5626,35 @@ static void SetUpEngine(Engine *e, int engine, const NitroRender2DSplit *split)
     }
 }
 
-static void Render(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePixels)
+/* Half-A L4 retained state, defined below. */
+static void PartialBRefresh(const Engine *e, NitroRender2DSplit *split, const u16 *under);
+static void PartialBInvalidate(void);
+static int sPartialB;
+static u64 sPartialEpilogueInvalidates;
+static u64 sPartialEpilogueEntries;
+static u64 sA0TryPostRender;
+static u64 sA0RangeEntryB;
+
+static void RenderRange(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePixels, int y0, int y1, int band)
 {
+#ifdef HGSS_A0_DIAG
+    if (engine) sA0RangeEntryB++;
+#endif
     Engine e;
     u32 dispcnt;
     u16 powcnt;
     u32 layout = split ? SplitLayoutSignature(engine, split) : 0;
     int snapshot = split ? split->snapshot : 0;
+    int graphics = 0, drew = 0;
 
     /* Invalidate before all early returns, including display-off/forced blank.
      * Forced draws also establish a new record, never inherit a stale one. */
     sSplitReuse[engine ? 1 : 0].valid = 0;
     sSplitReuse[engine ? 1 : 0].flat = 0;
     sCommittedTextOnly[engine ? 1 : 0] = 0;
-    sSplitPictureSerial[engine ? 1 : 0]++;
+    if (!band) {
+        sSplitPictureSerial[engine ? 1 : 0]++;
+    }
     SetUpEngine(&e, engine, split);
     e.reusePixels = reusePixels;
     if (split != NULL) {
@@ -5652,25 +5667,23 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePix
     /* The engine powered off: nothing on that screen. */
     if (!(powcnt & (e.isA ? 0x0002 : 0x0200))) {
         Fill(out, 0, e.width * e.height);
-        return;
-    }
-    if (dispcnt & 0x80) {                  /* forced blank: white */
+    } else if (dispcnt & 0x80) {                  /* forced blank: white */
         Fill(out, 0x7FFF, e.width * e.height);
-        return;
-    }
-    switch ((dispcnt >> 16) & (e.isA ? 3 : 1)) {
+    } else switch ((dispcnt >> 16) & (e.isA ? 3 : 1)) {
     case 0:                                /* display off: white */
         Fill(out, 0x7FFF, e.width * e.height);
-        return;
+        break;
     case 1: {
         int lines = e.height;
 
-        DrawEngine(&e, out, split);
-        if (e.height < lines) {
+        DrawEngine(&e, out, split, band ? y0 : 0, band ? y1 : -1);
+        if (!band && e.height < lines) {
             /* (a tall picture asked for with the 3D on: the DS's lines
              * drawn, the rest black) */
             Fill(out + e.width * e.height, 0, e.width * (lines - e.height));
         }
+        graphics = 1;
+        drew = 1;
         break;
     }
     case 2: {                              /* VRAM display: a bank in LCDC */
@@ -5682,18 +5695,42 @@ static void Render(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePix
             /* W is 256: shifts, not a divide and modulo per pixel. */
             out[(i >> 8) * e.width + e.origin + (i & 255)] = Rd16(bank, (u32)i * 2) & 0x7FFF;
         }
+        drew = 1;
         break;
     }
     default:
         NitroPort_Unimplemented("display mode: main memory display");
         Fill(out, 0, e.width * e.height);
-        return;
+        break;
     }
-    if (split == NULL) {
-        MasterBrightness(out, Rd16(e.io, 0x6C), e.width * e.height);
-    } else {
-        RememberSplit(engine, out, split, layout, snapshot);
+    /* The fills above return without this in the original Render: only a
+     * drawn graphics or VRAM-display picture resolves brightness or
+     * establishes a split record. */
+    if (drew) {
+        if (split == NULL) {
+            if (!band) {
+                MasterBrightness(out, Rd16(e.io, 0x6C), e.width * e.height);
+            }
+        } else {
+            RememberSplit(engine, out, split, layout, snapshot);
+        }
     }
+    /* Half-A L4: a whole engine-B render establishes (or drops, for fills)
+     * the retained state the next band decision compares against. */
+    if (!band && (engine ? 1 : 0) == 1 && sPartialB) {
+        sPartialEpilogueEntries++;
+        if (graphics && split != NULL) {
+            PartialBRefresh(&e, split, out);
+        } else {
+            sPartialEpilogueInvalidates++;
+            PartialBInvalidate();
+        }
+    }
+}
+
+static void Render(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePixels)
+{
+    RenderRange(engine, out, split, reusePixels, 0, -1, 0);
 }
 
 void NitroPort_Render2DBgOffsets(uint16_t out[8])
@@ -6411,8 +6448,10 @@ void NitroPort_Render2DTakeState(int engine)
 
 /* What an engine's picture is drawn from, in two parts: the small ones
  * (registers, palettes, OAM) and its VRAM (the most part: 864 KB for
- * engine A, read in full to work it out). */
-static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask)
+ * engine A, read in full to work it out). Half-A L4 splits the OAM out
+ * (skipOam) so engine B's change can be attributed to registers, OAM or
+ * tiles separately; skipping only omits that one hash from the chain. */
+static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask, int skipOam, int skipSwap)
 {
     BOOL isA = engine == 0;
     const State2D *st = &sState[isA ? 0 : 1];
@@ -6446,9 +6485,16 @@ static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask)
     }
     h = HashWords((const u8 *)regs, 0x70, h);
     h = HashWords(ioAll + 0x240, 0x10, h);              /* VRAMCNT */
-    h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;           /* POWCNT1 */
-    h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), 0x400, h);
-    h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
+    /* POWCNT1 bit 15 is the display swap-buffers request: raised every
+     * scene and cleared by VBlank, it flaps continuously while nothing
+     * drawn changes. The L4 retained signature (skipSwap) ignores it; the
+     * legacy path keeps the exact bit, where a swap can accompany a new
+     * 3D image that engine A must draw. */
+    h = (h ^ (Rd16(ioAll, 0x304) & (u32)(skipSwap ? ~0x8000u : ~0u))) * 16777619u;
+    h = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (isA ? 0 : 0x400), skipOam ? 0x200 : 0x400, h);
+    if (!skipOam) {
+        h = HashWords((snapshot ? st->oam : NitroPort_Oam) + (isA ? 0 : 0x400), 0x400, h);
+    }
     /* (an H-blank effect: each line's registers, but those two bits) */
     if (snapshot ? st->lines : NitroPort_LineRegs.active) {
         const u8(*lines)[NITRO_LINE_REGS] = snapshot ? st->lineRegs : NitroPort_LineRegs.regs[isA ? 0 : 1];
@@ -6467,7 +6513,26 @@ static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask)
     return h;
 }
 
-static u32 EngineVramSignature(int engine, const u8 *io)
+static int sRefHashB, sRefHashDiagnostic;
+static u64 sRefHashBytes, sFullHashBytes;
+static unsigned sRefHashDisagreements;
+/* Half-A L4: engine B's signature split into per-part pieces. rest (the
+ * caller) covers registers, BG palettes and layout; these cover one BG's
+ * registers, map and referenced tiles each, the OBJ tiles, and the OBJ and
+ * extended palettes. parts == NULL keeps the legacy combined hash below
+ * byte-identical; otherwise only the pieces are filled (the combined value
+ * is then meaningless and not returned). */
+typedef struct PartialBParts {
+    u32 bgReg[4];
+    u32 bgMap[4];
+    u32 bgChar[4];
+    u32 objTiles;
+    u32 objPal;
+    u32 extPal;
+} PartialBParts;
+static u32 EngineBReferencedSignature(const u8 *io, const u8 *oam, const u8 *pltt, int *modelled, PartialBParts *parts);
+
+static u32 EngineVramSignature(int engine, const u8 *io, const u8 *oam)
 {
     u32 h = 2166136261u;
 
@@ -6479,17 +6544,931 @@ static u32 EngineVramSignature(int engine, const u8 *io)
             h = HashWords(NitroPort_LcdcVram + ((Rd32(io, 0) >> 18) & 3) * 0x20000, 0x20000, h);
         }
     } else {
+        if (sRefHashB) {
+            int modelled = 1;
+            u32 ref = EngineBReferencedSignature(io, oam, oam == sState[1].oam ? sState[1].pltt : NitroPort_Pltt, &modelled, NULL);
+            if (modelled) return ref;
+            /* Unmodelled engine-B state (display off, VRAM/main-memory
+             * display, bitmap/large modes): the full hash below. */
+        }
         h = HashWords(NitroPort_DbBgVram, 0x20000, h);
         h = HashWords(NitroPort_DbObjVram, 0x20000, h);
         h = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, h);    /* H, I */
+        sFullHashBytes += 0x4C000;
     }
     return h;
 }
 
+/* L3: engine B's reference set.  This deliberately follows the same address
+ * calculations as the rasterizer: map extents, the tiles named by those
+ * maps, enabled extended palettes, and graphics for visible OAM entries.
+ * OAM/register changes remain in EngineSmallSignature, so affine matrices and
+ * the attr0 bit-9 affine-vs-hidden distinction are not lost here. */
+static u32 RefHashRange(u32 h, const u8 *p, u32 off, u32 bytes, u32 mask)
+{
+    while (bytes != 0) {
+        u32 at = off & mask;
+        u32 n = bytes;
+        u32 until = (mask + 1u) - at;
+
+        if (n > until) n = until;
+        sRefHashBytes += n;
+        h = HashWords(p + at, n, h);
+        off += n;
+        bytes -= n;
+    }
+    return h;
+}
+
+static u32 EngineBReferencedSignature(const u8 *io, const u8 *oam, const u8 *pltt, int *modelled, PartialBParts *parts)
+{
+    const u8 *bg = NitroPort_DbBgVram, *obj = NitroPort_DbObjVram;
+    u32 h = 2166136261u, dispcnt = Rd32(io, 0), bgMask = 0x1FFFF, objMask = 0x1FFFF;
+    int b;
+    static const u8 size[3][4][2] = {
+        {{8,8},{16,16},{32,32},{64,64}},
+        {{16,8},{32,8},{32,16},{64,32}},
+        {{8,16},{8,32},{16,32},{32,64}}
+    };
+
+    /* Only the graphics-display mode with text/affine/extended BGs is
+     * modelled. Anything else keeps the full-hash path above. */
+    if (((dispcnt >> 16) & 3) != 1 || (dispcnt & 7) > 5) {
+        *modelled = 0;
+        return 0;
+    }
+    if (parts != NULL) {
+        parts->objTiles = 2166136261u;
+        parts->extPal = 2166136261u;
+        for (b = 0; b < 4; b++) {
+            parts->bgReg[b] = parts->bgMap[b] = parts->bgChar[b] = 0;
+        }
+    }
+
+    for (b = 0; b < 4; b++) {
+        u16 cnt;
+        int kind, bpp8, mapW, mapH;
+        u32 map, chars, mapBytes, maxTile = 0, i;
+
+        if (!(dispcnt & (0x100u << b))) continue;
+        cnt = Rd16(io, 0x08 + b * 2);
+        /* B has no 3D BG, and these are the only memory-backed kinds. */
+        kind = (dispcnt & 7) == 1 ? (b < 3 ? BG_TEXT : BG_AFFINE) :
+               (dispcnt & 7) == 2 ? (b < 2 ? BG_TEXT : BG_AFFINE) :
+               (dispcnt & 7) == 3 ? (b < 3 ? BG_TEXT : BG_EXTENDED) :
+               (dispcnt & 7) == 4 ? (b < 2 ? BG_TEXT : (b == 2 ? BG_AFFINE : BG_EXTENDED)) :
+               (dispcnt & 7) == 5 ? (b < 2 ? BG_TEXT : BG_EXTENDED) : BG_TEXT;
+        if (kind == BG_NONE || kind == BG_LARGE) {
+            *modelled = 0;
+            return 0;
+        }
+        /* Extended bitmap BGs use 16 KiB bitmap bases and can span more
+         * than the tiled character/map ranges below. Keep the full hash. */
+        if (kind == BG_EXTENDED && (cnt & 0x80)) {
+            *modelled = 0;
+            return 0;
+        }
+        bpp8 = kind == BG_TEXT ? ((cnt & 0x80) != 0) : 1;
+        if (kind == BG_TEXT) {
+            mapW = sTextSizes[cnt >> 14][0]; mapH = sTextSizes[cnt >> 14][1];
+        } else {
+            mapW = mapH = 128 << (cnt >> 14);
+        }
+        map = ScreenBase(&(Engine){0}, cnt, dispcnt);
+        chars = CharBase(&(Engine){0}, cnt, dispcnt);
+        mapBytes = (u32)(mapW / 8) * (u32)(mapH / 8) * (kind == BG_AFFINE ? 1u : 2u);
+        if (parts != NULL) {
+            /* One BG's own registers (its BGCNT and scroll; affine
+             * parameters and everything else stay in the caller's rest). */
+            u32 reg[2];
+            reg[0] = (u32)cnt | ((u32)Rd16(io, 0x10 + b * 2) << 16);
+            reg[1] = (u32)Rd16(io, 0x12 + b * 2);
+            parts->bgReg[b] = HashWords((const u8 *)reg, sizeof(reg), 2166136261u);
+            parts->bgMap[b] = RefHashRange(2166136261u, bg, map, mapBytes, bgMask);
+            for (i = 0; i < mapBytes / (kind == BG_AFFINE ? 1u : 2u); i++) {
+                u32 tile = kind == BG_AFFINE ? bg[(map + i) & bgMask] :
+                           Rd16(bg, (map + i * 2) & bgMask) & 0x3ffu;
+                if (tile > maxTile) maxTile = tile;
+            }
+            parts->bgChar[b] = RefHashRange(2166136261u, bg, chars, (maxTile + 1) * (bpp8 ? 64u : 32u), bgMask);
+            continue;
+        }
+        h = RefHashRange(h, bg, map, mapBytes, bgMask);
+        for (i = 0; i < mapBytes / (kind == BG_AFFINE ? 1u : 2u); i++) {
+            u32 tile = kind == BG_AFFINE ? bg[(map + i) & bgMask] :
+                       Rd16(bg, (map + i * 2) & bgMask) & 0x3ffu;
+            if (tile > maxTile) maxTile = tile;
+        }
+        h = RefHashRange(h, bg, chars, (maxTile + 1) * (bpp8 ? 64u : 32u), bgMask);
+        /* Palette contents are also referenced ranges. Engine B's BG and
+         * OBJ palettes both live in the second KiB; hashing all of it is
+         * conservative but never misses a pixel (OBJ palette changes alone
+         * must flip the signature). */
+        h = RefHashRange(h, pltt + 0x400, 0, 0x400, 0x7FF);
+    }
+    if (parts != NULL) {
+        /* The BG palette (the second KiB's first half) is the caller's
+         * rest through the small signature; the OBJ half and the enabled
+         * extended banks are per-part here. */
+        parts->objPal = HashWords(pltt + 0x600, 0x200, 2166136261u);
+    }
+
+    /* B extended palettes live in H/I LCDC.  A slot is selected by VRAMCNT;
+     * hashing the enabled banks is cheaper than the old 0xC000 sweep and is
+     * conservative for palette-index changes. The wrap mask must keep the
+     * H bank's bit 16 (0x98000 & 0xAFFFF would alias it onto 0x88000,
+     * missing its changes): 0xBFFFF holds both banks' bytes. */
+    for (b = 7; b < 9; b++) {
+        u8 cnt = BankCnt(io - 0x1000, b);
+        if ((cnt & 0x80) && ((cnt & 7) == 2 || (cnt & 7) == 3)) {
+            if (parts != NULL) {
+                parts->extPal = RefHashRange(parts->extPal, NitroPort_LcdcVram, sBankLcdc[b], 0x4000, 0xBFFFF);
+            } else {
+                h = RefHashRange(h, NitroPort_LcdcVram, sBankLcdc[b], 0x4000, 0xBFFFF);
+            }
+        }
+    }
+
+    /* Visible OBJ graphics only.  attr0 bit 9 means hidden only when bit 8
+     * (affine mode) is clear; in affine mode it is the double-size bit. */
+    for (b = 0; b < 128; b++) {
+        const u8 *o = oam + 0x400 + b * 8;
+        u16 a0 = Rd16(o, 0), a1 = Rd16(o, 2), a2 = Rd16(o, 4);
+        int shape = (a0 >> 14) & 3, affine = (a0 & 0x100) != 0;
+        int w, hh, x, y, boxW, boxH, bpp8;
+        u32 addr, bytes, unit;
+        if ((!affine && (a0 & 0x200)) || shape == 3) continue;
+        w = size[shape][(a1 >> 14) & 3][0]; hh = size[shape][(a1 >> 14) & 3][1];
+        boxW = affine && (a0 & 0x200) ? w * 2 : w;
+        boxH = affine && (a0 & 0x200) ? hh * 2 : hh;
+        x = a1 & 0x1FF; if (x >= 256) x -= 512; y = a0 & 0xFF;
+        if (x >= 256 || x + boxW <= 0 || (y >= 192 && y + boxH <= 192)) continue;
+        bpp8 = (a0 & 0x2000) != 0;
+        if (a0 & 0x1000) { /* not possible in attr0; retained for clarity */ }
+        if (dispcnt & 0x10) {
+            unit = 32u << ((dispcnt >> 20) & 3);
+            addr = (u32)(a2 & 0x3FF) * unit;
+            bytes = (u32)(w / 8) * (u32)(hh / 8) * (bpp8 ? 64u : 32u);
+        } else {
+            addr = (u32)(a2 & 0x3FF) * 32u;
+            bytes = (u32)(hh / 8) * 1024u + (u32)(w / 8) * (bpp8 ? 64u : 32u);
+        }
+        if (parts != NULL) {
+            parts->objTiles = RefHashRange(parts->objTiles, obj, addr, bytes, objMask);
+            continue;
+        }
+        h = RefHashRange(h, obj, addr, bytes, objMask);
+    }
+    return h;
+}
+
+void NitroPort_Render2DSetReferenceHash(int enabled, int diagnostic)
+{
+    sRefHashB = enabled != 0;
+    sRefHashDiagnostic = diagnostic != 0;
+    if (sRefHashDiagnostic)
+        NitroPort_Log("[2d] refHashDiag=on (reference/full change cross-check)");
+}
+
+/* The band renderer's range form, defined with Render below. band = 0 is
+ * a whole picture (with the L4 retained-state note); band = 1 renders
+ * lines [y0, y1) only (y1 < 0: whole) with no retained-state note. */
+static void RenderRange(int engine, u16 *out, NitroRender2DSplit *split, u32 reusePixels, int y0, int y1, int band);
+
+/* ------------------------------------------------- Half-A L4: redraw
+ * only what changed (engine B).
+ *
+ * The engine-B signature is split into per-part pieces (registers and
+ * layout as rest, one register/map/tile piece per BG, OBJ tiles and
+ * palettes). A frame whose parts all match the last rendered frame draws
+ * nothing; a frame with only OAM/OBJ-tile changes re-renders the scanline
+ * band covering the union of old and new sprite bounds; a frame with one
+ * text BG's map changed re-renders the band covering those tiles;
+ * anything else (registers, windows, blending, brightness-affecting
+ * state, unmodelled modes) renders whole. Untouched lines keep the
+ * drawer's buffer, so a band render through the unmodified pipeline is
+ * bit-exact by construction: re-rendered lines see current inputs, kept
+ * lines' inputs are unchanged. Off by default (port.ini partialB). */
+static int sPartialB = 0, sPartialBDiag = 0, sPartialBChar = 0;
+
+/* Bands this tall (of the 192 lines) render whole instead: the band setup
+ * costs more than it saves. */
+#define PARTIAL_B_MAX_BAND 160
+
+enum { PARTIAL_BAND_NONE = 0, PARTIAL_BAND_FULL = 1, PARTIAL_BAND_PART = 2 };
+
+#ifdef HGSS_A0_DIAG
+typedef struct PartialBRestTerms {
+    u32 layout, regs, vramCnt, power, palette, lines;
+    u32 regWords[28], lineWords[28];
+} PartialBRestTerms;
+static NitroPartialBReasons sPartialReasons;
+#define PARTIAL_REASON(field) (sPartialReasons.field++)
+#else
+#define PARTIAL_REASON(field) ((void)0)
+#endif
+
+static struct {
+    int valid;
+#ifdef HGSS_A0_DIAG
+    PartialBRestTerms restTerms;
+#endif
+    u32 rest, oamRegs, objTiles, objPal, extPal;
+    u32 bgReg[4], bgMap[4], bgChar[4];
+    u8 oam[0x400];
+    u16 *mapFlat[4];
+    u32 mapEntries[4];
+    u8 *charData[4];
+    u32 charBytes[4], charBase[4];
+    const u16 *underPtr;
+    int bandKind, bandY0, bandY1;
+    u64 frames, objTakes, bgTakes, unchangedZero, fallbacks, partialLines;
+    u64 charTakes;
+    u64 tryUnmodelled, tryUnderMismatch, refreshAdopts, refreshInvalidates;
+    unsigned diagMismatch;
+    u16 *diag;   /* 256 x 192 dual-path scratch, diagnostic only */
+} sPartial;
+
+static void PartialBFree(void)
+{
+    int b;
+
+    for (b = 0; b < 4; b++) {
+        free(sPartial.mapFlat[b]);
+        sPartial.mapFlat[b] = NULL;
+        sPartial.mapEntries[b] = 0;
+        free(sPartial.charData[b]);
+        sPartial.charData[b] = NULL;
+        sPartial.charBytes[b] = 0;
+    }
+    free(sPartial.diag);
+    sPartial.diag = NULL;
+}
+
+static void PartialBReset(void)
+{
+    PartialBFree();
+    memset(&sPartial, 0, sizeof(sPartial));
+#ifdef HGSS_A0_DIAG
+    memset(&sPartialReasons, 0, sizeof(sPartialReasons));
+#endif
+}
+
+void NitroPort_Render2DSetPartialBChar(int enabled)
+{
+    int on = enabled != 0;
+    if (on != sPartialBChar) {
+        sPartialBChar = on;
+        PartialBReset();
+    }
+    NitroPort_Log("[2d] partialBChar=%s (text tile dirty bands; default off)", on ? "on" : "off");
+}
+
+void NitroPort_Render2DPartialBCharStats(u64 *takes)
+{
+    if (takes) *takes = sPartial.charTakes;
+}
+
+void NitroPort_Render2DSetPartialB(int enabled, int diagnostic)
+{
+    int on = enabled != 0, diag = diagnostic != 0;
+
+    if (on == sPartialB && diag == sPartialBDiag) {
+        return;
+    }
+    sPartialB = on;
+    sPartialBDiag = diag;
+    PartialBReset();
+    NitroPort_Log("[2d] partialB=%s (engine-B band redraw; default off)", on ? "on" : "off");
+    NitroPort_Log("[2d] partialBDiag=%s (dual-path compare; engine B renders twice)", diag ? "on" : "off");
+}
+
+void NitroPort_Render2DPartialBStats(u64 *frames, u64 *objTakes, u64 *bgTakes,
+                                     u64 *unchangedZero, u64 *fallbacks,
+                                     u64 *partialLines, unsigned *diagMismatch)
+{
+    if (frames) *frames = sPartial.frames;
+    if (objTakes) *objTakes = sPartial.objTakes;
+    if (bgTakes) *bgTakes = sPartial.bgTakes;
+    if (unchangedZero) *unchangedZero = sPartial.unchangedZero;
+    if (fallbacks) *fallbacks = sPartial.fallbacks;
+    if (partialLines) *partialLines = sPartial.partialLines;
+    if (diagMismatch) *diagMismatch = sPartial.diagMismatch;
+}
+
+void NitroPort_Render2DPartialBDebug(u64 *tryUnmodelled, u64 *tryUnderMismatch,
+                                     u64 *refreshAdopts, u64 *refreshInvalidates,
+                                     u64 *epilogueInvalidates, u64 *epilogueEntries,
+                                     u64 *tryPostRender, u64 *rangeEntryB)
+{
+    if (tryUnmodelled) *tryUnmodelled = sPartial.tryUnmodelled;
+    if (tryUnderMismatch) *tryUnderMismatch = sPartial.tryUnderMismatch;
+    if (refreshAdopts) *refreshAdopts = sPartial.refreshAdopts;
+    if (refreshInvalidates) *refreshInvalidates = sPartial.refreshInvalidates;
+    if (epilogueInvalidates) *epilogueInvalidates = sPartialEpilogueInvalidates;
+    if (epilogueEntries) *epilogueEntries = sPartialEpilogueEntries;
+    if (tryPostRender) *tryPostRender = sA0TryPostRender;
+    if (rangeEntryB) *rangeEntryB = sA0RangeEntryB;
+}
+
+static void PartialBInvalidate(void)
+{
+    sPartial.valid = 0;
+    sPartial.bandKind = PARTIAL_BAND_NONE;
+}
+
+/* Whether an OAM entry can draw, and the screen lines it can draw on.
+ * Mirrors ReadObj/SortObjs line membership ((y - oy) & 0xFF < boxH; the
+ * tall-picture oyTall form never fast-paths): x is ignored, so an
+ * x-culled sprite still contributes its lines. A superset is safe (extra
+ * lines only cost a re-render); a missing line would be a wrong pixel.
+ * FALSE for hidden entries and shape 3. */
+static int PartialBObjLines(const u8 *o, int *oy, int *boxH)
+{
+    u16 a0 = Rd16(o, 0), a1 = Rd16(o, 2);
+    int shape = (a0 >> 14) & 3, affine = (a0 & 0x100) != 0;
+    int hh;
+
+    if ((!affine && (a0 & 0x200)) || shape == 3) {
+        return 0;
+    }
+    hh = sObjSize[shape][(a1 >> 14) & 3][1];
+    *oy = a0 & 0xFF;
+    *boxH = affine && (a0 & 0x200) ? hh * 2 : hh;
+    return 1;
+}
+
+/* Union an entry's lines into [y0, y1). */
+static void PartialBAddLines(int oy, int boxH, int *y0, int *y1)
+{
+    int y;
+
+    for (y = 0; y < H; y++) {
+        if (((y - oy) & 0xFF) < boxH) {
+            if (y < *y0) {
+                *y0 = y;
+            }
+            if (y + 1 > *y1) {
+                *y1 = y + 1;
+            }
+        }
+    }
+}
+
+/* Read a text BG's flat entries through the same blocked addressing the
+ * software path decodes (each 0x800 block holds the tiles whose top-left
+ * 256 pixels are in it). */
+static u16 PartialBMapEntry(const u8 *bg, u32 screenBase, int tilesX, int tx, int ty)
+{
+    return Rd16(bg, (screenBase + (u32)((tx >> 5) + (ty >> 5) * (tilesX >> 5)) * 0x800 +
+                        (u32)(((ty & 31) * 32) + (tx & 31)) * 2) & 0x1FFFF);
+}
+
+/* The screen lines showing a text BG's changed tiles: tile row ty's map
+ * rows, through the frame scroll (H-blank scrolling declines the caller:
+ * per-line scrolls would need per-line bands). */
+static void PartialBBgBand(int mapH, int vofs, const u16 *retained, const u8 *bg,
+                           u32 screenBase, int tilesX, int tilesY, int *y0, int *y1)
+{
+    int mask = mapH - 1, tx, ty;
+
+    for (ty = 0; ty < tilesY; ty++) {
+        for (tx = 0; tx < tilesX; tx++) {
+            if (PartialBMapEntry(bg, screenBase, tilesX, tx, ty) != retained[(size_t)ty * tilesX + tx]) {
+                int r;
+
+                for (r = ty * 8; r < ty * 8 + 8; r++) {
+                    int y = (r - vofs) & mask;
+
+                    if (y < H) {
+                        if (y < *y0) {
+                            *y0 = y;
+                        }
+                        if (y + 1 > *y1) {
+                            *y1 = y + 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#ifdef HGSS_A0_DIAG
+/* Mirror the retained signature's inputs, including all H-blank lines.
+ * These hashes are diagnostic only and may identify overlapping causes. */
+static PartialBRestTerms PartialBGetRestTerms(int snapshot, u32 layout)
+{
+    const State2D *st = &sState[1];
+    const u8 *ioAll = snapshot ? st->io : NitroPort_IoReg;
+    const u8 *pltt = snapshot ? st->pltt : NitroPort_Pltt;
+    const u8 (*lines)[NITRO_LINE_REGS] = snapshot ? st->lineRegs : NitroPort_LineRegs.regs[1];
+    u32 regs[0x70 / 4], hash = 2166136261u;
+    int y, i, active = snapshot ? st->lines : NitroPort_LineRegs.active;
+    PartialBRestTerms out;
+
+    memcpy(regs, ioAll + 0x1000, sizeof(regs));
+    regs[0x6c / 4] = 0;
+    out.layout = layout;
+    out.regs = HashWords((const u8 *)regs, sizeof(regs), hash);
+    for (i = 0; i < 28; i++) {
+        out.regWords[i] = regs[i];
+        out.lineWords[i] = active ? 2166136261u : 0;
+    }
+    out.vramCnt = HashWords(ioAll + 0x240, 0x10, hash);
+    out.power = Rd16(ioAll, 0x304) & ~0x8000u;
+    out.palette = HashWords(pltt + 0x400, 0x200, hash);
+    out.lines = active ? 0x5a5a5a5au : 0;
+    if (active) {
+        for (y = 0; y < H; y++) {
+            memcpy(regs, lines[y], sizeof(regs));
+            regs[0x6c / 4] = 0;
+            out.lines = HashWords((const u8 *)regs, sizeof(regs), out.lines);
+            for (i = 0; i < 28; i++)
+                out.lineWords[i] = (out.lineWords[i] ^ regs[i]) * 16777619u;
+        }
+    }
+    return out;
+}
+
+void NitroPort_Render2DPartialBReasons(NitroPartialBReasons *out)
+{
+    if (out != NULL) *out = sPartialReasons;
+}
+#endif
+
+static void PartialBAdopt(const PartialBParts *parts, u32 rest, u32 oamRegs, const u8 *oamCur,
+                          const u16 *under, int bandKind, int bandY0, int bandY1)
+{
+    int b;
+
+#ifdef HGSS_A0_DIAG
+    {
+        int snapshot = oamCur == sState[1].oam + 0x400;
+        /* The layout is supplied by the same split used for rest. Its
+         * component is filled by the caller immediately before adoption. */
+        u32 layout = sPartial.restTerms.layout;
+        sPartial.restTerms = PartialBGetRestTerms(snapshot, layout);
+    }
+#endif
+    sPartial.rest = rest;
+    sPartial.oamRegs = oamRegs;
+    sPartial.objTiles = parts->objTiles;
+    sPartial.objPal = parts->objPal;
+    sPartial.extPal = parts->extPal;
+    for (b = 0; b < 4; b++) {
+        sPartial.bgReg[b] = parts->bgReg[b];
+        sPartial.bgMap[b] = parts->bgMap[b];
+        sPartial.bgChar[b] = parts->bgChar[b];
+    }
+    memcpy(sPartial.oam, oamCur, 0x400);
+    sPartial.underPtr = under;
+    sPartial.valid = 1;
+    sPartial.bandKind = bandKind;
+    sPartial.bandY0 = bandY0;
+    sPartial.bandY1 = bandY1;
+}
+
+/* Snapshot the flat entries of an enabled text BG (for the next content
+ * diff), or drop them when the BG is gone. */
+static void PartialBKeepMap(int bg, int enabled, int text, u32 screenBase, int tilesX, int tilesY)
+{
+    u32 entries = enabled && text ? (u32)tilesX * (u32)tilesY : 0;
+    int tx, ty;
+
+    if (entries != sPartial.mapEntries[bg]) {
+        free(sPartial.mapFlat[bg]);
+        sPartial.mapFlat[bg] = entries != 0 ? (u16 *)malloc((size_t)entries * sizeof(u16)) : NULL;
+        sPartial.mapEntries[bg] = (sPartial.mapFlat[bg] != NULL || entries == 0) ? entries : 0;
+    }
+    if (sPartial.mapEntries[bg] == 0) {
+        return;
+    }
+    for (ty = 0; ty < tilesY; ty++) {
+        for (tx = 0; tx < tilesX; tx++) {
+            sPartial.mapFlat[bg][(size_t)ty * tilesX + tx] =
+                PartialBMapEntry(NitroPort_DbBgVram, screenBase, tilesX, tx, ty);
+        }
+    }
+}
+
+/* Retain the exact text character bytes, not hashes: a changed tile can
+ * then be mapped to every screen row that references it. Allocation failure
+ * leaves the whole-render path in charge. */
+static void PartialBKeepChars(int bg, int text, u32 base, u32 bytes)
+{
+    u32 first;
+    if (!sPartialBChar || !text) bytes = 0;
+    if (bytes != sPartial.charBytes[bg]) {
+        free(sPartial.charData[bg]);
+        sPartial.charData[bg] = bytes ? (u8 *)malloc(bytes) : NULL;
+        sPartial.charBytes[bg] = sPartial.charData[bg] ? bytes : 0;
+    }
+    if (!sPartial.charData[bg]) return;
+    base &= 0x1ffffu;
+    first = 0x20000u - base;
+    if (first > bytes) first = bytes;
+    memcpy(sPartial.charData[bg], NitroPort_DbBgVram + base, first);
+    if (first < bytes) memcpy(sPartial.charData[bg] + first, NitroPort_DbBgVram, bytes - first);
+    sPartial.charBase[bg] = base;
+}
+
+/* Returns -1 if the retained map does not match, otherwise the union of
+ * visible rows whose entries reference changed character bytes. */
+static int PartialBCharBand(int bg, u32 base, u32 tileBytes, int mapH, int vofs,
+                            u32 screenBase, int tilesX, int tilesY, int *y0, int *y1)
+{
+    u8 changed[1024];
+    int tx, ty;
+    u32 tile;
+    const u8 *vram = NitroPort_DbBgVram;
+    const u16 *map = sPartial.mapFlat[bg];
+    if (!map || !sPartial.charData[bg] || sPartial.charBytes[bg] != tileBytes * 1024u ||
+        sPartial.charBase[bg] != (base & 0x1ffffu)) return -1;
+    for (tile = 0; tile < 1024; tile++) {
+        u32 off = (base + tile * tileBytes) & 0x1ffffu;
+        /* Text character bases and 32/64-byte tiles align to the VRAM wrap. */
+        changed[tile] = memcmp(vram + off, sPartial.charData[bg] + tile * tileBytes, tileBytes) != 0;
+    }
+    for (ty = 0; ty < tilesY; ty++) {
+        for (tx = 0; tx < tilesX; tx++) {
+            u16 entry = PartialBMapEntry(vram, screenBase, tilesX, tx, ty);
+            if (entry != map[(size_t)ty * tilesX + tx]) return -1;
+            if (changed[entry & 0x3ffu]) {
+                for (int r = ty * 8; r < ty * 8 + 8; r++) {
+                    int y = (r - vofs) & (mapH - 1);
+                    if (y < H) {
+                        if (y < *y0) *y0 = y;
+                        if (y + 1 > *y1) *y1 = y + 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* Dual-render every band kind, including BG bands, when requested. */
+static int PartialBDiagBand(u16 *under, NitroRender2DSplit *split)
+{
+    if (!sPartialBDiag) return 1;
+    if (!sPartial.diag) sPartial.diag = (u16 *)malloc((size_t)W * H * sizeof(u16));
+    if (!sPartial.diag) return 0;
+    RenderRange(1, sPartial.diag, split, R2D_TRY_FLAT, 0, -1, 1);
+    if (memcmp(under, sPartial.diag, (size_t)W * H * sizeof(u16)) == 0) return 1;
+    sPartial.diagMismatch++;
+    NitroPort_Log("[2d] partialBDiag mismatch #%u", sPartial.diagMismatch);
+    return 0;
+}
+
+/* Note a whole engine-B render in the retained state (called from the
+ * range renderer, which knows the Engine the picture was drawn with). */
+static void PartialBRefresh(const Engine *e, NitroRender2DSplit *split, const u16 *under)
+{
+    int snapshot = e->taken != NULL ? 1 : 0;
+    const State2D *st = &sState[1];
+    const u8 *oamBase = snapshot ? st->oam : NitroPort_Oam;
+    u32 layout = SplitLayoutSignature(1, split);
+    PartialBParts parts;
+    int modelled = 1, b;
+    u32 dispcnt = Rd32(e->io, 0);
+
+    (void)EngineBReferencedSignature(e->io, oamBase, snapshot ? st->pltt : NitroPort_Pltt, &modelled, &parts);
+    if (!modelled) {
+        sPartial.refreshInvalidates++;
+        PartialBInvalidate();
+        return;
+    }
+    sPartial.refreshAdopts++;
+#ifdef HGSS_A0_DIAG
+    sPartial.restTerms.layout = layout;
+#endif
+    PartialBAdopt(&parts, EngineSmallSignature(1, snapshot, 0, 1, 1) * 31u ^ layout,
+                  HashWords(oamBase + 0x400, 0x400, 2166136261u), oamBase + 0x400, under,
+                  PARTIAL_BAND_FULL, 0, 0);
+    for (b = 0; b < 4; b++) {
+        u16 cnt = Rd16(e->io, 0x08 + b * 2);
+        int enabled = (dispcnt & (0x100u << b)) != 0;
+        int kind = enabled ? BgKind(&(Engine){0}, b, dispcnt) : BG_NONE;
+        int text = kind == BG_TEXT;
+        u32 screenBase = enabled && text ? ScreenBase(&(Engine){0}, cnt, dispcnt) : 0;
+        int mapW = enabled && text ? sTextSizes[(cnt >> 14) & 3][0] : 0;
+        int mapH = enabled && text ? sTextSizes[(cnt >> 14) & 3][1] : 0;
+
+        PartialBKeepMap(b, enabled, text, screenBase, mapW >> 3, mapH >> 3);
+        PartialBKeepChars(b, text, CharBase(&(Engine){0}, cnt, dispcnt),
+                          (cnt & 0x80) ? 65536u : 32768u);
+    }
+}
+
+/* The L5 handoff: the engine-B band the last L4 decision drew (PART), the
+ * whole picture (FULL), or nothing claimable (NONE: legacy or fill path).
+ * Set on the drawer thread and read by the same thread's publish; the
+ * publish band diff stays authoritative. */
+void NitroPort_Render2DPartialBand(int engine, int *kind, int *y0, int *y1)
+{
+    int isB = (engine ? 1 : 0) == 1;
+
+    if (kind) {
+        *kind = isB ? sPartial.bandKind : PARTIAL_BAND_NONE;
+    }
+    if (y0) {
+        *y0 = isB ? sPartial.bandY0 : 0;
+    }
+    if (y1) {
+        *y1 = isB ? sPartial.bandY1 : 0;
+    }
+}
+
+/* Engine B's change decision with the split signature. 1: drawn (band or
+ * whole); 0: unchanged; -1: not L4's case (the legacy logic draws whole). */
+static int PartialBTry(u16 *under, NitroRender2DSplit *split)
+{
+    const State2D *st = &sState[1];
+    int snapshot = split->snapshot ? 1 : 0;
+    const u8 *ioBase = snapshot ? st->io : NitroPort_IoReg;
+    const u8 *oamBase = snapshot ? st->oam : NitroPort_Oam;
+    const u8 *io = ioBase + 0x1000, *oam = oamBase + 0x400;
+    u32 dispcnt = Rd32(io, 0);
+    u32 layout = SplitLayoutSignature(1, split);
+    u32 rest = EngineSmallSignature(1, snapshot, 0, 1, 1) * 31u ^ layout;
+    u32 oamRegs = HashWords(oam, 0x400, 2166136261u);
+    PartialBParts parts;
+    int modelled = 1, b, changedBg = -1, oamSame;
+
+    (void)EngineBReferencedSignature(io, oamBase, snapshot ? st->pltt : NitroPort_Pltt, &modelled, &parts);
+    /* A fill, not a picture: power off, forced blank. The small signature
+     * already changes with these, but a band render cannot reproduce a
+     * fill, so they never fast-path. */
+    if (!(Rd16(ioBase, 0x304) & 0x0200) || (dispcnt & 0x80)) {
+        modelled = 0;
+    }
+    /* The band renderer draws the DS's 256 x 192 picture only. A wider or
+     * taller engine-B picture (the top screen's layout) renders whole. */
+    if (split->width > W || split->height > H) {
+        modelled = 0;
+    }
+    if (!modelled) {
+        sPartial.tryUnmodelled++;
+        return -1;
+    }
+    if (sPartial.underPtr != under) {
+        sPartial.tryUnderMismatch++;
+        return -1;
+    }
+    sPartial.frames++;
+    if (!sPartial.valid) {
+        Render(1, under, split, R2D_TRY_FLAT);
+#ifdef HGSS_A0_DIAG
+        sA0TryPostRender++;
+#endif
+        return 1;
+    }
+    if (rest != sPartial.rest || parts.extPal != sPartial.extPal) {
+        /* Registers, windows, blending, palettes, layout: whole. */
+#ifdef HGSS_A0_DIAG
+        {
+            PartialBRestTerms now = PartialBGetRestTerms(snapshot, layout);
+            const PartialBRestTerms *old = &sPartial.restTerms;
+            int changed = 0;
+#define REST_TERM(field, counter) do { if (now.field != old->field) { PARTIAL_REASON(counter); changed = 1; } } while (0)
+            PARTIAL_REASON(shared);
+            if (rest != sPartial.rest) {
+                PARTIAL_REASON(rest);
+                REST_TERM(layout, restLayout);
+                REST_TERM(regs, restRegs);
+                REST_TERM(vramCnt, restVramCnt);
+                REST_TERM(power, restPower);
+                REST_TERM(palette, restPalette);
+                REST_TERM(lines, restLines);
+                for (int i = 0; i < 28; i++) {
+                    if (now.regWords[i] != old->regWords[i]) {
+                        sPartialReasons.regWords[i]++;
+                        sPartialReasons.regChangedBits[i] |= now.regWords[i] ^ old->regWords[i];
+                        sPartialReasons.regBefore[i] = old->regWords[i];
+                        sPartialReasons.regAfter[i] = now.regWords[i];
+                    }
+                    if (now.lineWords[i] != old->lineWords[i]) sPartialReasons.lineWords[i]++;
+                }
+                if (!changed) PARTIAL_REASON(restOther);
+            }
+            if (parts.extPal != sPartial.extPal) PARTIAL_REASON(extPal);
+#undef REST_TERM
+        }
+#endif
+        sPartial.fallbacks++;
+        Render(1, under, split, R2D_TRY_FLAT);
+        return 1;
+    }
+    oamSame = oamRegs == sPartial.oamRegs && parts.objTiles == sPartial.objTiles &&
+              parts.objPal == sPartial.objPal;
+    for (b = 0; b < 4; b++) {
+        if (parts.bgReg[b] != sPartial.bgReg[b] || parts.bgMap[b] != sPartial.bgMap[b] ||
+            parts.bgChar[b] != sPartial.bgChar[b]) {
+            changedBg = changedBg == -1 ? b : -2;
+        }
+    }
+    if (oamSame && changedBg == -1) {
+        /* Nothing changed: the legacy path's unchanged return, without
+         * hashing the VRAM again. */
+        sPartial.bandKind = PARTIAL_BAND_NONE;
+        sPartial.unchangedZero++;
+        return 0;
+    }
+    if (!oamSame && changedBg == -1) {
+        /* OBJ-only change: the icon-animation case. */
+        int y0 = H, y1 = 0, i;
+
+        for (i = 0; i < 128; i++) {
+            int oy, boxH;
+
+            if (memcmp(oam + (size_t)i * 8, sPartial.oam + (size_t)i * 8, 8) == 0) {
+                continue;
+            }
+            if (PartialBObjLines(oam + (size_t)i * 8, &oy, &boxH)) {
+                PartialBAddLines(oy, boxH, &y0, &y1);
+            }
+            if (PartialBObjLines(sPartial.oam + (size_t)i * 8, &oy, &boxH)) {
+                PartialBAddLines(oy, boxH, &y0, &y1);
+            }
+        }
+        if (parts.objTiles != sPartial.objTiles || parts.objPal != sPartial.objPal) {
+            /* Tiles or palette changed under the sprites too: an unchanged
+             * sprite may still show new pixels. Cover every visible
+             * sprite's lines as well (unioned with the changed entries'
+             * lines above, never replacing them); with none visible the
+             * picture is unchanged. */
+            for (i = 0; i < 128; i++) {
+                int oy, boxH;
+
+                if (PartialBObjLines(oam + (size_t)i * 8, &oy, &boxH)) {
+                    PartialBAddLines(oy, boxH, &y0, &y1);
+                }
+            }
+        }
+        if (y0 >= y1) {
+#ifdef HGSS_A0_DIAG
+            sPartial.restTerms.layout = layout;
+#endif
+            PartialBAdopt(&parts, rest, oamRegs, oam, under, PARTIAL_BAND_NONE, 0, 0);
+            sPartial.unchangedZero++;
+            return 0;
+        }
+        if (y1 - y0 >= PARTIAL_B_MAX_BAND) {
+            PARTIAL_REASON(objWide);
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        RenderRange(1, under, split, R2D_TRY_FLAT, y0, y1, 1);
+        if (!PartialBDiagBand(under, split)) {
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+#ifdef HGSS_A0_DIAG
+        sPartial.restTerms.layout = layout;
+#endif
+        PartialBAdopt(&parts, rest, oamRegs, oam, under, PARTIAL_BAND_PART, y0, y1);
+        sPartial.objTakes++;
+        sPartial.partialLines += (u64)(y1 - y0);
+        return 1;
+    }
+    if (oamSame && changedBg >= 0) {
+        /* One BG's content changed: localize a text BG's tiles. */
+        u16 cnt = Rd16(io, 0x08 + changedBg * 2);
+        int kind = BgKind(&(Engine){0}, changedBg, dispcnt);
+        int mapW, mapH, tilesX, tilesY, vofs, y0 = H, y1 = 0;
+        u32 screenBase;
+
+        if (kind != BG_TEXT) {
+            PARTIAL_REASON(bgKind);
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        if (parts.bgReg[changedBg] != sPartial.bgReg[changedBg]) {
+            PARTIAL_REASON(bgRegs);
+            /* Its scroll or control moved: whole. */
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        if (snapshot ? st->lines : NitroPort_LineRegs.active) {
+            /* Per-line scrolls: whole. */
+            PARTIAL_REASON(bgLines);
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        if (parts.bgChar[changedBg] != sPartial.bgChar[changedBg]) {
+            u32 charBase = CharBase(&(Engine){0}, cnt, dispcnt);
+            u32 tileBytes = (cnt & 0x80) ? 64u : 32u;
+            int charY0 = H, charY1 = 0;
+
+            mapW = sTextSizes[(cnt >> 14) & 3][0];
+            mapH = sTextSizes[(cnt >> 14) & 3][1];
+            tilesX = mapW >> 3;
+            tilesY = mapH >> 3;
+            vofs = Rd16(io, 0x12 + changedBg * 4) & 0x1ff;
+            screenBase = ScreenBase(&(Engine){0}, cnt, dispcnt);
+            /* Mosaic spreads source rows into adjacent display rows. A map
+             * change or missing snapshot also declines the localization. */
+            if (sPartialBChar && !(cnt & 0x40) &&
+                parts.bgMap[changedBg] == sPartial.bgMap[changedBg] &&
+                PartialBCharBand(changedBg, charBase, tileBytes, mapH, vofs,
+                                 screenBase, tilesX, tilesY, &charY0, &charY1) == 0 &&
+                charY1 - charY0 < PARTIAL_B_MAX_BAND) {
+                if (charY0 < charY1) {
+                    RenderRange(1, under, split, R2D_TRY_FLAT, charY0, charY1, 1);
+                    if (!PartialBDiagBand(under, split)) {
+                        Render(1, under, split, R2D_TRY_FLAT);
+                        return 1;
+                    }
+                }
+#ifdef HGSS_A0_DIAG
+                sPartial.restTerms.layout = layout;
+#endif
+                PartialBAdopt(&parts, rest, oamRegs, oam, under,
+                              charY0 < charY1 ? PARTIAL_BAND_PART : PARTIAL_BAND_NONE,
+                              charY0 < charY1 ? charY0 : 0, charY0 < charY1 ? charY1 : 0);
+                PartialBKeepChars(changedBg, 1, charBase, tileBytes * 1024u);
+                if (charY0 >= charY1) {
+                    sPartial.unchangedZero++;
+                    return 0;
+                }
+                sPartial.charTakes++;
+                sPartial.bgTakes++;
+                sPartial.partialLines += (u64)(charY1 - charY0);
+                return 1;
+            }
+            PARTIAL_REASON(bgChar);
+#ifdef HGSS_A0_DIAG
+            sPartialReasons.bgCharLayer[changedBg]++;
+#endif
+            /* Tile pixels changed without the map: not localized yet. */
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        if (sPartial.mapFlat[changedBg] == NULL) {
+            PARTIAL_REASON(bgNoMap);
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        mapW = sTextSizes[(cnt >> 14) & 3][0];
+        mapH = sTextSizes[(cnt >> 14) & 3][1];
+        tilesX = mapW >> 3;
+        tilesY = mapH >> 3;
+        vofs = Rd16(io, 0x12 + changedBg * 4) & 0x1FF;
+        screenBase = ScreenBase(&(Engine){0}, cnt, dispcnt);
+        PartialBBgBand(mapH, vofs, sPartial.mapFlat[changedBg], NitroPort_DbBgVram,
+                       screenBase, tilesX, tilesY, &y0, &y1);
+        if (y0 >= y1) {
+            /* The map hash moved but no entry did: whole (safe). */
+            PARTIAL_REASON(bgNoBand);
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        if (y1 - y0 >= PARTIAL_B_MAX_BAND) {
+            PARTIAL_REASON(bgWide);
+            sPartial.fallbacks++;
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+        RenderRange(1, under, split, R2D_TRY_FLAT, y0, y1, 1);
+        if (!PartialBDiagBand(under, split)) {
+            Render(1, under, split, R2D_TRY_FLAT);
+            return 1;
+        }
+#ifdef HGSS_A0_DIAG
+        sPartial.restTerms.layout = layout;
+#endif
+        PartialBAdopt(&parts, rest, oamRegs, oam, under, PARTIAL_BAND_PART, y0, y1);
+        PartialBKeepMap(changedBg, 1, 1, screenBase, tilesX, tilesY);
+        sPartial.bgTakes++;
+        sPartial.partialLines += (u64)(y1 - y0);
+        return 1;
+    }
+    /* Both changed, or anything else: whole. */
+    PARTIAL_REASON(mixed);
+    sPartial.fallbacks++;
+    Render(1, under, split, R2D_TRY_FLAT);
+    return 1;
+}
+
+void NitroPort_Render2DRefHashStats(u64 *refBytes, u64 *fullBytes, unsigned *disagreements)
+{
+    if (refBytes) *refBytes = sRefHashBytes;
+    if (fullBytes) *fullBytes = sFullHashBytes;
+    if (disagreements) *disagreements = sRefHashDisagreements;
+}
+
 static u32 EngineSignature(int engine)
 {
-    return (EngineSmallSignature(engine, 0, 0) * 31u) ^
-           EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0));
+    return (EngineSmallSignature(engine, 0, 0, 0, 0) * 31u) ^
+           EngineVramSignature(engine, NitroPort_IoReg + (engine ? 0x1000 : 0), NitroPort_Oam);
 }
 
 static u32 SplitLayoutSignature(int engine, const NitroRender2DSplit *split)
@@ -6537,8 +7516,8 @@ static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *spli
         r->valid = 1;
         return;
     }
-    r->small = (EngineSmallSignature(e, snapshot, mask) * 31u) ^ layout;
-    r->vram = EngineVramSignature(e, io);
+    r->small = (EngineSmallSignature(e, snapshot, mask, 0, 0) * 31u) ^ layout;
+    r->vram = EngineVramSignature(e, io, snapshot ? sState[e].oam : NitroPort_Oam);
     for (int bg = 1; bg < 4; bg++) {
         r->scroll[bg] = Rd32(io, 0x10 + bg * 4);
     }
@@ -6555,6 +7534,112 @@ void NitroPort_Render2DProfile(int engine, NitroRender2DProfile *out)
     *out = sProfile[e];
 }
 
+#ifdef HGSS_A0_DIAG
+/* A0 redraw attribution (plan item A0.5): which legacy term triggered each
+ * engine's decision. Buckets follow evaluation order. `layout` is split out
+ * of `small`; the small sub-terms (registers, palette, OAM) hash only on
+ * the already-decided redraw path, so unchanged frames pay nothing extra.
+ * The sub-hashes mirror EngineSmallSignature's mask-0 inputs exactly, so a
+ * small match implies matching subs; H-blank line effects fall into `misc`
+ * (they are part of `small` but not of any sub-term). */
+static struct {
+    u64 flat[2], reuseHit[2], reuseScroll[2], forced[2], firstNote[2];
+    u64 layoutChanged[2], regsChanged[2], paletteChanged[2], oamChanged[2], miscChanged[2];
+    u64 vramChanged[2], unchanged[2];
+    u64 vramBytes[2], scanlines[2], smallBytes[2];
+    u32 lastLayout[2], lastRegs[2], lastPal[2], lastOam[2];
+} sA0Redraw;
+
+static void A0SubHashes(int e, int snapshot, NitroRender2DSplit *split,
+                        u32 *layout, u32 *regs, u32 *pal, u32 *oam)
+{
+    const State2D *st = &sState[e];
+    const u8 *ioAll = snapshot ? st->io : NitroPort_IoReg;
+    const u8 *io = ioAll + (e ? 0x1000 : 0);
+    u32 r[0x70 / 4];
+    u32 h = 2166136261u;
+
+    memcpy(r, io, sizeof(r));
+    if (!e) r[0x60 / 4] &= ~0x3000u;
+    r[0x6C / 4] = 0;
+    h = HashWords((const u8 *)r, sizeof(r), h);
+    h = HashWords(ioAll + 0x240, 0x10, h);
+    h = (h ^ Rd16(ioAll, 0x304)) * 16777619u;
+    *regs = h;
+    *pal = HashWords((snapshot ? st->pltt : NitroPort_Pltt) + (e ? 0x400 : 0), 0x400, 2166136261u);
+    *oam = HashWords((snapshot ? st->oam : NitroPort_Oam) + (e ? 0x400 : 0), 0x400, 2166136261u);
+    *layout = SplitLayoutSignature(e, split);
+}
+
+/* Compare the sub-terms against the retained ones when countIt is set,
+ * then retain the current ones either way. */
+static void A0SubTrack(int e, int snapshot, NitroRender2DSplit *split, int countIt)
+{
+    u32 layoutNow, regsNow, palNow, oamNow;
+
+    A0SubHashes(e, snapshot, split, &layoutNow, &regsNow, &palNow, &oamNow);
+    if (countIt) {
+        if (layoutNow != sA0Redraw.lastLayout[e]) {
+            sA0Redraw.layoutChanged[e]++;
+        } else {
+            if (regsNow != sA0Redraw.lastRegs[e]) sA0Redraw.regsChanged[e]++;
+            if (palNow != sA0Redraw.lastPal[e]) sA0Redraw.paletteChanged[e]++;
+            if (oamNow != sA0Redraw.lastOam[e]) sA0Redraw.oamChanged[e]++;
+            if (regsNow == sA0Redraw.lastRegs[e] && palNow == sA0Redraw.lastPal[e] &&
+                oamNow == sA0Redraw.lastOam[e])
+                sA0Redraw.miscChanged[e]++;
+        }
+    }
+    sA0Redraw.lastLayout[e] = layoutNow;
+    sA0Redraw.lastRegs[e] = regsNow;
+    sA0Redraw.lastPal[e] = palNow;
+    sA0Redraw.lastOam[e] = oamNow;
+}
+
+/* Hashed-byte accounting mirrors what the legacy path reads: the small
+ * signature (registers, VRAMCNT, POWCNT, palettes, OAM, layout) plus the
+ * full VRAM sweep when it runs. Counted separately from converted bytes. */
+static u32 A0SmallBytes(int e, int snapshot)
+{
+    const State2D *st = &sState[e];
+    u32 bytes = 0x70u + 0x10u + 2u + 0x400u + 0x400u + 72u;
+
+    if (snapshot ? st->lines : NitroPort_LineRegs.active) bytes += 0x70u * 192u;
+    return bytes;
+}
+
+static u32 A0FullVramBytes(int e, const u8 *io)
+{
+    if (!e) {
+        if ((((Rd32(io, 0) >> 16) & 3) == 2)) return 0xD0000u + 0x20000u;
+        return 0xD0000u;
+    }
+    return 0x4C000u;
+}
+
+void NitroPort_Render2DRedrawStats(int engine, NitroRedrawStats *out)
+{
+    int e = engine ? 1 : 0;
+
+    if (out == NULL) return;
+    out->flat = sA0Redraw.flat[e];
+    out->reuseHit = sA0Redraw.reuseHit[e];
+    out->reuseScroll = sA0Redraw.reuseScroll[e];
+    out->forced = sA0Redraw.forced[e];
+    out->firstNote = sA0Redraw.firstNote[e];
+    out->layoutChanged = sA0Redraw.layoutChanged[e];
+    out->regsChanged = sA0Redraw.regsChanged[e];
+    out->paletteChanged = sA0Redraw.paletteChanged[e];
+    out->oamChanged = sA0Redraw.oamChanged[e];
+    out->miscChanged = sA0Redraw.miscChanged[e];
+    out->vramChanged = sA0Redraw.vramChanged[e];
+    out->unchanged = sA0Redraw.unchanged[e];
+    out->vramBytes = sA0Redraw.vramBytes[e];
+    out->scanlines = sA0Redraw.scanlines[e];
+    out->smallBytes = sA0Redraw.smallBytes[e];
+}
+#endif
+
 /* NitroPort_Render2D, unless nothing it draws from changed since the last
  * time for this engine (then out is left as it is, and 0 returned). Working
  * that out reads the engine's VRAM once: far less than drawing it. A 3D
@@ -6567,40 +7652,73 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
 {
     /* (its own record: the 3D doesn't come into these layers) */
     static struct { u32 small, vram, serial; int valid, vramValid; } last[2];
+    static u32 lastFullB, lastFullBgPrefix, lastFullObjPrefix;
+    static int lastFullBValid;
     int e = engine ? 1 : 0;
     SplitReuse *r = &sSplitReuse[e];
     int force = r->valid || last[e].serial != sSplitPictureSerial[e];
     u32 small, vram;
+
+    /* Half-A L4: engine B's split-signature decision, when enabled. A
+     * non-negative return is the decision (1 drawn, 0 unchanged); -1 falls
+     * through to the legacy logic below, which also refreshes the
+     * retained state through whole renders. Engine A is untouched. */
+    if (e == 1 && sPartialB) {
+        int partial = PartialBTry(under, split);
+
+        if (partial >= 0) {
+            return partial;
+        }
+    }
 
     if (r->valid && r->flat) {
         /* Always rebuild current metadata and refill the software planes.
          * New text, OAM, layout, windows, effects or buffer identities go
          * through the full current validators; if flat admission fails the
          * normal scanlines run. Never skip using last frame's emptiness. */
+#ifdef HGSS_A0_DIAG
+        sA0Redraw.flat[e]++;
+        sA0Redraw.scanlines[e] += 192;
+#endif
         Render(engine, under, split, R2D_TRY_FLAT);
         return 1;
     }
     if (r->valid && r->under == under && r->over == split->over && r->alpha == split->overAlpha) {
         const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
-        u32 candidate = (EngineSmallSignature(e, split->snapshot, r->mask) * 31u) ^
+        u32 candidate = (EngineSmallSignature(e, split->snapshot, r->mask, 0, 0) * 31u) ^
                         SplitLayoutSignature(e, split);
 
-        if (candidate == r->small && EngineVramSignature(e, io) == r->vram) {
+#ifdef HGSS_A0_DIAG
+        sA0Redraw.smallBytes[e] += A0SmallBytes(e, split->snapshot);
+#endif
+        if (candidate == r->small && EngineVramSignature(e, io,
+                                                         split->snapshot ? sState[e].oam : NitroPort_Oam) == r->vram) {
             int moved = 0;
             for (int bg = 1; bg < 4; bg++) {
                 if ((r->mask & (1u << bg)) && Rd32(io, 0x10 + bg * 4) != r->scroll[bg]) {
                     moved = 1;
                 }
             }
+#ifdef HGSS_A0_DIAG
+            sA0Redraw.vramBytes[e] += e ? 0x4C000u : A0FullVramBytes(e, io);
+            A0SubTrack(e, split->snapshot, split, 0);
+#endif
             if (!moved) {
+#ifdef HGSS_A0_DIAG
+                sA0Redraw.reuseHit[e]++;
+#endif
                 return 0;   /* brightness-only is handled by the shell */
             }
+#ifdef HGSS_A0_DIAG
+            sA0Redraw.reuseScroll[e]++;
+            sA0Redraw.scanlines[e] += 192;
+#endif
             u32 mask = r->mask;
             Render(engine, under, split, mask | R2D_TRY_FLAT);
             return 1;       /* current quads must be published, pixels reused */
         }
     }
-    small = (EngineSmallSignature(e, split->snapshot, 0) * 31u) ^
+    small = (EngineSmallSignature(e, split->snapshot, 0, 0, 0) * 31u) ^
             SplitLayoutSignature(e, split);
     /* The small parts changed (a scroll, a sprite, a colour: most frames of
      * anything moving): drawn, without reading the VRAM through to find
@@ -6608,6 +7726,19 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
      * compared (once it's known: the first time after a change it's just
      * noted, and drawn). */
     if (force || !last[e].valid || small != last[e].small) {
+#ifdef HGSS_A0_DIAG
+        sA0Redraw.smallBytes[e] += A0SmallBytes(e, split->snapshot);
+        if (force) {
+            sA0Redraw.forced[e]++;
+            A0SubTrack(e, split->snapshot, split, 0);
+        } else if (!last[e].valid) {
+            sA0Redraw.firstNote[e]++;
+            A0SubTrack(e, split->snapshot, split, 0);
+        } else {
+            A0SubTrack(e, split->snapshot, split, 1);
+        }
+        sA0Redraw.scanlines[e] += 192;
+#endif
         last[e].small = small;
         last[e].valid = 1;
         last[e].vramValid = 0;
@@ -6615,12 +7746,64 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         last[e].serial = sSplitPictureSerial[e];
         return 1;
     }
-    vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0));
-    if (last[e].vramValid && vram == last[e].vram) {
+    vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0),
+                               split->snapshot ? sState[e].oam : NitroPort_Oam);
+    int forceChanged = 0;
+    if (e == 1 && sRefHashB && sRefHashDiagnostic) {
+        u32 full = 2166136261u, bgPrefix, objPrefix;
+        int fullChanged;
+
+        full = HashWords(NitroPort_DbBgVram, 0x20000, full);
+        bgPrefix = full;
+        full = HashWords(NitroPort_DbObjVram, 0x20000, full);
+        objPrefix = full;
+        full = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, full);
+        sFullHashBytes += 0x4C000;
+        fullChanged = !lastFullBValid || full != lastFullB;
+        if (last[e].vramValid && (vram != last[e].vram) != fullChanged) {
+            sRefHashDisagreements++;
+            NitroPort_Log("[2d] refHashB disagreement #%u: reference-changed %d full-changed %d; full-prefix BG %d BG+OBJ %d",
+                          sRefHashDisagreements, vram != last[e].vram, fullChanged,
+                          bgPrefix != lastFullBgPrefix, objPrefix != lastFullObjPrefix);
+#ifdef HGSS_A0_DIAG
+            {
+                const u8 *checkIo = (split->snapshot ? sState[e].io : NitroPort_IoReg) + 0x1000;
+                const u8 *checkOam = split->snapshot ? sState[e].oam : NitroPort_Oam;
+                u32 retryRef = EngineVramSignature(e, checkIo, checkOam);
+                u32 retryFull = 2166136261u;
+                retryFull = HashWords(NitroPort_DbBgVram, 0x20000, retryFull);
+                retryFull = HashWords(NitroPort_DbObjVram, 0x20000, retryFull);
+                retryFull = HashWords(NitroPort_LcdcVram + 0x98000, 0xc000, retryFull);
+                sFullHashBytes += 0x4c000;
+                NitroPort_Log("[a0] refHash disagreement rescan: reference-changed %d full-changed %d",
+                              retryRef != vram, retryFull != full);
+            }
+#endif
+            /* The reference path is experimental: a disagreement must never
+             * become a stale skip. Treat the frame as changed. */
+            forceChanged = 1;
+        }
+        lastFullB = full;
+        lastFullBgPrefix = bgPrefix;
+        lastFullObjPrefix = objPrefix;
+        lastFullBValid = 1;
+    }
+    if (last[e].vramValid && vram == last[e].vram && !forceChanged) {
+#ifdef HGSS_A0_DIAG
+        sA0Redraw.unchanged[e]++;
+        sA0Redraw.vramBytes[e] += e ? 0x4C000u : A0FullVramBytes(e, (split->snapshot ? sState[e].io : NitroPort_IoReg));
+        A0SubTrack(e, split->snapshot, split, 0);
+#endif
         return 0;
     }
     last[e].vram = vram;
     last[e].vramValid = 1;
+#ifdef HGSS_A0_DIAG
+    sA0Redraw.vramChanged[e]++;
+    sA0Redraw.vramBytes[e] += e ? 0x4C000u : A0FullVramBytes(e, (split->snapshot ? sState[e].io : NitroPort_IoReg));
+    sA0Redraw.scanlines[e] += 192;
+    A0SubTrack(e, split->snapshot, split, 0);
+#endif
     Render(engine, under, split, R2D_TRY_FLAT);
     last[e].serial = sSplitPictureSerial[e];
     return 1;

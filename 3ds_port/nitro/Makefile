@@ -201,6 +201,21 @@ LIB       := $(OUT)/libnitro.a
 
 # Compiler, target and SDK configuration: see ../common.mk.
 CFLAGS := $(PORT_CFLAGS) $(SDK_INCLUDES) -I../pak/include
+ifeq ($(HGSS_PALETTE_HASH),1)
+  CFLAGS += -DHGSS_PALETTE_HASH=1
+endif
+ifeq ($(HGSS_GX3D_HOTLOOP),1)
+  CFLAGS += -DHGSS_GX3D_HOTLOOP=1
+endif
+ifeq ($(HGSS_GX3D_LISTCACHE),1)
+  CFLAGS += -DHGSS_GX3D_LISTCACHE=1
+endif
+ifeq ($(HGSS_GX3D_STATEDEDUP),1)
+  CFLAGS += -DHGSS_GX3D_STATEDEDUP=1
+endif
+ifeq ($(HGSS_A0_DIAG),1)
+  CFLAGS += -DHGSS_A0_DIAG=1
+endif
 
 # --- Rules -----------------------------------------------------------------
 

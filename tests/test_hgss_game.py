@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -92,6 +93,32 @@ class FlagTests(unittest.TestCase):
                      "-mfloat-abi=hard"):
             self.assertIn(want, flags)
         self.assertNotIn("-m32", flags)
+
+    def test_texture_profile_is_opt_in_and_3ds_only(self):
+        with patch.dict(os.environ, {"HGSS_TEXTURE_PROFILE": "0"}):
+            self.assertNotIn("-DHGSS_TEXTURE_PROFILE=1", hg.port_cflags("3ds"))
+        with patch.dict(os.environ, {"HGSS_TEXTURE_PROFILE": "1"}):
+            self.assertIn("-DHGSS_TEXTURE_PROFILE=1", hg.port_cflags("3ds"))
+            self.assertNotIn("-DHGSS_TEXTURE_PROFILE=1", hg.port_cflags("host32"))
+
+    def test_texture_hint_is_opt_in_and_3ds_only(self):
+        with patch.dict(os.environ, {"HGSS_TEXTURE_HINT": "0"}):
+            self.assertNotIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("3ds"))
+        with patch.dict(os.environ, {"HGSS_TEXTURE_HINT": "1"}):
+            self.assertIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("3ds"))
+            self.assertNotIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("host32"))
+
+    def test_gx3d_experiments_are_opt_in_and_3ds_only(self):
+        for name, define in (("HGSS_GX3D_HOTLOOP", "-DHGSS_GX3D_HOTLOOP=1"),
+                             ("HGSS_GX3D_INDEXED", "-DHGSS_GX3D_INDEXED=1"),
+                             ("HGSS_GX3D_LISTCACHE", "-DHGSS_GX3D_LISTCACHE=1"),
+                             ("HGSS_GX3D_STATEDEDUP", "-DHGSS_GX3D_STATEDEDUP=1"),
+                             ("HGSS_A0_DIAG", "-DHGSS_A0_DIAG=1")):
+            with patch.dict(os.environ, {name: "0"}):
+                self.assertNotIn(define, hg.port_cflags("3ds"))
+            with patch.dict(os.environ, {name: "1"}):
+                self.assertIn(define, hg.port_cflags("3ds"))
+                self.assertNotIn(define, hg.port_cflags("host32"))
 
     def test_cxx_flags(self):
         flags = hg.port_cflags("host32", cxx=True)
@@ -1523,7 +1550,11 @@ class PerformanceWaveThreeTests(unittest.TestCase):
         inside = stage.index("if(!(a->outside | b->outside | c->outside))")
         self.assertLess(light, front)
         self.assertLess(front, inside)
-        self.assertIn("if(polygon_culled()){", stage)
+        # Either spelling keeps the predicate: the default path calls
+        # polygon_culled() here, the HOTLOOP experiment hoists the same
+        # state into polygon_culled_attr in the same position.
+        self.assertTrue("if(polygon_culled()){" in stage or
+                        "polygon_culled_attr(s.attr,sPolygonFront)" in stage)
         # Kept for shadows either way (keep_for_shadow projects itself);
         # counted as culled (coarser than per-piece: one per polygon).
         self.assertIn("if(sShadowCapture)keep_for_shadow(a,b,c);", stage)
@@ -1554,13 +1585,18 @@ class PerformanceWaveThreeTests(unittest.TestCase):
 
     def test_lower_screen_offered_every_tick(self):
         text = (self.APP / "main_3ds.c").read_text()
+        # L1: lower30 is a working off-by-default option, not an ignored key.
+        # Default off keeps both engines offered every tick; on offers
+        # engine B every other tick while input stays per tick.
         self.assertIn('IniValue("lower30"', text)
-        self.assertIn("lower30=%s ignored; both engines are offered every tick", text)
-        self.assertNotIn("sIniLower30", text)
+        self.assertIn("sIniLower30 = 0;", text)
+        self.assertIn("engine B offered every other tick; input remains per tick", text)
         drawer = text[text.index("static void DrawerMain"):
                        text.index("static bool StartDrawer")]
-        self.assertNotIn("d->stamp & 1", drawer)
-        self.assertIn("if (d->screens & ENGINE_B)", drawer)
+        # Default (off): B offered with every frame. On: every other tick
+        # (the offer is set where the frame is handed over, in DrawFrame).
+        self.assertIn("d->offerB = !sIniLower30 || ((d->stamp & 1u) == 0)", text)
+        self.assertIn("if ((d->screens & ENGINE_B) && d->offerB)", drawer)
         self.assertIn("RenderScreen(1, d->aOnTop, d->stamp)", drawer)
         self.assertIn("NitroPort_Compose2DCurrent(OnTop(1, d->aOnTop) ? 0 : 1, d->stamp)", drawer)
         self.assertIn("lower 2D offered every tick", text)
@@ -2353,6 +2389,21 @@ class BuildIdTests(unittest.TestCase):
         self.assertEqual(hg.build_id_string("abc1234", False), "abc1234")
         self.assertEqual(hg.build_id_string("abc1234", True), "abc1234-dirty")
 
+    def test_experiment_ids_distinguish_binaries(self):
+        with patch.dict(os.environ, {"HGSS_TEXTURE_PROFILE": "0", "HGSS_TEXTURE_HINT": "1", "HGSS_PALETTE_HASH": "0"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True), "abc1234-dirty-texhint")
+        with patch.dict(os.environ, {"HGSS_TEXTURE_PROFILE": "0", "HGSS_TEXTURE_HINT": "0", "HGSS_PALETTE_HASH": "1"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True), "abc1234-dirty-palhash")
+        with patch.dict(os.environ, {"HGSS_GX3D_HOTLOOP": "1", "HGSS_GX3D_INDEXED": "1"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True),
+                             "abc1234-dirty-gxhot-gxidx")
+        with patch.dict(os.environ, {"HGSS_GX3D_LISTCACHE": "1", "HGSS_GX3D_STATEDEDUP": "1"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True),
+                             "abc1234-dirty-listcache-statededup")
+        with patch.dict(os.environ, {"HGSS_A0_DIAG": "1"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True),
+                             "abc1234-dirty-a0diag")
+
     def test_header_written_only_on_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             gen = Path(tmp)
@@ -2380,6 +2431,114 @@ class BuildIdTests(unittest.TestCase):
             self.assertIn("sha: " + "f" * 40 + "\n", text)
             self.assertIn("sha256: " + hashlib.sha256(MINIMAL_3DSX).hexdigest() + "\n",
                           text)
+
+    def test_build_info_records_texture_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dsx = Path(tmp) / "game.3dsx"
+            dsx.write_bytes(MINIMAL_3DSX)
+            info = ("abc1234", "f" * 40, True, "")
+            with patch.dict(os.environ, {"HGSS_TEXTURE_PROFILE": "1"}):
+                self.assertIn("texture_profile: yes\n", hg.write_build_info(dsx, "heartgold", "3ds", info).read_text())
+            with patch.dict(os.environ, {"HGSS_TEXTURE_PROFILE": "0"}):
+                self.assertIn("texture_profile: no\n", hg.write_build_info(dsx, "heartgold", "3ds", info).read_text())
+
+    def test_build_info_records_texture_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dsx = Path(tmp) / "game.3dsx"
+            dsx.write_bytes(MINIMAL_3DSX)
+            with patch.dict(os.environ, {"HGSS_TEXTURE_HINT": "1"}):
+                text = hg.write_build_info(dsx, "heartgold", "3ds", ("abc1234", "f" * 40, True, "")).read_text()
+                self.assertIn("texture_hint: yes\n", text)
+
+    def test_build_info_records_gx3d_modes_without_dropping_w5_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dsx = Path(tmp) / "game.3dsx"
+            dsx.write_bytes(MINIMAL_3DSX)
+            env = {"HGSS_TEXTURE_PROFILE": "1", "HGSS_TEXTURE_HINT": "1",
+                   "HGSS_PALETTE_HASH": "1", "HGSS_GX3D_HOTLOOP": "1",
+                   "HGSS_GX3D_INDEXED": "1", "HGSS_GX3D_LISTCACHE": "1",
+                   "HGSS_GX3D_STATEDEDUP": "1", "HGSS_A0_DIAG": "1"}
+            with patch.dict(os.environ, env):
+                text = hg.write_build_info(dsx, "heartgold", "3ds",
+                                           ("abc1234", "f" * 40, True, "")).read_text()
+            for line in ("texture_profile: yes", "texture_hint: yes",
+                         "palette_hash: yes", "gx3d_hotloop: yes",
+                         "gx3d_indexed: yes", "gx3d_listcache: yes",
+                         "gx3d_statededup: yes", "a0_diag: yes",
+                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-a0diag"):
+                self.assertIn(line + "\n", text)
+
+    def test_palette_hash_mode_invalidates_stale_sdk_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            obj = out / "sdk/port/port_gx3d_texture.o"
+            obj.parent.mkdir(parents=True)
+            obj.write_bytes(b"stale")
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+                with patch.dict(os.environ, {"HGSS_PALETTE_HASH": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                self.assertFalse(obj.exists())
+                self.assertEqual((out / "sdk/.palette-hash-mode").read_text(), "1\n")
+                obj.write_bytes(b"profiled")
+                with patch.dict(os.environ, {"HGSS_PALETTE_HASH": "0"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                self.assertFalse(obj.exists())
+                self.assertEqual((out / "sdk/.palette-hash-mode").read_text(), "0\n")
+            obj.write_bytes(b"old")
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
+                with patch.dict(os.environ, {"HGSS_PALETTE_HASH": "1"}):
+                    ok, _ = hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(hg.palette_sdk_mode_matches(out))
+                self.assertFalse(ok)
+                self.assertEqual((out / "sdk/.palette-hash-mode").read_text(), "0\n")
+
+    def test_gx3d_mode_invalidates_stale_sdk_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            obj = out / "sdk/port/port_gx3d.o"
+            obj.parent.mkdir(parents=True)
+            obj.write_bytes(b"stale")
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+                with patch.dict(os.environ, {"HGSS_GX3D_LISTCACHE": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(obj.exists())
+                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "0,1,0\n")
+                    obj.write_bytes(b"cached")
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertTrue(obj.exists())
+                with patch.dict(os.environ, {"HGSS_GX3D_HOTLOOP": "1",
+                                              "HGSS_GX3D_STATEDEDUP": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(obj.exists())
+                    self.assertEqual((out / "sdk/.gx3d-mode").read_text(), "1,0,1\n")
+
+    def test_a0_mode_invalidates_stale_sdk_objects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            gx = out / "sdk/port/port_gx3d.o"
+            r2d = out / "sdk/port/port_render2d.o"
+            gx.parent.mkdir(parents=True)
+            gx.write_bytes(b"stale")
+            r2d.write_bytes(b"stale")
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+                with patch.dict(os.environ, {"HGSS_A0_DIAG": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(gx.exists())
+                    self.assertFalse(r2d.exists())
+                    self.assertEqual((out / "sdk/.a0-mode").read_text(), "1\n")
+                    gx.write_bytes(b"diag")
+                    r2d.write_bytes(b"diag")
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertTrue(gx.exists())
+                    self.assertTrue(r2d.exists())
+
+    def test_build_info_records_palette_hash_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dsx = Path(tmp) / "game.3dsx"
+            dsx.write_bytes(MINIMAL_3DSX)
+            with patch.dict(os.environ, {"HGSS_PALETTE_HASH": "1"}):
+                info = hg.write_build_info(dsx, "heartgold", "3ds", ("abc1234", "f" * 40, True, ""))
+                self.assertIn("palette_hash: yes\n", info.read_text())
 
     def test_boot_banner_logs_the_build(self):
         text = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()

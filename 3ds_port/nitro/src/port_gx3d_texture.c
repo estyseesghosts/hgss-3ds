@@ -514,8 +514,27 @@ static uint32_t mix_texture(uint32_t hash, const NitroGx3dTexBanks *banks, uint3
 }
 static uint32_t mix_palette(uint32_t hash, const NitroGx3dTexBanks *banks, uint32_t offset, uint32_t length)
 {
+#ifdef HGSS_PALETTE_HASH
+    /* Experimental: preserve bytewise FNV while resolving each bank once. */
+    while (length) {
+        uint32_t slot = offset >> 14;
+        uint32_t n = 0x4000u - (offset & 0x3fffu);
+        uint32_t i;
+        const unsigned char *p = slot < 6 ? banks->palette[slot] : NULL;
+        if (n > length) n = length;
+        if (p) {
+            p += offset & 0x3fffu;
+            for (i = 0; i < n; i++) hash = mix_byte(hash, p[i]);
+        } else {
+            for (i = 0; i < n; i++) hash = mix_byte(hash, 0);
+        }
+        offset += n;
+        length -= n;
+    }
+#else
     uint32_t i;
     for (i = 0; i < length; i++) hash = mix_byte(hash, palette_u8(banks, offset + i));
+#endif
     return hash;
 }
 
