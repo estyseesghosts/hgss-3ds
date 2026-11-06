@@ -243,3 +243,15 @@ wall without stating the assumption. One primary hypothesis per experiment.
   washes on hidden ones.
 - (Discriminator design: evictSame/evictAddr/evictChurn on the existing log
   line; counters only, no behavior change. Kept in-tree as churn telemetry.)
+
+## Scene-flow census (done: worker 2x oversupply confirmed)
+
+- Result (az-flow-00, 600→1200): flow queued 300 done 299 dropped 0,
+  skipped 149; GPU scenes drawn 150; wall 10.0s/600 frames (60 ticks/s).
+- Reading: NO post-completion waste (dropped=0) — every completed scene
+  publishes. But the display consumes only ~150 of 299 published serials;
+  mailbox newest-wins overwrites the rest before display reads them.
+  Worker oversupplies 2x; display take/draw cadence is the cap, NOT worker
+  throughput. Worker-diet work is USELESS for draws from here.
+- Next: draw-trigger census (scene-draws vs serials-skipped on the loop
+  line) decides whether pairing waits or draw cadence drops the serials.
