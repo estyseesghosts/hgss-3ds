@@ -328,6 +328,26 @@ int main(void)
         printf("%04u %016llx\n", scene,
                (unsigned long long)scene_checksum());
     }
+    /* Singles phase (FIFO origin): the same lists one word at a time, so
+     * scan_packets cannot complete runs and every command arrives as a
+     * single entry, like CPU FIFO writes on hardware. The reference build
+     * transforms them directly; the FIFOCACHE build takes the hidden-vertex
+     * scan. Checksums must agree either way. */
+    for (scene = 12000; scene < 12200; scene++) {
+        Words head = {0}, tail = {0};
+        emit_mode(&head, 0);
+        emit_translate(&head, 0, 0, 0);
+        feed_pieces(head.w, head.n, 1);
+        free(head.w);
+        feed_pieces(listA.w, listA.n, 1);
+        feed_pieces(listB.w, listB.n, 1);
+        emit_swap(&tail, 0);
+        feed_pieces(tail.w, tail.n, 1);
+        free(tail.w);
+        run_worker();
+        printf("%04u %016llx\n", scene,
+               (unsigned long long)scene_checksum());
+    }
     /* Tag-queue overflow scene: far more packets entries than source
      * tags. Early entries lose their tags, so those lists scan instead
      * of hitting; output is still identical. */
@@ -338,7 +358,7 @@ int main(void)
         emit_translate(&head, 0, 0, 0);
         feed_pieces(head.w, head.n, 64);
         free(head.w);
-        for (k = 0; k < 600; k++) feed_pieces(listA.w, listA.n, 37);
+        for (k = 0; k < 5000; k++) feed_pieces(listA.w, listA.n, 37);
         emit_swap(&tail, 0);
         feed_pieces(tail.w, tail.n, 64);
         free(tail.w);
@@ -351,10 +371,11 @@ int main(void)
         NitroPort_Gx3dListCacheStats(&st);
         fprintf(stderr, "listcache: lookups=%u hits=%u inserts=%u evicts=%u "
                 "sampleFails=%u resumeFails=%u untagged=%u audits=%u auditFails=%u "
-                "disabled=%u entries=%u census=%u\n",
+                "disabled=%u entries=%u census=%u tagCollide=%u singlesBegin=%u\n",
                 st.lookups, st.hits, st.inserts, st.evicts,
                 st.sampleFails, st.resumeFails, st.untagged, st.audits,
-                st.auditFails, st.disabled, st.entries, st.censusSources);
+                st.auditFails, st.disabled, st.entries, st.censusSources,
+                st.tagCollide, st.singlesBegin);
         CHECK(st.lookups > 10000);
         CHECK(st.hits > 5000);
         CHECK(st.inserts > 0);

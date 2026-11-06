@@ -57,22 +57,90 @@ wall without stating the assumption. One primary hypothesis per experiment.
   throughput; skip mechanism amplifies worker gains) and/or (b) more
   2D-newness per tick.
 
-## Exp-2 indexed-off A/B (queued)
+## Exp-2 indexed-off A/B (done, neutral)
 
 - Hypothesis: G2 indexed prep is pure loss in this scene (hardware log 36:
   identical vertex bytes + index overhead + ~1.3s/120 scenes prep).
 - Baseline: twin (`-gxhot-gxidx-listcache-statededup`, `56539dd0`).
 - Candidate: `build/d1-noidx-ss` (`-gxhot-listcache-statededup`, `7d4db664`),
   same az30-lower.ini. One variable: HGSS_GX3D_INDEXED off.
-- Pending run.
+- Result: composes 13.7/s both; scene build 6.18->6.03ms (noise); geometry
+  31.68ms/scene, 242 skipped; drawer identical; wall 30s both.
+- Correctness: field screenshot sane.
+- Conclusion: neutral under Azahar (JIT eats the prep cost; host GL is
+  insensitive to the byte difference). Indexed STAYS ON (hardware drop
+  decides separately; no reason to fork the campaign binary). No change.
 
-## Exp-4 force-software upper (diag + sw2d=on) (running)
+## Exp-4 force-software upper (done, rejected)
 
 - Hypothesis: draws follow content newness; forcing full software raster
-  (no GPU-BG takes) makes every upper publish new (scroll changes software
-  every tick) and draws should jump ~2x+.
+  (no GPU-BG takes) makes every upper publish new and draws should jump ~2x.
 - Candidate: diag binary + az30-sw2d.ini (az30-lower + sw2d=on). Reference
-  path by construction (bit-exact); costs drawer CPU.
-- Decides secondarily whether scenes drive draws (residual
-  draws-upper-new-lower-new => scene share => has3d verdict).
-- Pending run. Screenshots must match baseline pixel-for-pixel (upper).
+  path by construction.
+- Result: draws 132->109, composes 13.2->10.9/s; drawer 29.0->19.8/s @
+  35.76ms/frame (top raster 6.7->21.1ms/call); publishes 30->20.9/s.
+  Upper reuse still caught 128/198 (content is content; scroll barely moves
+  in this window). Screenshots structurally identical (9.6% pixels differ
+  from RPC capture-latency phase drift, verified by banner fade state).
+- Conclusion: rejected. Takes stay on. Draws track completions x newness;
+  heavier draws lose net.
+
+## Exp-2b tag capacity (done, beneficial)
+
+- Hypothesis: the 512-entry tag ring evicts while the worker lags ~4 scenes,
+  showing as untagged lookups; hashed 4096 slots recover them.
+- Candidate: `build/d1-fifo-ss` (twin flags + SDK tag change; commit
+  b289ec9, so tag `b289ec9-dirty-...`; twin predates instrumentation by a
+  behavior-neutral counters-only diff, noted). Same az30-lower.ini.
+- Result: untagged collapsed (52k->7.6k cumulative); tagCollide 100k (hash
+  pressure is real); singlesBegin 16.8k (FIFO origin confirmed as a second
+  pool); worker busy 96->90%, 31.86->29.83ms/scene, skipped 242->199,
+  producer wait 363->0.3ms (!!); wakeups 240->527; composes 13.7->14.8/s
+  (+8%); drawer 29.0->32.3/s; wall 30s.
+- Correctness: screenshots sane; audits 0 fails; no asserts.
+- Conclusion: beneficial, keep. The linear 512-scan itself cost ~5% worker;
+  producer-wait elimination is the big secondary win. BUT exposed entry
+  thrash: 24k inserts into 256 slots (0.8% hits). Next: Exp-2c entry table.
+
+## Exp-2c entry table 256->1024 hashed (done, major win)
+
+- Hypothesis: with tags fixed, the 256-entry table thrashes under pipelined
+  scenes; hashed 1024 slots let entries survive the lag window.
+- Candidate: same `build/d1-fifo-ss` (same flags; SDK change only).
+- Fixture gate: `test_gx3d_listcache` bit-compare green (including an
+  updated overflow premise: 5000-piece feed to actually overflow 4096 tags).
+- Result: composes 13.7->22.6/s (+65%!), late 60->1, hits 0.8%->29%;
+  skipped 242->150; worker busy 93%; wall 30s.
+- Correctness: screenshots sane; audits 0 fails; fixtures green.
+- Conclusion: keep. The entry table was massively clogged. Draws now
+  ≈ scenes-pub (~150) + 2D-new (~70).
+
+## Exp-3a singles scan routing (done, neutral -> reverted)
+
+- Hypothesis: FIFO singles runs never get the hidden-vertex scan; routing
+  them through the existing skip_hidden_vertices saves transform on hidden
+  singles, with zero hot-path changes.
+- Candidate: `build/d1-fifo3a-ss` (twin flags + FIFOCACHE; fixture-proven
+  bit-exact incl. a new word-by-word singles phase).
+- Result: 32.6k scans fired; worker 31.25ms/scene (vs 30.88), skipped 150
+  (same), draws 132 (same), composes 22.5/s (same), wall same. NET ZERO.
+- Coherent cause: singles runs here are overwhelmingly visible (scan never
+  skips, pure tax) — which also kills Exp-3b's premise (nothing repeat-hidden
+  to cache). A 240-vs-400 count scare investigated to a census-timing
+  illusion (periodic log mid-phase vs end totals); hook fired 100%.
+- Conclusion (guide §15: failed idea established decisively): REVERTED the
+  hook + FIFOCACHE flag + plumbing + fifo test. KEPT: tag/entry hashing,
+  census fields, fixture singles-phase coverage, overflow premise fix.
+  Tree stays lean; no dead flags.
+- Abandoned direction (recorded): worker-side content hashing cannot beat
+  walk-then-skip for hidden runs (the verification IS the walk); caching
+  needs arrival-side identity.
+
+## Next: worker transform cost + R diet
+
+- Remaining geometry lever: per-vertex transform/lighting/clip (A0 sample:
+  34% of worker) + PICA staging writes. Options: float32 fast path with
+  tolerance fixtures (O3-3D-7 allows tolerance; G1 bit-exact gate must NOT
+  be weakened — separate tolerance gate), drawer hash narrowing (lower
+  refHash ~1MB/check, upper check 3ms x300).
+- R diet and tick pace re-measured after each change; wall A/B decides.

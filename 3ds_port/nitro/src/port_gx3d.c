@@ -2582,8 +2582,16 @@ found:
  * (NoteFree/EpochBump from the game's thread), which only clears `used`:
  * a torn lookup still faces the sampled-hash check, and identical bytes
  * stay correct regardless. */
-#define LISTCACHE_ENTRIES 256u
-#define LISTCACHE_TAGS 512u
+#define LISTCACHE_ENTRIES 1024u
+#define LISTCACHE_ENTRY_MASK (LISTCACHE_ENTRIES-1u)
+/* Tag slots: one per recent packets block, found by ring position. Sized
+ * for several scenes of blocks with worker lag (512 evicted while the
+ * worker was still behind, showing as untagged lookups); open-addressed
+ * hash keeps lookup O(1). A collision overwrite only loses caching for
+ * that block (counted); the sampled-hash check downstream keeps a stale
+ * slot from ever causing a wrong skip. */
+#define LISTCACHE_TAGS 4096u
+#define LISTCACHE_TAG_MASK (LISTCACHE_TAGS-1u)
 #define LISTCACHE_CENSUS 64u
 #define LISTCACHE_MAX_SPAN 257u
 #define LISTCACHE_MAX_LEN 65536u
@@ -2626,10 +2634,8 @@ typedef struct {
     uint32_t lens[4];
 } ListCensus;
 static ListTag sListTags[LISTCACHE_TAGS];
-static unsigned sListTagHead;
 static uint32_t sListTagSeq;
 static ListCacheEntry sListCache[LISTCACHE_ENTRIES];
-static unsigned sListCacheNext;
 static uint32_t sListCacheEpoch;
 static int sListCacheDisabled;
 static unsigned sListAuditDue;
@@ -2638,12 +2644,18 @@ static ListCensus sListCensus[LISTCACHE_CENSUS];
 static struct {
     unsigned lookups, hits, inserts, evicts;
     unsigned sampleFails, resumeFails, audits, auditFails, untagged;
+    unsigned tagCollide, singlesBegin;
 } sListDiag;
+
+static unsigned list_tag_slot(uint32_t ringStart)
+{
+    return (unsigned)((ringStart*2654435761u)>>(32u-12u))&LISTCACHE_TAG_MASK;
+}
 
 static void listcache_note_packets(uint32_t ringStart, const uint32_t *words, uint32_t count)
 {
-    ListTag *t=&sListTags[sListTagHead];
-    sListTagHead=(sListTagHead+1u)%LISTCACHE_TAGS;
+    ListTag *t=&sListTags[list_tag_slot(ringStart)];
+    if(t->seq && t->ringStart!=ringStart)sListDiag.tagCollide++;
     t->ringStart=ringStart;
     t->seq=++sListTagSeq;
     t->src=(uintptr_t)words;
@@ -2651,10 +2663,21 @@ static void listcache_note_packets(uint32_t ringStart, const uint32_t *words, ui
 }
 static ListTag *list_find_tag(uint32_t ringStart)
 {
-    unsigned k;
-    for(k=0;k<LISTCACHE_TAGS;k++)
-        if(sListTags[k].seq && sListTags[k].ringStart==ringStart)return &sListTags[k];
+    ListTag *t=&sListTags[list_tag_slot(ringStart)];
+    if(t->seq && t->ringStart==ringStart)return t;
     return 0;
+}
+/* The entry slot for one cache key (source address of BEGIN's param word,
+ * BEGIN remainder, pre-list coordinates). Lookup and insert share it, so an
+ * insert lands where its own lookups look. Open addressing by overwrite: a
+ * collision only loses caching for one of the two runs (counted as an
+ * evict); the sampled-hash check downstream keeps a wrong slot from ever
+ * causing a wrong skip. */
+static unsigned list_entry_slot(uintptr_t src, uint32_t keyWord, const int32_t coord[3])
+{
+    uint32_t h=(uint32_t)(src^(src>>17)^keyWord^(uint32_t)coord[0]^((uint32_t)coord[1]<<11)^((uint32_t)coord[2]<<22));
+    h^=h>>16;h*=0x7feb352du;h^=h>>15;
+    return h&LISTCACHE_ENTRY_MASK;
 }
 /* One entry forward the way stream_next steps (PAD skip, SKIP/end
  * bounds), landing only on packets entries. */
@@ -2720,7 +2743,7 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
     ListCensus *c;
     ListWalk w;
     uint32_t k, E, count0, L=0, full=LISTCACHE_FNV_OFFSET, sample=LISTCACHE_FNV_OFFSET;
-    uint32_t offs[10], word, t, m=0;
+    uint32_t offs[10], word, t, m=0, e_hash;
     unsigned nOffs=0, q;
     uintptr_t expect;
     if(sListCacheDisabled)return;
@@ -2763,6 +2786,7 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
         if(o!=offs[nOffs-1])offs[nOffs++]=o;
     }
     if(L-1u!=offs[nOffs-1])offs[nOffs++]=L-1u;
+    e_hash=list_entry_slot(t0->src+(uintptr_t)(i0-1u)*4u,word0,keyCoord);
     if(!list_walk_start(&w,r0,i0-1u,scEnd))return;
     m=0;
     for(t=0;t<L;t++){
@@ -2770,8 +2794,7 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
         full^=word;full*=LISTCACHE_FNV_PRIME;
         if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
     }
-    e=&sListCache[sListCacheNext];
-    sListCacheNext=(sListCacheNext+1u)%LISTCACHE_ENTRIES;
+    e=&sListCache[e_hash];
     if(e->used)sListDiag.evicts++;
     e->used=1;
     e->epoch=sListCacheEpoch;
@@ -2856,13 +2879,16 @@ static int listcache_try(StreamCursor *sc)
     if(!tag){sListDiag.untagged++;return 0;}
     if(sc->c.i==0u)return 0;
     {
+        /* Hashed slot (see list_entry_slot): the linear 256-scan cost real
+         * time per lookup, and 256 slots thrashed under pipelined scenes. */
         uintptr_t cand=tag->src+(uintptr_t)(sc->c.i-1u)*4u;
-        for(k=0;k<LISTCACHE_ENTRIES;k++){
-            ListCacheEntry *c2=&sListCache[k];
-            if(c2->used && c2->src==cand && c2->keyWord==sc->c.word &&
-               c2->coord[0]==s.coord[0] && c2->coord[1]==s.coord[1] &&
-               c2->coord[2]==s.coord[2]){e=c2;break;}
-        }
+        int32_t key[3];
+        ListCacheEntry *c2;
+        key[0]=s.coord[0];key[1]=s.coord[1];key[2]=s.coord[2];
+        c2=&sListCache[list_entry_slot(cand,sc->c.word,key)];
+        if(c2->used && c2->src==cand && c2->keyWord==sc->c.word &&
+           c2->coord[0]==s.coord[0] && c2->coord[1]==s.coord[1] &&
+           c2->coord[2]==s.coord[2])e=c2;
     }
     if(!e)return 0;
     epoch=__atomic_load_n(&sListCacheEpoch,__ATOMIC_SEQ_CST);
@@ -2966,11 +2992,12 @@ static void listcache_log(void)
         if(sListCensus[k].src){srcs++;lists+=sListCensus[k].lists;}
     NitroPort_Log("[gx3d] listcache: %u lookups, %u hits, %u inserts (%u evicts), "
                   "sample-fail %u, resume-fail %u, untagged %u, audits %u (fail %u)%s; "
+                  "tags collide %u, singles-begin %u; "
                   "census %u sources, %u lists",
                   sListDiag.lookups, sListDiag.hits, sListDiag.inserts, sListDiag.evicts,
                   sListDiag.sampleFails, sListDiag.resumeFails, sListDiag.untagged,
                   sListDiag.audits, sListDiag.auditFails,
-                  sListCacheDisabled?" DISABLED":"", srcs, lists);
+                  sListCacheDisabled?" DISABLED":"", sListDiag.tagCollide, sListDiag.singlesBegin, srcs, lists);
     for(k=0;k<LISTCACHE_CENSUS && shown<8;k++)
         if(sListCensus[k].src){
             NitroPort_Log("[gx3d] listcache src %p: %u lists, %u hits, %u scenes",
@@ -2990,8 +3017,6 @@ static void listcache_reset(void)
     for(k=0;k<LISTCACHE_TAGS;k++)sListTags[k].seq=0;
     sListCacheEpoch++;
     sListCacheDisabled=0;
-    sListCacheNext=0;
-    sListTagHead=0;
     sListAuditDue=0;
     sListAuditNow=0;
 }
@@ -3043,6 +3068,8 @@ void NitroPort_Gx3dListCacheStats(NitroGx3dListCacheStats *out)
     out->disabled=(uint32_t)sListCacheDisabled;
     out->entries=entries;
     out->censusSources=srcs;
+    out->tagCollide=sListDiag.tagCollide;
+    out->singlesBegin=sListDiag.singlesBegin;
 }
 #endif /* HGSS_GX3D_LISTCACHE */
 
@@ -3239,6 +3266,12 @@ static uint32_t work(uint32_t r,uint32_t end)
         }
         return r+2u+count;
     }
+#ifdef HGSS_GX3D_LISTCACHE
+    /* Census only (no behavior change): BEGINs arriving as single-command
+     * entries never reach listcache_try; this counts them so the untagged
+     * share can be split into singles-origin vs tag-evicted. */
+    if(op==0x40u && !skip)sListDiag.singlesBegin++;
+#endif
     work_op(op,entry+1,skip);
     return r+1u+((header>>8)&255u);
 }
