@@ -177,7 +177,7 @@ wall without stating the assumption. One primary hypothesis per experiment.
 - Draw equation: draws ≈ max(scenes-pub, upper-new) + lower-new (overlap).
   scenes-pub is the only scalable term (content-limited 2D otherwise).
 
-## Next: normal-keyed lighting cache (Exp-6, building)
+## Exp-6 normal-keyed lighting cache (done, kept as work elimination)
 
 - A0 census: 96% of packets runs LIT. Map geometry reuses few normal
   directions (axis boxes); same normal + same lights + same material =
@@ -203,11 +203,32 @@ wall without stating the assumption. One primary hypothesis per experiment.
   positive (~300k shade computations skipped/interval, bit-exact same math),
   performance proof neutral. 768B + ~20 lines, fixture-gated, zero-risk;
   may help light-heavy scenes (battles). Tree stays lean otherwise.
-- Next decision: re-sample worker split (A0) on the current build, then
-  target the biggest share (clip transform float path and/or scan cost).
-- Metrology note: /tmp/azmeta.txt monitor matched a stale marker pattern
-  (`[40800] frame 40800` never advances); replaced by FRAMETIME-41400 wall
-  waiter on the live SD log to nail wall ticks/s.
-- Then: float transform (tolerance gate, last resort), drawer-hash diet
-  for tick pace. R/host diet via wall A/B only; upload path already
-  band-limited (dropped as a thread).
+## Exp-7 float clip kernel (done, neutral -> reverted)
+
+- Hypothesis: submit_vertex's 4 int64-smull rows dominate the vertex share;
+  float32 on hardware VFP cuts that kernel ~3-4x.
+- Candidate: `build/d1-floatxf-ss` (twin flags + FLOATXF; tolerance gate
+  green, screenshot phase-identical to shade run).
+- Result: worker 30.46->30.03ms (-1.5%, noise); skipped 150->170, draws
+  224->192, composes 22.4->19.2/s (all three down together = slightly
+  slower run, not noise in one counter). The int path (12 smull + adds +
+  predicted compares) was already optimal; int<->float converts ate the
+  VFP gain. The vertex ticks live elsewhere (staging/record/lighting
+  misses), NOT the mult kernel.
+- Conclusion (guide §15): REVERTED flag + plumbing + tolerance test. Tree
+  lean; no dead flags. Lesson: kernel-level substitution without a profile
+  pointing at that kernel is guessing.
+- Wall-metrology fix: probe now stamps `wall-{mark}.txt` at target//2 and
+  target frames (game.log is written once at completion, so external
+  waiters can never split it; the stale-marker /tmp/azmeta.txt approach
+  is retired).
+
+## Exp-8 evict-cause census (building)
+
+- Hypothesis options hinge on WHY entries churn (inserts ≈ evicts ≈ 13k):
+  (a) capacity/collisions (same key re-inserted) -> bigger/better table;
+  (b) rewritten-animated content (coords differ) -> caching fundamentally
+  limited, pivot to cheaper scans or fewer runs;
+  (c) heap-reuse churn (same coords, new src) -> content-keyed identity.
+- Discriminator (6 lines, existing log line): evictSame / evictAddr /
+  evictChurn. One probe decides. No behavior change (counters only).

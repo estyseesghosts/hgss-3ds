@@ -209,6 +209,7 @@ typedef struct NitroGx3dListCacheStats {
     uint32_t sampleFails, resumeFails, audits, auditFails;
     uint32_t untagged, disabled, entries, censusSources;
     uint32_t tagCollide, singlesBegin;
+    uint32_t evictSame, evictAddr, evictChurn;
 } NitroGx3dListCacheStats;
 void NitroPort_Gx3dListCacheStats(NitroGx3dListCacheStats *out);
 #endif

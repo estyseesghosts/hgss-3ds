@@ -2673,6 +2673,7 @@ static struct {
     unsigned lookups, hits, inserts, evicts;
     unsigned sampleFails, resumeFails, audits, auditFails, untagged;
     unsigned tagCollide, singlesBegin;
+    unsigned evictSame, evictAddr, evictChurn;
 } sListDiag;
 
 static unsigned list_tag_slot(uint32_t ringStart)
@@ -2823,7 +2824,20 @@ static void listcache_insert(uint32_t r0, uint32_t i0, uint32_t word0,
         if(m<nOffs && t==offs[m]){sample^=word;sample*=LISTCACHE_FNV_PRIME;m++;}
     }
     e=&sListCache[e_hash];
-    if(e->used)sListDiag.evicts++;
+    if(e->used){
+        sListDiag.evicts++;
+        /* Churn cause census (one probe decides capacity vs animation):
+         * same slot, same key+coords = pure capacity/collision loss;
+         * same slot, different coords = rewritten-animated content no table
+         * keeps; different src = heap reuse across scenes. */
+        if(e->src==t0->src+(uintptr_t)(i0-1u)*4u && e->keyWord==word0 &&
+           e->coord[0]==keyCoord[0] && e->coord[1]==keyCoord[1] && e->coord[2]==keyCoord[2])
+            sListDiag.evictSame++;
+        else if(e->coord[0]==keyCoord[0] && e->coord[1]==keyCoord[1] && e->coord[2]==keyCoord[2])
+            sListDiag.evictAddr++;
+        else
+            sListDiag.evictChurn++;
+    }
     e->used=1;
     e->epoch=sListCacheEpoch;
     e->src=t0->src+(uintptr_t)(i0-1u)*4u;
@@ -3021,11 +3035,13 @@ static void listcache_log(void)
     NitroPort_Log("[gx3d] listcache: %u lookups, %u hits, %u inserts (%u evicts), "
                   "sample-fail %u, resume-fail %u, untagged %u, audits %u (fail %u)%s; "
                   "tags collide %u, singles-begin %u; "
+                  "evict same-key %u, same-coords %u, churn %u; "
                   "census %u sources, %u lists",
                   sListDiag.lookups, sListDiag.hits, sListDiag.inserts, sListDiag.evicts,
                   sListDiag.sampleFails, sListDiag.resumeFails, sListDiag.untagged,
                   sListDiag.audits, sListDiag.auditFails,
-                  sListCacheDisabled?" DISABLED":"", sListDiag.tagCollide, sListDiag.singlesBegin, srcs, lists);
+                  sListCacheDisabled?" DISABLED":"", sListDiag.tagCollide, sListDiag.singlesBegin,
+                  sListDiag.evictSame, sListDiag.evictAddr, sListDiag.evictChurn, srcs, lists);
     for(k=0;k<LISTCACHE_CENSUS && shown<8;k++)
         if(sListCensus[k].src){
             NitroPort_Log("[gx3d] listcache src %p: %u lists, %u hits, %u scenes",
@@ -3098,6 +3114,9 @@ void NitroPort_Gx3dListCacheStats(NitroGx3dListCacheStats *out)
     out->censusSources=srcs;
     out->tagCollide=sListDiag.tagCollide;
     out->singlesBegin=sListDiag.singlesBegin;
+    out->evictSame=sListDiag.evictSame;
+    out->evictAddr=sListDiag.evictAddr;
+    out->evictChurn=sListDiag.evictChurn;
 }
 #endif /* HGSS_GX3D_LISTCACHE */
 
