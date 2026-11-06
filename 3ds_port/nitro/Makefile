@@ -222,6 +222,9 @@ endif
 ifeq ($(HGSS_GX3D_BG3SLOT),1)
   CFLAGS += -DHGSS_GX3D_BG3SLOT=1
 endif
+ifeq ($(HGSS_SND_ADPCM),1)
+  CFLAGS += -DHGSS_SND_ADPCM=1
+endif
 ifeq ($(HGSS_A0_DIAG),1)
   CFLAGS += -DHGSS_A0_DIAG=1
 endif

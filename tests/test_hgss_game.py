@@ -2478,7 +2478,7 @@ class BuildIdTests(unittest.TestCase):
                    "HGSS_GX3D_INDEXED": "1", "HGSS_GX3D_LISTCACHE": "1",
                    "HGSS_GX3D_STATEDEDUP": "1", "HGSS_GX3D_FUSEHASH": "1",
                    "HGSS_GX3D_LAZYINSERT": "1", "HGSS_GX3D_BG3SLOT": "1",
-                   "HGSS_A0_DIAG": "1"}
+                   "HGSS_SND_ADPCM": "1", "HGSS_A0_DIAG": "1"}
             with patch.dict(os.environ, env):
                 text = hg.write_build_info(dsx, "heartgold", "3ds",
                                            ("abc1234", "f" * 40, True, "")).read_text()
@@ -2487,8 +2487,8 @@ class BuildIdTests(unittest.TestCase):
                          "gx3d_indexed: yes", "gx3d_listcache: yes",
                          "gx3d_statededup: yes", "gx3d_fusehash: yes",
                          "gx3d_lazyinsert: yes", "gx3d_bg3slot: yes",
-                         "a0_diag: yes",
-                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-fusehash-lazy-slot3-a0diag"):
+                         "snd_adpcm: yes", "a0_diag: yes",
+                         "build: abc1234-dirty-texprof-texhint-palhash-gxhot-gxidx-listcache-statededup-fusehash-lazy-slot3-adpcm-a0diag"):
                 self.assertIn(line + "\n", text)
 
     def test_palette_hash_mode_invalidates_stale_sdk_object(self):
@@ -2582,6 +2582,21 @@ class BuildIdTests(unittest.TestCase):
                     r2d.write_bytes(b"slotted")
                     hg.build_libraries(out, "3ds", out, 1)
                     self.assertTrue(r2d.exists())
+
+    def test_sndadpcm_mode_invalidates_stale_sound_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            snd = out / "sdk/port/port_sound_chip.o"
+            snd.parent.mkdir(parents=True)
+            snd.write_bytes(b"stale")
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+                with patch.dict(os.environ, {"HGSS_SND_ADPCM": "1"}):
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertFalse(snd.exists())
+                    self.assertEqual((out / "sdk/.sndadpcm-mode").read_text(), "1\n")
+                    snd.write_bytes(b"dieted")
+                    hg.build_libraries(out, "3ds", out, 1)
+                    self.assertTrue(snd.exists())
 
     def test_build_info_records_palette_hash_mode(self):
         with tempfile.TemporaryDirectory() as tmp:

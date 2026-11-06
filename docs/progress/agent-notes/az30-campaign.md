@@ -494,6 +494,18 @@ wall without stating the assumption. One primary hypothesis per experiment.
   reject (bg+kind+bgcnt+dispcnt, mirrors dsp-gate pattern) so the
   next hardware run names BG3's kind directly. No behavior change;
   render2d partial + listcache gates green.
+- Exp-22 audio ADPCM diet (SND_ADPCM flag; building): [sndprof]
+  verdict is 98% ADPCM, Mix 94% of audio CPU, no capture. The
+  inner loop's nibble-bit branches (~50/50 music data) and
+  saturate become branchless arithmetic (exact: shifts exact,
+  mults by 0/1 exact, mod-2^32 associativity under -fwrapv;
+  compiler emits SSAT, verified in object). Divides were already
+  gone (compiler; zero idiv/uidiv/lmul in object). Host
+  differential proof: both flag states bit-identical to pristine
+  over 24k vectors (exhaustive step/nibble/predictor grid +
+  streams + full mix matrix). Expected ~5-10% of mixer (~2% core);
+  hardware audio% line decides. Structural audio (decode cache /
+  NDSP channels) reviewed separately, not started.
 - §13 REVIEW: BG3 blend-state takes (PARKED, not built). DS alpha
   = src×EVA+dst×EVB with uniform factors: representable via PICA
   vertex-alpha IFF EVA+EVB==16 (darkening sums are not — no

@@ -858,7 +858,7 @@ def smdh_names(build_id: str | None = None) -> tuple[str, str, str]:
     rest = build_id[len(short_sha):]
     base = short_sha + ("-dirty" if rest.startswith("-dirty") else "")
     flags = [part for part in ("gxhot", "gxidx", "listcache", "statededup",
-                               "fusehash", "lazy", "slot3", "a0diag")
+                               "fusehash", "lazy", "slot3", "adpcm", "a0diag")
              if f"-{part}" in rest]
     title = f"{game}-{build_id}"
     long = " ".join(flags)
@@ -1006,6 +1006,7 @@ def experiment_build_id(short: str, dirty: bool) -> str:
                              ("HGSS_GX3D_FUSEHASH", "-fusehash"),
                              ("HGSS_GX3D_LAZYINSERT", "-lazy"),
                              ("HGSS_GX3D_BG3SLOT", "-slot3"),
+                             ("HGSS_SND_ADPCM", "-adpcm"),
                              ("HGSS_A0_DIAG", "-a0diag")):
         if os.environ.get(variable) == "1":
             tag += suffix
@@ -1057,6 +1058,7 @@ def write_build_info(dsx: Path, game: str, target: str,
              f"gx3d_fusehash: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_FUSEHASH') == '1' else 'no'}\n"
              f"gx3d_lazyinsert: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_LAZYINSERT') == '1' else 'no'}\n"
              f"gx3d_bg3slot: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_BG3SLOT') == '1' else 'no'}\n"
+             f"snd_adpcm: {'yes' if target == '3ds' and os.environ.get('HGSS_SND_ADPCM') == '1' else 'no'}\n"
              f"a0_diag: {'yes' if target == '3ds' and os.environ.get('HGSS_A0_DIAG') == '1' else 'no'}\n"
             f"build: {experiment_build_id(short, dirty)}\n"
             f"sha: {full}\n"
@@ -1448,6 +1450,11 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
         # NITRO_GPU_BG_SLOTS lives in the render2d header: a toggle
         # rebuilds the 2D engine (gx3d.o rides the gx3d-mode marker).
         (sdk_out / "port" / "port_render2d.o").unlink(missing_ok=True)
+    sndadpcm_mode = "1" if os.environ.get("HGSS_SND_ADPCM") == "1" else "0"
+    sndadpcm_marker = sdk_out / ".sndadpcm-mode"
+    if not sndadpcm_marker.exists() or sndadpcm_marker.read_text().strip() != sndadpcm_mode:
+        # Branchless ADPCM decode lives in the sound chip object only.
+        (sdk_out / "port" / "port_sound_chip.o").unlink(missing_ok=True)
     a0_mode = "1" if os.environ.get("HGSS_A0_DIAG") == "1" else "0"
     a0_marker = sdk_out / ".a0-mode"
     if not a0_marker.exists() or a0_marker.read_text().strip() != a0_mode:
@@ -1468,6 +1475,7 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
             palette_marker.write_text(palette_mode + "\n")
             gx3d_marker.write_text(gx3d_mode + "\n")
             bg3slot_marker.write_text(bg3slot_mode + "\n")
+            sndadpcm_marker.write_text(sndadpcm_mode + "\n")
             a0_marker.write_text(a0_mode + "\n")
         ok = ok and proc.returncode == 0
     libs = [p for p in (sdk_out / "libnitrosystem.a", sdk_out / "libnitro.a")

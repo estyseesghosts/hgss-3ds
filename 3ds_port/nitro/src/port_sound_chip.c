@@ -72,9 +72,19 @@ static void put32(unsigned offset, uint32_t value)
 
 static int16_t saturate(int32_t value)
 {
+#ifdef HGSS_SND_ADPCM
+    /* Ternary form so ARM builds emit predicated movs (verified: SSAT,
+     * no branches, in the device object); bit-identical to the branched
+     * form (host differential proof). Rides the ADPCM diet flag so the
+     * hardware A/B measures one change. */
+    int32_t v = value < INT16_MIN ? INT16_MIN : value;
+    v = v > INT16_MAX ? INT16_MAX : v;
+    return (int16_t)v;
+#else
     if (value < INT16_MIN) return INT16_MIN;
     if (value > INT16_MAX) return INT16_MAX;
     return (int16_t)value;
+#endif
 }
 
 static int8_t pcm8(const uint8_t *data, uint32_t offset)
@@ -108,10 +118,20 @@ static void adpcm_init(NitroSoundVoice *v, const uint8_t *source)
 static void adpcm_step(NitroSoundVoice *v, uint8_t nibble)
 {
     int32_t step = sStep[v->stepIndex];
+#ifdef HGSS_SND_ADPCM
+    /* Branchless nibble decode: exact (shifts exact, multiply by 0/1
+     * exact, additions associative mod 2^32 under -fwrapv). Nibble bits
+     * are music data (~50/50, unpredicted as branches). Bit-identical
+     * to the branched form (host differential proof). */
+    int32_t change = (step >> 3) + (step >> 2) * (int32_t)(nibble & 1u)
+                   + (step >> 1) * (int32_t)((nibble >> 1) & 1u)
+                   + step * (int32_t)((nibble >> 2) & 1u);
+#else
     int32_t change = step >> 3;
     if (nibble & 1u) change += step >> 2;
     if (nibble & 2u) change += step >> 1;
     if (nibble & 4u) change += step;
+#endif
     v->predictor += (nibble & 8u) ? -change : change;
     v->predictor = saturate(v->predictor);
     v->stepIndex += sIndexDelta[nibble & 7u];
@@ -486,16 +506,31 @@ static void mix_block(Channel *c, int32_t *L, int32_t *R, int32_t *values, size_
                 } else {
                     uint32_t nibble = index - 1u;
                     uint8_t byte = source[4u + nibble / 2u];
+                    /* Branchless nibble select (parity alternates every
+                     * sample: worst case for predictors) and change
+                     * (same exactness argument as adpcm_step). */
+#ifdef HGSS_SND_ADPCM
+                    unsigned code = (byte >> (((nibble & 1u)) << 2)) & 15u;
+                    int32_t st = sStep[stepIndex];
+                    int32_t change = (st >> 3) + (st >> 2) * (int32_t)(code & 1u)
+                                   + (st >> 1) * (int32_t)((code >> 1) & 1u)
+                                   + st * (int32_t)((code >> 2) & 1u);
+#else
                     unsigned code = (nibble & 1u) ? byte >> 4 : byte & 15u;
                     int32_t st = sStep[stepIndex];
                     int32_t change = st >> 3;
+#endif
 
                     last = predictor;
 
+#ifdef HGSS_SND_ADPCM
+                    predictor += (code & 8u) ? -change : change;
+#else
                     if (code & 1u) change += st >> 2;
                     if (code & 2u) change += st >> 1;
                     if (code & 4u) change += st;
                     predictor += (code & 8u) ? -change : change;
+#endif
                     predictor = saturate(predictor);
                     stepIndex += sIndexDelta[code & 7u];
                     if (stepIndex < 0) stepIndex = 0;
@@ -703,6 +738,19 @@ void NitroSound_KeyOn(NitroSoundChip *chip, unsigned channel)
     }
 }
 
+/* COUNT-HEAVY profile: cumulative counters so one device run can name the
+ * mixer's cost (per-sample format decode vs the capture/reverb path, with
+ * the sequencer split off in port_snd.c). Counters only; no mixing math
+ * touched. The mixer runs under the audio lock on one thread (tests are
+ * single-threaded), so plain integers, no atomics. port_snd.c reads these
+ * for its [sndprof] line via NitroSound_MixProfile below. */
+static uint64_t sProfMixCalls;      /* NitroSound_Mix calls that mixed (past the guard) */
+static uint64_t sProfMixFrames;     /* output frames, summed over those calls */
+static uint64_t sProfActiveCh;      /* active channels, summed over calls (mean: / calls) */
+static uint64_t sProfFormatCh[4];   /* active channels by sample format: 0 PCM8, 1 PCM16, 2 ADPCM, 3 PSG/noise */
+static uint64_t sProfCapturing;     /* capture instances running, summed over calls (0-2 each) */
+static uint64_t sProfDependentCh;   /* channels reading a capture buffer, summed over calls */
+
 void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
 {
     Channel channels[NITRO_SOUND_CHANNEL_COUNT];
@@ -720,6 +768,10 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
     for (channel = 0; channel < NITRO_SOUND_CHANNEL_COUNT; ++channel) {
         if (start_channel(chip, channel, &channels[count])) ++count;
     }
+    sProfMixCalls += 1u;
+    sProfMixFrames += (uint64_t)frames;
+    sProfActiveCh += (uint64_t)count;
+    for (k = 0; k < count; ++k) sProfFormatCh[channels[k].format] += 1u;
 #ifdef NITRO_SOUND_STATS
     for (k = 0; k < count; ++k) channels[k].tap = tapBuf[channels[k].channel];
 #endif
@@ -734,6 +786,10 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
     bypass3 = (control & 0x20u) != 0;
     capturing = ((reg8(0x508u) | reg8(0x509u)) & 128u) ||
                 chip->capture[0].running || chip->capture[1].running;
+    for (channel = 0; channel < 2u; ++channel) {
+        if ((reg8(0x508u + channel) & 128u) || chip->capture[channel].running)
+            sProfCapturing += 1u;
+    }
 
     if (capturing) {
         /* A channel that reads a capture's buffer (reverb plays the
@@ -749,8 +805,10 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
             for (k = 0; k < count; ++k) {
                 Channel *c = &channels[k];
                 if (c->format == 3u || !c->source) continue;
-                if (c->sourceAddr < dst + size && dst < c->sourceAddr + c->endByte)
+                if (c->sourceAddr < dst + size && dst < c->sourceAddr + c->endByte) {
                     c->dependent = 1;
+                    sProfDependentCh += 1u;
+                }
             }
         }
     }
@@ -880,6 +938,24 @@ void NitroSound_Mix(NitroSoundChip *chip, int16_t *stereo, size_t frames)
             channels[k].v->previousCtrl = reg32(channels[k].base);
         }
     }
+}
+
+/* Cumulative profile counters for port_snd.c's [sndprof] line (declared
+ * there, not in the shared header, so no header changes). formatCh takes
+ * 4 entries, one per sample format (see sProfFormatCh). */
+void NitroSound_MixProfile(uint64_t *calls, uint64_t *frames,
+                           uint64_t *activeCh, uint64_t formatCh[4],
+                           uint64_t *capturing, uint64_t *dependentCh)
+{
+    unsigned i;
+    if (calls) *calls = sProfMixCalls;
+    if (frames) *frames = sProfMixFrames;
+    if (activeCh) *activeCh = sProfActiveCh;
+    if (formatCh) {
+        for (i = 0; i < 4u; ++i) formatCh[i] = sProfFormatCh[i];
+    }
+    if (capturing) *capturing = sProfCapturing;
+    if (dependentCh) *dependentCh = sProfDependentCh;
 }
 
 #ifdef NITRO_SOUND_STATS
