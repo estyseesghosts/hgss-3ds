@@ -571,6 +571,10 @@ wall without stating the assumption. One primary hypothesis per experiment.
   [a0]/[sndprof]/gate-kind/jumps present per binary (batch2 has
   all, slot3b has all but A0-by-design). Staging (swap batch,
   swap slot3, add adpcm) + run sheet wait on the card.
+- STAGED 2026-11-06 (card back; superseded unrunned pair removed):
+  batch2 `ae4a490-...-a0diag`, slot3b `ae4a490-...-slot3`, adpcm
+  `3eb41c2-...-adpcm` (bits == committed; trailing doc deltas
+  only). Untouched: twin, fuse, port.ini/scripts/saves, port_A/B.
 - Exp-19 content-repeat census (done, REFUTED): 582 sampled inserts,
   same-base repeats 0, moved ~4%. Heap churn is genuinely novel
   content (walking camera), not re-emitted blocks — content-keyed
