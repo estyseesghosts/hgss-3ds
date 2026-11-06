@@ -21,6 +21,18 @@
 #include <stdint.h>
 #include <string.h>
 
+/* COUNT-HEAVY profile ticks: the 3DS's tick counter (port_os.c's pattern:
+ * the port never includes libctru's headers, so the one prototype it needs
+ * is declared here). Host builds have no counter: the Mix-vs-tick split
+ * reads 0 there and only the counts are exact. Emulator ticks are mushy
+ * (JIT/preemption inflate them); hardware ticks are true. */
+#ifdef __3DS__
+extern u64 svcGetSystemTick(void);
+#define SNDPROF_NOW() svcGetSystemTick()
+#else
+#define SNDPROF_NOW() ((u64)0)
+#endif
+
 #define SOUND_QUEUE_CAPACITY 32u
 #define SOUND_ALARM_CAPACITY 128u
 /* The ARM7 driver's tick: every SND_PROC_INTERVAL (2728) OS ticks, an OS
@@ -39,6 +51,12 @@ extern void N7_SND_SeqMain(BOOL periodic);
 extern void N7_SND_ExChannelMain(BOOL periodic);
 extern void N7_SND_UpdateSharedWork(void);
 extern u16 N7_SND_CalcRandom(void);
+/* Cumulative mixer counters owned by port_sound_chip.c (file-static there);
+ * declared here, not in the shared header, so no header changes. formatCh
+ * takes 4 entries, one per sample format. */
+extern void NitroSound_MixProfile(uint64_t *calls, uint64_t *frames,
+                                  uint64_t *activeCh, uint64_t formatCh[4],
+                                  uint64_t *capturing, uint64_t *dependentCh);
 
 static NitroSoundChip sChip;
 static volatile unsigned int sLock;
@@ -48,6 +66,18 @@ static unsigned sHead, sCount;
 static u32 sAlarmReplies[SOUND_ALARM_CAPACITY];
 static unsigned sAlarmHead, sAlarmCount;
 static uint64_t sClock, sTickPhase;
+
+/* COUNT-HEAVY profile: cumulative counters so one device run can name the
+ * ~25% core-0 audio cost (format decode vs capture/reverb vs sequencer
+ * tick). Counters plus one periodic log line only; no mixing math touched.
+ * Written and read on the audio thread only (NitroPort_SoundRender below),
+ * so plain integers, no atomics. */
+static uint64_t sProfRenderCalls;   /* SoundRender calls that reached the mix loop */
+static uint64_t sProfRenderFrames;  /* output frames requested, summed over those calls */
+static uint64_t sProfStretches;     /* mix-loop iterations (one lock hold + one Mix each) */
+static uint64_t sProfSoundTicks;    /* sequencer sound_tick executions */
+static uint64_t sProfMixTicks;      /* ARM11 ticks inside NitroSound_Mix (__3DS__ only; 0 on host) */
+static uint64_t sProfTickTicks;     /* ARM11 ticks inside sound_tick (__3DS__ only; 0 on host) */
 
 typedef struct PortSoundAlarm {
     uint64_t due;
@@ -217,6 +247,8 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames)
         memset(stereo, 0, frames * 4u);
         return;
     }
+    sProfRenderCalls += 1u;
+    sProfRenderFrames += (uint64_t)frames;
     while (done < frames) {
         uint64_t toTick;
         size_t n;
@@ -230,14 +262,49 @@ void NitroPort_SoundRender(int16_t *stereo, size_t frames)
         toTick = (SOUND_TICK_SAMPLES - sTickPhase + SOUND_BUS_CLOCK - 1u) / SOUND_BUS_CLOCK;
         n = frames - done;
         if (toTick < n) n = (size_t)toTick;
-        NitroSound_Mix(&sChip, stereo + 2u * done, n);
+        {
+            u64 mixStart = SNDPROF_NOW();
+            NitroSound_Mix(&sChip, stereo + 2u * done, n);
+            sProfMixTicks += (uint64_t)(SNDPROF_NOW() - mixStart);
+        }
         sTickPhase += SOUND_BUS_CLOCK * (uint64_t)n;
         if (sTickPhase >= SOUND_TICK_SAMPLES) {
             sTickPhase -= SOUND_TICK_SAMPLES;
-            sound_tick();
+            {
+                u64 tickStart = SNDPROF_NOW();
+                sound_tick();
+                sProfTickTicks += (uint64_t)(SNDPROF_NOW() - tickStart);
+            }
+            sProfSoundTicks += 1u;
         }
         sound_unlock();
         done += n;
+        sProfStretches += 1u;
+    }
+    /* One cumulative line every 600 renders (~9.4 s of 512-frame blocks):
+     * the lead's run reads the hog off it. Outside the lock above, on the
+     * audio thread like the other audio logging. */
+    if (sProfRenderCalls % 600u == 0u) {
+        uint64_t mixCalls, mixFrames, activeCh, formatCh[4], capturing, dependentCh;
+
+        NitroSound_MixProfile(&mixCalls, &mixFrames, &activeCh, formatCh,
+                              &capturing, &dependentCh);
+        NitroPort_Log("[sndprof] render_calls %llu render_frames %llu stretches %llu sndticks %llu mix_ticks %llu tick_ticks %llu mix_calls %llu mix_frames %llu active_ch %llu pcm8_ch %llu pcm16_ch %llu adpcm_ch %llu psg_ch %llu cap_inst %llu dep_ch %llu",
+                      (unsigned long long)sProfRenderCalls,
+                      (unsigned long long)sProfRenderFrames,
+                      (unsigned long long)sProfStretches,
+                      (unsigned long long)sProfSoundTicks,
+                      (unsigned long long)sProfMixTicks,
+                      (unsigned long long)sProfTickTicks,
+                      (unsigned long long)mixCalls,
+                      (unsigned long long)mixFrames,
+                      (unsigned long long)activeCh,
+                      (unsigned long long)formatCh[0],
+                      (unsigned long long)formatCh[1],
+                      (unsigned long long)formatCh[2],
+                      (unsigned long long)formatCh[3],
+                      (unsigned long long)capturing,
+                      (unsigned long long)dependentCh);
     }
 }
 
