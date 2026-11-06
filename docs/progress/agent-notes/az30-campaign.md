@@ -463,6 +463,18 @@ wall without stating the assumption. One primary hypothesis per experiment.
   (walk:box:insert:try) to de-risk all future diets. Emulator
   micro-diets paused (tapped); box-float needs hardware profile
   first (Exp-7 lesson).
+- Exp-18 lower30/drawerAB 2x2 separation (emulator, twin binary,
+  ini-only; completes Exp-1's confounded square):
+  neither 228 draws / 22.8 composes / drawer 22.9/s@27.47ms;
+  lower30-only 227 / 22.7 / 25.7/s@22.03ms (render 22.87→16.90);
+  drawerAB-only 237 / 23.7 / 28.9/s@16.90ms (200 deferred);
+  both-on 236–238 / 23.7 / ~30/s@~15ms. VERDICT: Exp-1's +21% was
+  drawerAB's doing; lower30 trims drawer render ~26% with flat
+  throughput. All four screenshots phase-matched, menus sane
+  (lower30 half-rate B visually clean). lower30 earns hardware
+  candidacy → staged port_B.ini (base + lower30=on, drawerAB off);
+  SELECT-boot runs it whenever convenient. Combined-on-hardware
+  still untested (later, if either single reads out).
 - Hardware reality check (mush-free counts): presents ≈ 8.5–9/s
   (emulator 23.6/s does NOT predict hardware presents — 2.6x off;
   emulator keeps activation/correctness/count duty only, per guide).
