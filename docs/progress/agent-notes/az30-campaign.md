@@ -107,8 +107,8 @@ wall without stating the assumption. One primary hypothesis per experiment.
 - Hypothesis: with tags fixed, the 256-entry table thrashes under pipelined
   scenes; hashed 1024 slots let entries survive the lag window.
 - Candidate: same `build/d1-fifo-ss` (same flags; SDK change only).
-- Fixture gate: `test_gx3d_listcache` bit-compare green (including an
-  updated overflow premise: 5000-piece feed to actually overflow 4096 tags).
+- Fixture gate: `test_gx3d_listcache` bit-compare green (overflow premise
+  updated: 5000-piece feed to actually overflow 4096 tags).
 - Result: composes 13.7->22.6/s (+65%!), late 60->1, hits 0.8%->29%;
   skipped 242->150; worker busy 93%; wall 30s.
 - Correctness: screenshots sane; audits 0 fails; fixtures green.
@@ -136,11 +136,54 @@ wall without stating the assumption. One primary hypothesis per experiment.
   walk-then-skip for hidden runs (the verification IS the walk); caching
   needs arrival-side identity.
 
-## Next: worker transform cost + R diet
+## Exp-2d entries 2048 (done, neutral -> reverted to 1024)
 
-- Remaining geometry lever: per-vertex transform/lighting/clip (A0 sample:
-  34% of worker) + PICA staging writes. Options: float32 fast path with
-  tolerance fixtures (O3-3D-7 allows tolerance; G1 bit-exact gate must NOT
-  be weakened — separate tolerance gate), drawer hash narrowing (lower
-  refHash ~1MB/check, upper check 3ms x300).
-- R diet and tick pace re-measured after each change; wall A/B decides.
+- Hypothesis: 1024 still thrashes (29k evicts); 2048 lets entries survive.
+- Result: hits 29%->39%, evicts still high; worker/draws/wall IDENTICAL
+  (composes 22.6/s, geometry 30.46ms, skipped 150).
+- Conclusion: marginal hits cover cheap small runs (Amdahl shrugs).
+  REVERTED to 1024 (saves ~112KB bss for zero gain). Table sizing done;
+  further worker gains must come from transform cost, not caching.
+
+## Exp-4 force-software upper (done, rejected)
+
+- Hypothesis: draws follow content newness; forcing full software raster
+  (no GPU-BG takes) makes every upper publish new and draws should jump ~2x.
+- Candidate: diag binary + az30-sw2d.ini (az30-lower + sw2d=on). Reference
+  path by construction.
+- Result: draws 132->109, composes 13.2->10.9/s; drawer 29.0->19.8/s @
+  35.76ms/frame (top raster 6.7->21.1ms/call); publishes 30->20.9/s.
+  Upper reuse still caught 128/198 (content is content; scroll barely moves
+  in this window). Screenshots structurally identical (9.6% pixels differ
+  from RPC capture-latency phase drift, verified by banner fade state).
+- Conclusion: rejected. Takes stay on. Draws track completions x newness;
+  heavier draws lose net.
+
+## Exp-5b vsync-off (done, neutral -> keep vsync on)
+
+- Hypothesis: host present backpressure (occluded-window throttling /
+  swapbuffers blocking) paces the guest; vsync-off unblocks it.
+- Candidate: same fifo binary, `use_vsync=false` via probe env (config
+  restored after; user setting untouched).
+- Result: composes 22.6->21.2/s (noise), wall same, geometry/drawer same.
+- Conclusion: host presentation is NOT the limiter. Keep vsync on
+  (no tearing, same speed).
+
+## Standing numbers (Azahar, 80% clock, lower30+drawerAB, twin-ish binary)
+
+- Ticks ~50-52/s wall (cap never binds; work-paced). Presents ~20/s wall
+  (draws ≈ scenes-pub ~150 + 2D-new ~76 per 600 ticks).
+- Gaps: ticks +15%, presents +50%.
+- Draw equation: draws ≈ max(scenes-pub, upper-new) + lower-new (overlap).
+  scenes-pub is the only scalable term (content-limited 2D otherwise).
+
+## Next: normal-keyed lighting cache
+
+- A0 census: 96% of packets runs LIT. Map geometry reuses few normal
+  directions (axis boxes); same normal + same lights + same material =
+  same lit color. Cache keyed by (normal, light-gen, material) with the
+  SAME math (bit-exact, fixture-gated). Potential: lighting share of the
+  34% vertex cost at ~5-10x per hit.
+- Then: float transform (tolerance gate, last resort), drawer-hash diet
+  for tick pace. R/host diet via wall A/B only; upload path already
+  band-limited (dropped as a thread).
