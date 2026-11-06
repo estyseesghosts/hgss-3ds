@@ -541,6 +541,18 @@ wall without stating the assumption. One primary hypothesis per experiment.
   (staged ✓), slot3 (staged ✓), lower30 port_B (staged ✓),
   adpcm-diet (d1-adpcm-ss built+verified, UNSTAGED — stage on
   card return: twin exists there for the A/B).
+- FOUR-RUN DESIGN COVERAGE (each design fed by specific lines):
+  batch (audio split + ARM11 runpath) feeds ADPCM-diet readout
+  (audio% vs twin 25%), decode-cache sizing (channels/formats/
+  stretches; corpus bytes measured host-side from SDAT), and box
+  diet ranking (walk:box:insert ARM11 ratios already in hand);
+  slot3 feeds front-commit wall proof + BG3-kind forensic +
+  flat-path inference via drawer-top split; lower30 feeds drawer
+  duty/publish/compose separation; adpcm-diet feeds the diet
+  readout (same audio% line). Twin baselines already on file.
+  Rebuilds before staging: batch + slot3 (forensic rides free;
+  behavior identical, telemetry-current); adpcm stages as-is
+  (bits == committed); twin stands (forensic silent there).
 - NEXT: batch audio-profile + A0-runpath in ONE binary → ONE
   hardware run gives audio split AND true ARM11 run-path ratios
   (walk:box:insert:try) to de-risk all future diets. Emulator
@@ -552,6 +564,13 @@ wall without stating the assumption. One primary hypothesis per experiment.
   audio). ONE hardware run, base port.ini (no hold): reads audio
   split + ARM11 runpath off [sndprof]/[a0] lines. FTP detour
   retired (card remounted).
+- REBUILDS for the four-run set (tree moved past staged bits):
+  d1-batch2-ss (same flags+A0, current tree: +forensic, harmless)
+  and d1-slot3b-ss (same flags, current tree), both exit 0 with
+  distinct tags; 600f smokes render correctly; ELF strings prove
+  [a0]/[sndprof]/gate-kind/jumps present per binary (batch2 has
+  all, slot3b has all but A0-by-design). Staging (swap batch,
+  swap slot3, add adpcm) + run sheet wait on the card.
 - Exp-19 content-repeat census (done, REFUTED): 582 sampled inserts,
   same-base repeats 0, moved ~4%. Heap churn is genuinely novel
   content (walking camera), not re-emitted blocks — content-keyed
