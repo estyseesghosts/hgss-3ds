@@ -114,6 +114,16 @@ void NitroPort_CardFlush(void);
 int NitroPort_EngineAOnTop(void);
 void NitroPort_SoundRender(int16_t *stereo, size_t frames);
 void NitroPort_SoundPumpReplies(void);
+/* Display-gating diagnostics (port_compose_pica.c, unconditional counters):
+ * loop passes vs draws vs skip reasons. Declared here, not included: this
+ * file cannot include the port's headers next to libctru's. */
+void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
+                               u64 *noBuf, u64 *draws, u64 *pickTicks,
+                               u64 *prepareTicks, u64 *stageTicks,
+                               u64 *endTicks, u64 *skipTicks,
+                               u64 *needA, u64 *needB);
+/* Display-loop passes and sGpuWake signals (counted here, at the sites). */
+static u64 sDbgLoopIters, sDbgWakes;
 /* The display state's H-blank lines: captured once a V-blank, so a battle's
  * start transition or a wavy screen keeps its per-line scrolls. */
 int NitroPort_HBlankLinesOnce(void);
@@ -378,6 +388,7 @@ static volatile int sGeoRunning;
 void NitroPort_Gx3dScenePublished(void)
 {
     if (sGpuWakeReady) {
+        sDbgWakes++;
         LightEvent_Signal(&sGpuWake);
     }
 }
@@ -794,6 +805,9 @@ static int sIniPartialBDiag;
 static int sIniPartialBChar;
 static int sIniBandPubB;
 static int sIniBandPubBDiag;
+/* sw2d=1: force full software raster (no GPU-BG takes). Measurement-only
+ * Azahar campaign switch, default off; the taken path stays default. */
+static int sIniSw2d;
 
 #ifdef HGSS_A0_DIAG
 /* A0 thread topology (O3THR-0): first line of each worker, logging the
@@ -1012,7 +1026,10 @@ static bool RenderScreen(int engine, bool aOnTop, u32 stamp)
          * port also nominates text BGs 1-3 (GpuBgOf proves each one;
          * untaken ones draw in software exactly as before). */
         if (engine == 0 && NitroPort_ComposeDrawsBgs()) {
-            split.gpuBgs = NitroPort_RepeatingBgs() | NitroPort_NominateGpuBgs();
+            /* sw2d=1 (measurement only): no GPU-BG takes, full software
+             * raster every offered frame, so every publish carries a new
+             * picture. Reference path by construction; costs drawer CPU. */
+            split.gpuBgs = sIniSw2d ? 0 : NitroPort_RepeatingBgs() | NitroPort_NominateGpuBgs();
         }
     }
     if (!top && __atomic_exchange_n(&sToastDirty, false, __ATOMIC_ACQ_REL)) {
@@ -1202,6 +1219,7 @@ static void DrawerMain(void *arg)
          * frame as soon as it is false, and that frame has its own count. */
         if (__atomic_sub_fetch(&sDrawFramePending, 1, __ATOMIC_ACQ_REL) == 0 &&
             __atomic_load_n(&sGpuWakeReady, __ATOMIC_ACQUIRE)) {
+            sDbgWakes++;
             LightEvent_Signal(&sGpuWake);
         }
         __atomic_store_n(&d->busy, false, __ATOMIC_RELEASE);
@@ -1356,6 +1374,7 @@ static void GpuComposeLoop(void)
         if (!__atomic_load_n(&sGpuRunning, __ATOMIC_ACQUIRE)) {
             break;
         }
+        sDbgLoopIters++;
         if (__atomic_load_n(&sSuspended, __ATOMIC_SEQ_CST)) {
             if (scene != NULL) {
                 NitroPort_Gx3dReleaseScene(scene);
@@ -1532,6 +1551,58 @@ static void PerfLog(u64 now)
     producerWait = NitroPort_Gx3dProducerWaitMicros();
     NitroPort_Gx3dThreadWakeups(&wakeups, &longest);
     soundTicks = __atomic_load_n(&sSoundMixTicks, __ATOMIC_RELAXED);
+    {
+        /* Display-gating diagnostics: loop passes vs draws vs skip reasons
+         * (port_compose_pica.c) plus loop passes and wake signals here.
+         * First line is cumulative since boot; later lines are intervals. */
+        static u64 lastIters, lastWakes, lastNoNeed, lastWait2D, lastMidLate,
+            lastNoBuf, lastDraws, lastPick, lastPrepare, lastStage, lastEnd,
+            lastSkip, lastNeedA, lastNeedB;
+        static u32 lastVBlanks;
+        u32 vblanks = NitroPort_ComposeVBlanks();
+        u64 noNeed, wait2D, midLate, noBuf, draws;
+        u64 pickTicks, prepareTicks, stageTicks, endTicks, skipTicks;
+        u64 needA, needB;
+        u64 dDraws, dSkips;
+
+        NitroPort_ComposeDbgStats(&noNeed, &wait2D, &midLate, &noBuf, &draws,
+                                  &pickTicks, &prepareTicks, &stageTicks,
+                                  &endTicks, &skipTicks, &needA, &needB);
+        dDraws = draws - lastDraws;
+        dSkips = noNeed - lastNoNeed;
+        NitroPort_Log("[perf] loop: %llu passes (%llu draws, %llu nonew, %llu wait2d, %llu midlate, %llu nobuf), %llu wakes; need upper %llu lower %llu; %u vblanks",
+                      (unsigned long long)(sDbgLoopIters - lastIters),
+                      (unsigned long long)dDraws,
+                      (unsigned long long)dSkips,
+                      (unsigned long long)(wait2D - lastWait2D),
+                      (unsigned long long)(midLate - lastMidLate),
+                      (unsigned long long)(noBuf - lastNoBuf),
+                      (unsigned long long)(sDbgWakes - lastWakes),
+                      (unsigned long long)(needA - lastNeedA),
+                      (unsigned long long)(needB - lastNeedB),
+                      (unsigned)(vblanks - lastVBlanks));
+        lastVBlanks = vblanks;
+        lastNeedA = needA;
+        lastNeedB = needB;
+        NitroPort_Log("[perf] compose-phase ms/draw: pick %.2f prepare %.2f stage %.2f end %.2f; skip %.2f ms/pass",
+                      dDraws ? (double)(pickTicks - lastPick) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dDraws ? (double)(prepareTicks - lastPrepare) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dDraws ? (double)(stageTicks - lastStage) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dDraws ? (double)(endTicks - lastEnd) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dSkips ? (double)(skipTicks - lastSkip) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dSkips : 0.0);
+        lastIters = sDbgLoopIters;
+        lastWakes = sDbgWakes;
+        lastNoNeed = noNeed;
+        lastWait2D = wait2D;
+        lastMidLate = midLate;
+        lastNoBuf = noBuf;
+        lastDraws = draws;
+        lastPick = pickTicks;
+        lastPrepare = prepareTicks;
+        lastStage = stageTicks;
+        lastEnd = endTicks;
+        lastSkip = skipTicks;
+    }
 
     if (!sPerfHave) {
         /* The first log after the counters start is the baseline; the next
@@ -2696,6 +2767,7 @@ static void ReadDisplayOptions(void)
     sIniPartialBChar = 0;
     sIniBandPubB = 0;
     sIniBandPubBDiag = 0;
+    sIniSw2d = 0;
     if (IniValue("filter", value, sizeof(value))) {
         if (strcmp(value, "sharp") == 0) {
             sIniFilter = COMPOSE_FILTER_SHARP;
@@ -2826,6 +2898,14 @@ static void ReadDisplayOptions(void)
             NitroPort_Log("[perf] port.ini bandPubBDiag=%s is not on/off; using off", value);
             sIniBandPubBDiag = 0;
         }
+    }
+    if (IniValue("sw2d", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniSw2d)) {
+            NitroPort_Log("[perf] port.ini sw2d=%s is not on/off; using off", value);
+            sIniSw2d = 0;
+        }
+        NitroPort_Log("[perf] sw2d=%s (full software raster, no GPU-BG takes; measurement only)",
+                      sIniSw2d ? "on" : "off");
     }
     if (IniValue("o3dsched", value, sizeof(value))) {
         if (strcmp(value, "default") == 0) {

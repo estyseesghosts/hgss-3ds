@@ -2081,8 +2081,11 @@ class GpuBgNominateTests(unittest.TestCase):
 
     def test_shell_nominates_beside_the_game_flags(self):
         text = (self.APP / "main_3ds.c").read_text()
-        self.assertIn("split.gpuBgs = NitroPort_RepeatingBgs() | NitroPort_NominateGpuBgs();",
+        self.assertIn("NitroPort_RepeatingBgs() | NitroPort_NominateGpuBgs()",
                       text)
+        # sw2d=1 (measurement only) forces the reference software path;
+        # default stays the nominating path.
+        self.assertIn("split.gpuBgs = sIniSw2d ? 0 :", text)
 
 
 class GpuBgMapSizeTests(unittest.TestCase):
@@ -2648,6 +2651,33 @@ class BuildIdTests(unittest.TestCase):
         self.assertIn("svcExitProcess();", exit_fn)
         self.assertNotIn("sQuit", exit_fn)
         self.assertNotIn("aptMainLoop", exit_fn)
+
+    def test_display_gating_diagnostics_exist(self):
+        shell = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        compose = (REPO / "3ds_port" / "game" / "app" / "port_compose_pica.c").read_text()
+        # Loop passes, draws, per-screen need flags, skip reasons and wakes.
+        self.assertIn("NitroPort_ComposeDbgStats", shell)
+        self.assertIn("sDbgLoopIters", shell)
+        self.assertIn("sDbgWakes", shell)
+        self.assertIn('"[perf] loop:', shell)
+        self.assertIn("sDbgNeedA", compose)
+        self.assertIn("sDbgNeedB", compose)
+        self.assertIn("need upper", shell)
+        self.assertIn("sDbgWait2D", compose)
+        self.assertIn("sDbgNoBuf", compose)
+        # Draw-path phase split (locks+pick / prepare / submit / frame-end).
+        self.assertIn("sDbgPickTicks", compose)
+        self.assertIn("sDbgPrepareTicks", compose)
+        self.assertIn("sDbgStageTicks", compose)
+        self.assertIn("sDbgEndTicks", compose)
+        self.assertIn('"[perf] compose-phase', shell)
+
+    def test_sw2d_forces_software_raster(self):
+        shell = (REPO / "hgss" / "game" / "app" / "main_3ds.c").read_text()
+        self.assertIn('IniValue("sw2d"', shell)
+        self.assertIn("split.gpuBgs = sIniSw2d ? 0 :", shell)
+        # Default off: the taken path stays default.
+        self.assertIn("sIniSw2d = 0;", shell)
 
 
 class StageTests(unittest.TestCase):

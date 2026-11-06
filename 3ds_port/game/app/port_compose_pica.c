@@ -649,6 +649,35 @@ static int paired_2d_ready(u32 sceneStamp)
 static int sSceneWaiting;
 static uint32_t sSceneWaitingSerial;
 
+/* Display-gating diagnostics: why ComposeFrame draws or skips, per
+ * iteration, plus draw-path phase ticks. Unconditional u64 bumps only (no
+ * timing); read by the shell's [perf] loop line to find what paces
+ * presents/s. */
+static u64 sDbgNoNeed, sDbgWait2D, sDbgMidLate, sDbgNoBuf, sDbgDraws;
+static u64 sDbgNeedA, sDbgNeedB;
+static u64 sDbgPickTicks, sDbgPrepareTicks, sDbgStageTicks, sDbgEndTicks,
+    sDbgSkipTicks;
+
+void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
+                               u64 *noBuf, u64 *draws, u64 *pickTicks,
+                               u64 *prepareTicks, u64 *stageTicks,
+                               u64 *endTicks, u64 *skipTicks,
+                               u64 *needA, u64 *needB)
+{
+    if (noNeed != NULL) *noNeed = sDbgNoNeed;
+    if (wait2D != NULL) *wait2D = sDbgWait2D;
+    if (midLate != NULL) *midLate = sDbgMidLate;
+    if (noBuf != NULL) *noBuf = sDbgNoBuf;
+    if (draws != NULL) *draws = sDbgDraws;
+    if (pickTicks != NULL) *pickTicks = sDbgPickTicks;
+    if (prepareTicks != NULL) *prepareTicks = sDbgPrepareTicks;
+    if (stageTicks != NULL) *stageTicks = sDbgStageTicks;
+    if (endTicks != NULL) *endTicks = sDbgEndTicks;
+    if (skipTicks != NULL) *skipTicks = sDbgSkipTicks;
+    if (needA != NULL) *needA = sDbgNeedA;
+    if (needB != NULL) *needB = sDbgNeedB;
+}
+
 int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial)
 {
     return sSceneWaiting && sSceneWaitingSerial == sceneSerial;
@@ -3860,6 +3889,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             need[s] = 0;
             sSceneWaiting = 1;
             sSceneWaitingSerial = sceneSerial;
+            sDbgWait2D++;
         }
         /* An in-between scene whose V-blank has come (its scene's turn
          * next): not drawn, and the lag is short (mid_late). */
@@ -3867,6 +3897,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             need[s] = 0;
             drawn |= COMPOSE_MID_LATE;
             mid_late();
+            sDbgMidLate++;
         }
         /* Not without a framebuffer to draw into (the frames waiting for
          * their V-blanks have them all): the next V-blank frees one. */
@@ -3875,6 +3906,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             if (lcdBuf[s] < 0) {
                 need[s] = 0;
                 drawn |= s == 0 ? COMPOSE_NO_BUFFER_UPPER : COMPOSE_NO_BUFFER_LOWER;
+                sDbgNoBuf++;
             }
         }
         if (!need[s]) {
@@ -3902,16 +3934,25 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     LightLock_Unlock(&sPresentLock);
     LightLock_Unlock(&sSetLock);
     if (!need[0] && !need[1]) {
+        sDbgNoNeed++;
+        sDbgSkipTicks += svcGetSystemTick() - start;
         return drawn;   /* (nothing drawn: why, if a frame was wanted) */
     }
+    if (need[0]) sDbgNeedA++;
+    if (need[1]) sDbgNeedB++;
+    sDbgDraws++;
+    sDbgPickTicks += svcGetSystemTick() - start;
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
     /* (an in-between scene has its scene's serial: told apart) */
     if (scene != NULL && (!sScenePrepared || sceneSerial * 2u + (mid ? 1u : 0u) != sPreparedScene)) {
+        u64 prepStart = svcGetSystemTick();
+
         prepareTicks = svcGetSystemTick();
         /* Preparation must preserve array vertices whenever any later pass
          * can use the outline buffers, even if this eye disables outlines. */
         NitroPort_PicaPrepareScene(scene, NULL, sEdgeDepth[0] != NULL);
         prepareTicks = svcGetSystemTick() - prepareTicks;
+        sDbgPrepareTicks += svcGetSystemTick() - prepStart;
         sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;
         if (sConfig.stereo && sConfig.convergence <= 0.0f && !mid) {
@@ -3920,6 +3961,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     /* (built while the GPU draws the frame before: frames in flight) */
     NitroPort_PicaFrameOpen();
+    sDbgStageTicks -= svcGetSystemTick();
     sQuadHalf ^= 1;
     sQuads = sQuadsAll + (sQuadHalf ? MAX_QUAD_VERTICES : 0);
     NitroPort_PicaStage("the frame's clears");
@@ -4072,6 +4114,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     NitroPort_PicaStage("the frame's end");
     {
         u32 mark = NitroPort_PicaFrameClose();
+        sDbgStageTicks += svcGetSystemTick();
+        sDbgEndTicks -= svcGetSystemTick();
 
         /* The targets into the screens' LCD framebuffers, after the
          * drawing (queued behind it). */
@@ -4293,6 +4337,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         p->serial = sGpuSubmitted;
     }
     LightLock_Unlock(&sPresentLock);
+    sDbgEndTicks += svcGetSystemTick();
     return drawn;
 }
 
