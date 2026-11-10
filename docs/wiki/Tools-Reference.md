@@ -307,6 +307,59 @@ Determinism check: compares two capture folders pixel by pixel.
 - **Needs:** Pillow (in the image). No ROM. Its input is the PNG folders from `capture.lua`.
 - **Status:** checked in this session on two synthetic 4×4 PNG folders. Identical folders exit 0, and one changed pixel exits 1.
 
+## Benchmark tools (`tools/`)
+
+Diagnostic only: they copy, launch and read; none of them changes the build.
+The contract they serve is [PICA200-INSTRUMENTATION.md](../../PICA200-INSTRUMENTATION.md)
+(§B, §I) and the worked example is [docs/bench/README.md](../bench/README.md).
+
+### `tools/bench_manifest.py`
+
+Writes one JSON identity per run: git commit and dirty state, artifact/save/
+script/ini SHA-256, the decomp and Platinum pins, the `.build-info.txt`
+sidecar's effective flags, model and host.
+
+- **Usage:** `python3 tools/bench_manifest.py --game heartgold --artifact <3dsx> --save <sav> --script <txt> --ini <ini> --model "Old 3DS" --label <name> -o <json>`
+- **Needs:** a git checkout. No emulator, no hardware.
+- **Output:** the JSON. A run without one is not evidence.
+
+### `tools/bench_report.py`
+
+Turns the shell's 600-frame `[perf]` blocks into a table plus median/p95/min/max
+over a frame window, and re-hashes the inputs with `--check-manifest`.
+
+- **Usage:** `python3 tools/bench_report.py log.txt [--from-frame N] [--to-frame M] [--manifest <json>] [--check-manifest <json>] [--json]`
+- **Output:** the table and a summary, with the standing caveats (a sample is
+  a 600-frame aggregate, `total_us` includes waits, an emulator is not
+  hardware time).
+
+### `tools/bench_ab.py`
+
+Alternates two artifacts on identical inputs for N trials, re-focuses the
+emulator window, and reports medians with the observed range, naming
+"inconclusive" when the ranges overlap.
+
+- **Usage:** `python3 tools/bench_ab.py --game heartgold --artifact-a A --name-a before --artifact-b B --name-b after --save <sav> --script <txt> --ini <ini> --trials 3 --seconds 240 --from-frame 9000 --label <name>`
+- **Needs:** Azahar (`--azahar`, default `C:\Program Files\Azahar\azahar.exe`),
+  a staged SD root, and a quiet machine. It kills any running `azahar.exe`
+  first, because a second instance shares the card and the logs.
+- **Output:** per-trial logs, `manifest.json`, `summary.json`, and the verdict
+  table.
+
+### `tools/stage_bench.py`
+
+Stages exactly the SD layout the port expects, for a card or an emulator.
+
+- **Usage:** `python3 tools/stage_bench.py --game heartgold --artifact <3dsx> --pak <pak> --manifest <manifest.json> --save <sav> --script <txt> --ini <ini> --out <dir>`
+- **Output:** `<out>/3ds/<app>.3dsx` and `<out>/3ds/<folder>/{pak,manifest.json,save,port.ini,script.txt}`.
+
+### Claim sheets
+
+Every performance claim gets a `docs/bench/claims/<date>-<name>.md` with the
+hypothesis, the artifacts and hashes, the activation and correctness proof,
+the measured table, and an explicit "what this does not establish".
+[Template](../bench/claim-sheet-template.md).
+
 ## Test runners
 
 Run from the repo root. `make test` runs the first two groups and nothing else. The other groups run from the Makefile targets shown.

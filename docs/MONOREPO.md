@@ -19,7 +19,7 @@ pokeheartgold-3ds/
   3ds_port/            Platinum's hardware layer (GPL-3.0) + one local fix
                       see 3ds_port/LOCAL-CHANGES.md
   hgss/                HGSS shell, game-facing glue, compat headers/runtime
-  patches/             84 patches against the pinned decomp (three stacks)
+  patches/             87 patches against the pinned decomp (three stacks)
   builder/             ROM verify/extract/pack (the user's own cartridge)
   scripts/             player-facing Python scripts (toolchain, ROM prep, build + SD staging)
   tools/               harness, bootstrap, surveys, matching build, reports

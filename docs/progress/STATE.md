@@ -26,7 +26,8 @@ counts as a change, so it re-renders every pass. That re-render's per-frame
 the new `[perf] 2d:` split puts it in `key` (BgKeyCached/FoldClearVariant:
 pal 0.1% vs key 3.3% in Azahar). Next target: that per-pass key walk inside
 A's forced re-render, not the hash. Artifacts: PROFILE/OFF packets at
-`0d7849e`.
+`0d7849e`. The session's own mistakes and their fixes are written up in
+[agent-notes/2026-11-10-session-issues-and-fixes.md](agent-notes/2026-11-10-session-issues-and-fixes.md).
 
 **In progress (2026-11-06): Azahar 30fps campaign (Goldenrod, N3DS off,
 80% clock).** Goal: full-speed ticks (60/s wall, already achieved and
@@ -94,8 +95,8 @@ budget and full W3/W4 closure remain pending. See the dated W3/W4 entry below;
 the older verification tables are historical, not newly rerun host32/DS gates.
 
 Last verified: **2026-11-03 (session 19: Old 3DS performance waves W0-W2)**, natively on macOS
-(`DEVKITPRO=/opt/devkitpro`, venv `/Users/terezi/hgss/bin/python`), with the tree at **86 patches**
-(`NitroSDK` 16, `NitroSystem` 4, `pokeheartgold` 64). The last container run was 2026-11-02
+(`DEVKITPRO=/opt/devkitpro`, venv `/Users/terezi/hgss/bin/python`), with the tree at **87 patches**
+(`NitroSDK` 16, `NitroSystem` 4, `pokeheartgold` 67). The last container run was 2026-11-02
 (session 18). Everything below that says "verified" was run on the tree on the date given, and the
 DS-side gate passed at 78 (HG and SS). If you change the patch stack, rerun the commands and update
 this page; do not trust it blindly.
@@ -116,11 +117,11 @@ Session 15 fixed the save CRC table (1906) and migrates legacy substruct CRCs (1
 | Phase | State | Evidence |
 | --- | --- | --- |
 | 0 Baseline | **Done**, open items | Matching HG/SS ROM SHA1s in the container. Never done: golden captures, fixture saves, the determinism run, a native-macOS control. [phase-0.md](phase-0.md) |
-| 1 SDK patch stack | **Done** | 86 patches in the stack (the DS gate last ran at 78; 1904-1909 are port-only); the last full `make test` was 355 Python tests + 20 SDK suites, plus session 15's save tests; `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs. [phase-1.md](phase-1.md) |
+| 1 SDK patch stack | **Done** | 87 patches in the stack (the DS gate last ran at 78; 1904-1909 are port-only); `make port-tests` green; both archives build; the DS gate at 78 reproduces both retail ROMs; `make test` was last run on a Windows checkout: the Python suite is 506 tests with 22 environment failures (POSIX symlinks / Linux-target `gcc`), plus 20 SDK suites. [phase-1.md](phase-1.md) |
 | 2 Game code under GCC | **Done for the exit criterion** | **0 unresolved** on host32 and 3DS, for HeartGold and SoulSilver; `--check-overlays` 129/0; `symbol_crosscheck.py` missing 0; `pokeheartgold` and `pokesoulsilver` programs exist. [phase-2.md](phase-2.md) |
 | 3 Data pipeline | **Done** | `builder/verify_rom.py`, `extract_rom.py`, `pack.py`; boot check with clear errors; `docs/wiki/SD-Card-Layout.md`; both retail dumps verified, extracted and packed; the HG pack opens in the PC program and the SS program boots to its main menu. [agent-notes/p2-session6.md](agent-notes/p2-session6.md) |
 | 4 Boot to Oak | **In progress** | PC build boots cold → logo → movie → title → main menu → Oak's speech → naming → first field frames. On a New 3DS the same sequence reaches the bedroom/field with 2D, audio and the PICA 3D layer. Goldens, save round-trip, sanitizer and PR drafts open. [phase-4.md](phase-4.md) · [phase-5.md](phase-5.md) |
-| 5 3DS shell | **Phase A remaster in progress; hardware run pending** | The shell now uses Platinum's compositor, drawer threads and V-blank presentation at 400x240/320x240; 3D at native resolution; touch maps 1.25x; no classic fallback. Old 3DS uses `smooth3d = 0`. Builds and tests pass; the real-hardware run (Old and New 3DS) is the next owner check. Earlier shell work (60 Hz cap, NNS volume table, NDSP cache flush/native rate, camera-plane drop, battle Poképics 0304/0605, close-hang fix) remains. **Old 3DS performance plan (2026-11-03, plan only):** [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md). |
+| 5 3DS shell | **Phase A remaster runs on hardware; performance is the open work** | The shell now uses Platinum's compositor, drawer threads and V-blank presentation at 400x240/320x240; 3D at native resolution; touch maps 1.25x; no classic fallback. Old 3DS uses `smooth3d = 0`. Builds and tests pass. **Measured on a real Old 3DS (2026-11-10, Goldenrod field at rest):** ~6 presented frames/s, drawer 92 ms/frame, composes 8.6-9.8/s, geometry 35 ms/scene, GPU 12.1 ms — the GPU is idle and the CPU drawer is the wall. Evidence: [../bench/README.md](../bench/README.md). Earlier shell work (60 Hz cap, NNS volume table, NDSP cache flush/native rate, camera-plane drop, battle Poképics 0304/0605, close-hang fix) remains. **Old 3DS performance plan (2026-11-03, plan only):** [agent-notes/s19-o3ds-performance-plan.md](agent-notes/s19-o3ds-performance-plan.md). |
 | 6-11 | Not started | Graphics gaps, sound streams, gameplay, IR, wireless, GPU 2D. See [../wiki/Architecture.md](../wiki/Architecture.md). |
 
 ## Verified today
@@ -131,7 +132,7 @@ Run from the repo root inside the container. `devcontainer exec --workspace-fold
 | Check | Command | Result |
 | --- | --- | --- |
 | Patch stack applies from scratch | `python3 tools/bootstrap.py --clean` | last clean run: 82; 1906/1907 were applied and built this session, clean bootstrap not re-run |
-| Host tests | `make test` | last full run **exit 0**; **355 Python tests** + **20 SDK suites**; session 15 targeted: 4 save-CRC + 18 savetool + gcc_fixes |
+| Host tests | `make test` | last full run **exit 0** on the Linux container (**355 Python tests** + **20 SDK suites**); on a Windows checkout the same suite is **506 tests with 22 environment failures** (POSIX symlink / Linux-target `gcc` assertions) — judge a change against that baseline, not the raw count |
 | Vendored port tests | `make port-tests` | **exit 0**: pak 120, the whole nitro sequence (sound chip 81), nitrosystem **17,122 checks, 0 failed**; gx3d **327 + 229** |
 | Port sources vs HGSS headers | `python3 tools/port_compile_survey.py` | last full run 46/46; `port_gx3d.c`'s camera-plane drop compiles in the port build and `make port-tests` |
 | Game compile (host32) | `python3 tools/hgss_game.py --target host32 --keep-going --out /work/slice-3d-pc -j4` | **1092/1092 compiled, 0 failed**; 150/150 `.s`; **linked, 0 unresolved** |

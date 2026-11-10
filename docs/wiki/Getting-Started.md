@@ -191,11 +191,11 @@ Running it again prints `upstream: already at 8cbb4a19ab78 with 84 patches`.
 devcontainer exec --workspace-folder . bash -c 'cd /workspaces/pokeheartgold-3ds && make test'
 ```
 
-This runs the Python tests (the last full run was 355; session 15 adds four save-CRC tests) and then the twenty SDK host suites. It is the same command CI runs on the synthetic-data image.
+This runs the Python tests (506 of them; on a Windows checkout 22 assert POSIX symlinks or a Linux-target `gcc` and fail by environment) and then the twenty SDK host suites. It is the same command CI runs on the synthetic-data image.
 
 **You should see:**
 
-- `Ran 355 tests`, then `OK`.
+- `Ran 506 tests`, then `OK` on Linux/macOS.
 - One `== tests/sdk/<name>` header for each of the twenty suites (including `arm7_sound`, `div_sqrt_writers`, `fx`, `gcc_fixes`, `irq_handler`, `math_qsort`, `memory_map`, `nns_clz`, `os_system`, `port_hooks`, `small`).
 - The `fx` suite's checks, and `sdk small: all ok` at the end.
 - Exit status 0.

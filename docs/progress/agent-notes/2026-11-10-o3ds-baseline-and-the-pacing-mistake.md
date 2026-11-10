@@ -68,4 +68,10 @@ counter corrections already recorded in `STATE.md` and the campaign notes.
 
 The drawer's 92 ms is the target: the top screen costs 50 ms and the bottom
 7 ms, while the 2D rasteriser reports 0 lines drawn, the GPU 12 ms and
-publish 1-6 ms. Attribute the missing time before changing anything.
+publish 1-6 ms. The per-frame `setup` block is where the top pass goes
+(12.1% of a core on hardware), and the `pal`/`key` split in the `[perf] 2d:`
+line names the per-BG key walk inside it. Attribute before changing anything.
+
+The rest of that session's issues (git identity, the unmatched hardware A/B,
+artifacts built dirty, the Windows test baseline, the emulator driver) are in
+[the issues log](2026-11-10-session-issues-and-fixes.md).

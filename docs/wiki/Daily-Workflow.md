@@ -82,7 +82,7 @@ bash tests/sdk/fx/run.sh build/upstream
 
 `make port-tests` runs the vendored `3ds_port` suites (`pak`, `nitro`, `nitrosystem`) against HGSS's
 SDK. It is its own target, not part of `make test`, because it needs a full `host32` build. Current
-state (84 patches): **exit 0**; every suite passes, including `test_arm7`, `test_sound_sequence`,
+state (87 patches): **exit 0**; every suite passes, including `test_arm7`, `test_sound_sequence`,
 `gx3d` (327+229) and `nitrosystem` (17,122 checks). See [../progress/STATE.md](../progress/STATE.md).
 
 ## The port layer

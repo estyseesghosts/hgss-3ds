@@ -384,12 +384,56 @@ banner prints `2D … (N texels a pixel)`, `the display on core N`, and the
 
 ## Old 3DS measurement
 
-Measured across sessions 19–20; the numbers and the work are in
-[agent-notes/s20-performance-session.md](../progress/agent-notes/s20-performance-session.md).
-Short version: the field runs at 10–14 composes/s (was 0.3), drawer 55–81
-ms/frame (was 2,000–4,500), game frame 2.3–9.2 ms (was 13.7–41). Goldenrod
-outdoors is the outlier at 5–6 composes/s because it clips ~2,784 vertices per
-scene. The remaining wall is the software 2D renderer.
+### The current baseline (2026-11-10)
+
+Two matched runs of the Phase A remaster on a launch-model Old 3DS, Goldenrod
+field at rest, `hg-continue-field.txt`, frames 9000+ (raw logs and the full
+analysis are in `hgss-private/log-0` and
+[the session note](../progress/agent-notes/2026-11-10-o3ds-baseline-and-the-pacing-mistake.md)):
+
+| metric | value |
+|---|---|
+| presented frames | ~6/s (publishes 4.0-5.5/s) |
+| composes | 8.6-9.8/s, lag 4 V-blanks, 51-59 late per 600 frames, 0-3 dropped |
+| drawer | 92-179 ms/frame; top-screen pass 50 ms, bottom 7 ms |
+| geometry | 35-36 ms/scene at 99-100% busy; ~27 scenes/s built for ~6 shown |
+| GPU | 12.1 ms/frame: clears 6.1, opaque 2.4, translucent 0.9, 2D quads 0.8, transfers 1.9 |
+| game clock | at or below 55-57 Hz (600 frames span ~630-650 V-blanks) |
+| audio | ~27% of core 0, 0 dropped |
+| memory | 4.9-6.8 MB linear free |
+
+The GPU is ~12% busy: the PICA is not the limit, the CPU drawer is. Superseded
+by this: the earlier "10-14 composes/s, drawer 55-81 ms, the software 2D
+renderer is the wall" reading (sessions 19-20) — that was before the remaster
+compositor, and any emulator-derived ranking of the stages.
+
+### Running a packet
+
+The frozen packet (build, save, script, ini, manifest) is described in
+[docs/bench/README.md](../bench/README.md). In short: copy
+`build/bench/sd-hg/3ds` (PROFILE: counters and `[gx3d]`) or
+`build/bench/sd-hg-off/3ds` (`-profoff`: timings) to the card root, boot from
+the Homebrew Launcher, leave the console alone, then send back `log.txt` plus
+the matching `.manifest.json`.
+
+### Reading the lines that matter
+
+- `[perf] drawer 0 ...: X frames/s, Y ms/frame` — the wall. Per screen:
+  `drawer 0 top render: N calls, T ms/call`.
+- `[perf] 2d: ... setup A% (pal P%, key K%, L lines, ...)` — where a pass goes
+  when it is *not* drawing (`0 lines`): `key` is the per-BG `BgKeyCached` walk,
+  `pal` is the palette rebuild.
+- `[perf] display: ... composes/s ... late ... lag` and `FRAMETIME` — what the
+  player actually sees.
+- `[perf] geometry: ... ms/scene, busy %` and `flow queued/done/dropped` —
+  whether the worker is saturated and whether its scenes are ever shown.
+- `[gpu] the frame: the clears ... the transfers ... ms in all` — the GPU side.
+- `[gpubg: taken N, reject ...]` — zero takes is a fallback, not a success.
+
+Do not compare a PROFILE artifact with an OFF one until the pair has been run
+as a matched alternating A/B; the 2026-11-10 pair was not matched (OFF was 2x
+faster on the title and 2x slower in the field while every cost the gate cannot
+touch agreed within 3%), so that claim is still open.
 
 ## Save round-trip
 

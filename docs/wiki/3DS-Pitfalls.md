@@ -1028,3 +1028,63 @@ auto-playing sequences they are not.
 **Rule.** Capture VRAM first when the sequence moves, screenshot on static
 screens, and record which is which. A mismatch between a screenshot and a
 later capture is a methods failure, not evidence about either renderer.
+
+## A phase counter publishes a transient negative
+
+**Symptom.** The OFF hardware log carried `stage 16102.78 ms/draw` and
+`end 274113216854.52` — impossible values, in a log that was about to be used
+for timing claims. The PROFILE log from the same build never showed them.
+
+**Cause.** Stage and end were accumulated as an open interval:
+`sDbgStageTicks -= svcGetSystemTick();` ... `sDbgStageTicks += svcGetSystemTick();`.
+Between the two the counter holds a *negative* `u64`, i.e. a huge positive one.
+The shell samples these counters from the game's thread every 600 frames, so a
+sample landing in that window reads the wrapped value. The slower run kept the
+window open longer, which is why only it tripped. A 64-bit read/write split
+across two 32-bit halves could tear as well.
+
+**Fix.** Time the phase into a local and publish it once when the phase is
+complete (`__atomic_fetch_add`), and read the counters with
+`__atomic_load_n`. A frame that returns early drops its own sample instead of
+corrupting the window.
+
+**Rule.** A counter read by another thread must never be observable
+mid-update. Accumulate locally, publish atomically, and prefer one store per
+interval over a `-=`/`+=` pair.
+
+## Cutting work on the stage that is not the wall
+
+**Symptom.** Geometry built ~27 scenes/s while the display took ~6, so two
+thirds of the worker's scenes were superseded unseen. Throttling production to
+the display's take rate looked like free money.
+
+**Cause.** The measurement was right and the conclusion was wrong. Presentation
+is bounded by the *drawer* (92 ms/frame), not by scene production, so removing
+geometry work cannot raise presented frames — it only idles a stage that was
+not deciding anything. The first design (skip while the mailbox is unread)
+serialised production behind consumption and halved composes in Azahar
+(23.75 -> 11.50/s); the second (rate-based) was harmless and moved nothing,
+because the wall was elsewhere. The ratio that justified it also came from
+`sSwapsDone`, which `STATE.md` already records as double-counting skipped
+scenes.
+
+**Rule.** Before cutting work, name the stage that bounds the user-visible
+metric and show the cut is on that stage's path. Verify any derived ratio
+against the counter corrections already recorded. A change whose defence is
+"the frames were thrown away anyway" is not an optimisation.
+
+## A referenced hash that is correct but never taken
+
+**Symptom.** A referenced-range change signature cut engine A's per-pass hash
+from 864 KB to 3.0 KB with zero disagreements against the full hash — and the
+drawer did not move at all (4.61 ms before, 4.61 ms after).
+
+**Cause.** The path never runs on the engine that matters. Engine A shows the
+3D layer; a new 3D image counts as a change, so `SplitIfChanged` re-renders
+instead of hashing. Only engine B, which is static, reaches its VRAM hash — and
+there the same change is real (bottom pass 2.52 -> 0.63 ms).
+
+**Rule.** Prove a fast path *fires*, not just that it is exact. Byte counters
+(`[perf] refHashB: N referenced bytes, M full-hash bytes`) and the per-phase
+profile are the evidence; a correct branch that is never entered is a no-op
+with good tests.

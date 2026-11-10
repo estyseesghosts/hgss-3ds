@@ -11,15 +11,22 @@ one-time toolchain install — see [WINDOWS.md](WINDOWS.md).
 
 > **What you need**
 >
-> - A **New 3DS or New 2DS** with the Homebrew Launcher working. The 3D layer
->   is built for the New 3DS's faster processor; an Old 3DS has not been
->   verified.
+> - A **3DS, 3DS XL, 2DS, New 3DS or New 2DS** with the Homebrew Launcher
+>   working. It runs on both models: the Old 3DS is the measured baseline
+>   (and the model the performance work targets), and a New 3DS has more room.
 > - Your **own** US copy of Pokémon HeartGold or SoulSilver, dumped as an
 >   `.nds` file. Only clean, unmodified US dumps are accepted. The scripts
 >   never upload it and never change it.
 > - An SD card reader and a few GB free (the game folder and the pack are
 >   about 250 MB; the build's object files need a few GB more).
 > - Python 3.9 or newer, `git`, and an internet connection for the first build.
+
+> **What to expect when you play it.** The game boots and plays all the way
+> through — field, battles, menus, both screens, audio. It is **not fast yet**:
+> on an Old 3DS the field presents about six frames a second today, because
+> the software drawer on the ARM11 is the bottleneck (the GPU is nearly idle).
+> A New 3DS does better. Making it faster is the project's current work, not a
+> setup problem on your end.
 
 > **Do not share the files the scripts create from your ROM.** The `.pak` and
 > the extracted game files are copyrighted game data. They are ignored by git
