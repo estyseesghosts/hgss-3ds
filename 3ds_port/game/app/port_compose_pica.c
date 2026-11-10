@@ -673,11 +673,11 @@ void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
     if (midLate != NULL) *midLate = sDbgMidLate;
     if (noBuf != NULL) *noBuf = sDbgNoBuf;
     if (draws != NULL) *draws = sDbgDraws;
-    if (pickTicks != NULL) *pickTicks = sDbgPickTicks;
-    if (prepareTicks != NULL) *prepareTicks = sDbgPrepareTicks;
-    if (stageTicks != NULL) *stageTicks = sDbgStageTicks;
-    if (endTicks != NULL) *endTicks = sDbgEndTicks;
-    if (skipTicks != NULL) *skipTicks = sDbgSkipTicks;
+    if (pickTicks != NULL) *pickTicks = __atomic_load_n(&sDbgPickTicks, __ATOMIC_RELAXED);
+    if (prepareTicks != NULL) *prepareTicks = __atomic_load_n(&sDbgPrepareTicks, __ATOMIC_RELAXED);
+    if (stageTicks != NULL) *stageTicks = __atomic_load_n(&sDbgStageTicks, __ATOMIC_RELAXED);
+    if (endTicks != NULL) *endTicks = __atomic_load_n(&sDbgEndTicks, __ATOMIC_RELAXED);
+    if (skipTicks != NULL) *skipTicks = __atomic_load_n(&sDbgSkipTicks, __ATOMIC_RELAXED);
     if (needA != NULL) *needA = sDbgNeedA;
     if (needB != NULL) *needB = sDbgNeedB;
     if (drawsScene != NULL) *drawsScene = sDbgDrawsScene;
@@ -3695,6 +3695,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     int keptShown;
     u32 current2d[2];
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
+    u64 stageStart = 0, stageTicks = 0, endStart = 0, endTicks = 0;
 
     if (!sReady) {
         return 0;
@@ -3941,13 +3942,13 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     LightLock_Unlock(&sSetLock);
     if (!need[0] && !need[1]) {
         sDbgNoNeed++;
-        sDbgSkipTicks += svcGetSystemTick() - start;
+        __atomic_fetch_add(&sDbgSkipTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
         return drawn;   /* (nothing drawn: why, if a frame was wanted) */
     }
     if (need[0]) sDbgNeedA++;
     if (need[1]) sDbgNeedB++;
     sDbgDraws++;
-    sDbgPickTicks += svcGetSystemTick() - start;
+    __atomic_fetch_add(&sDbgPickTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
     /* (an in-between scene has its scene's serial: told apart) */
     if (scene != NULL && (!sScenePrepared || sceneSerial * 2u + (mid ? 1u : 0u) != sPreparedScene)) {
@@ -3958,7 +3959,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
          * can use the outline buffers, even if this eye disables outlines. */
         NitroPort_PicaPrepareScene(scene, NULL, sEdgeDepth[0] != NULL);
         prepareTicks = svcGetSystemTick() - prepareTicks;
-        sDbgPrepareTicks += svcGetSystemTick() - prepStart;
+        __atomic_fetch_add(&sDbgPrepareTicks, svcGetSystemTick() - prepStart, __ATOMIC_RELAXED);
         sPreparedScene = sceneSerial * 2u + (mid ? 1u : 0u);
         sScenePrepared = 1;
         if (sConfig.stereo && sConfig.convergence <= 0.0f && !mid) {
@@ -3967,7 +3968,7 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     }
     /* (built while the GPU draws the frame before: frames in flight) */
     NitroPort_PicaFrameOpen();
-    sDbgStageTicks -= svcGetSystemTick();
+    stageStart = svcGetSystemTick();
     sQuadHalf ^= 1;
     sQuads = sQuadsAll + (sQuadHalf ? MAX_QUAD_VERTICES : 0);
     NitroPort_PicaStage("the frame's clears");
@@ -4125,8 +4126,8 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     NitroPort_PicaStage("the frame's end");
     {
         u32 mark = NitroPort_PicaFrameClose();
-        sDbgStageTicks += svcGetSystemTick();
-        sDbgEndTicks -= svcGetSystemTick();
+        stageTicks = svcGetSystemTick() - stageStart;
+        endStart = svcGetSystemTick();
 
         /* The targets into the screens' LCD framebuffers, after the
          * drawing (queued behind it). */
@@ -4348,7 +4349,16 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         p->serial = sGpuSubmitted;
     }
     LightLock_Unlock(&sPresentLock);
-    sDbgEndTicks += svcGetSystemTick();
+    endTicks = svcGetSystemTick() - endStart;
+    /* Published only once the frame's own time is complete. The old
+     * `-= now ... += now` pair left these counters holding a negative u64
+     * for the whole stage and end phases; the shell samples them from the
+     * game's thread every 600 frames, and the OFF hardware log caught
+     * `stage 16102.78 ms/draw` / `end 274113216854.52` doing exactly that.
+     * A frame that returns early now drops its own sample instead of
+     * corrupting the window. */
+    __atomic_fetch_add(&sDbgStageTicks, stageTicks, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&sDbgEndTicks, endTicks, __ATOMIC_RELAXED);
     return drawn;
 }
 

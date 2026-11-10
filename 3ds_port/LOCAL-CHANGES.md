@@ -4,6 +4,19 @@
 at the commit in `platinum.lock` (GPL-3.0). Everything here is Platinum's
 except the changes below.
 
+## 3. Compose-phase counters (`game/app/port_compose_pica.c`)
+
+The stage and end phases accumulated with `sDbgStageTicks -= now ... += now`,
+which left the counter holding a *negative* `u64` for the whole phase. The
+shell samples those counters from the game's thread every 600 frames, so a
+sample taken inside the window read ~7e16 ticks: the OFF hardware log carries
+`stage 16102.78 ms/draw` and `end 274113216854.52`, impossible values that
+would have poisoned any timing claim. Both phases now accumulate in locals and
+are published once, atomically, when the frame's own time is complete; the
+five phase counters are also read and written atomically so a 64-bit value
+cannot tear. A frame that returns early drops its own sample instead of
+corrupting the window.
+
 ## 2. Instrumentation gate (`nitro/src/port_render2d.c`, `nitro/src/port_gx3d.c`)
 
 Added 2026-11-09 for the benchmark contract in `PICA200-INSTRUMENTATION.md` §B.
