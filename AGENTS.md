@@ -18,3 +18,26 @@ Every subagent brief must state, in the prompt itself:
 Do not send a subagent a vague goal and let it infer scope. If the lead cannot fill in all six items, the slice is not ready to delegate. A brief that is broader, vaguer or in conflict with `gameplan.md` should be revised before the call, not discovered by the subagent mid-edit.
 
 Implementer subagents hold `docs/progress/STATE.md` and `gameplan.md` as required reading; the brief adds the slice-specific detail those files cannot contain. When this file disagrees with an agent definition under `.opencode/agents/` or `.claude/agents/`, this file wins.
+
+## Git identity
+
+The only git identity an agent may use in this repository is:
+
+```text
+terezi <jules@foxtails.me>
+```
+
+Set it in the repository itself before the first commit, and do not rely on a
+machine-wide default or invent a placeholder:
+
+```sh
+git config user.name terezi
+git config user.email jules@foxtails.me
+```
+
+Every agent commit carries both fields. Do not use `A4`,
+`a4@example.invalid`, the host's auto-detected address, or any other
+identity, and do not author on someone else's behalf. If a commit already
+exists under another identity, report it to the lead rather than rewriting
+history: an artifact's `build-info` names the commit it was built from, and
+re-authoring a commit changes that name.
