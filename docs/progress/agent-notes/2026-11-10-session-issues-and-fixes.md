@@ -15,6 +15,10 @@ it. The point is the next session recognising the shape faster.
 | 8 | The Windows test suite has 22 environment failures | Baseline run on a stashed tree; only *new* failures count |
 | 9 | The emulator driver aborted before launching | Process handling made non-fatal; run script made idempotent |
 | 10 | Two hardware logs with no run manifest | Packets now stage one; `bench_manifest.py` re-hashes the inputs |
+| 11 | 96 game sources fail with missing `dwc/` etc. headers | Build with Windows Python: the mingw gcc silently drops `-idirafter /home/...` dirs |
+| 12 | The `py` launcher follows the script shebang to MSYS Python | Invoke `C:\Program Files\Python315\python.exe` explicitly |
+| 13 | Windows Python resolves `DEVKITARM=/opt/...` to `C:\opt\...` | Export `DEVKITPRO`/`DEVKITARM` in `C:\` form for the build |
+| 14 | 3 lobby/pokewalker objects fail: objcopy/readelf must be on PATH | Prepend `devkitARM/bin` to `PATH` |
 
 ## 1. No git identity
 
@@ -97,3 +101,63 @@ next to them, so the save/script/ini hashes could not be re-checked after the
 fact. Packets now carry a run manifest written by `tools/bench_manifest.py`,
 and `tools/bench_report.py --check-manifest` refuses a stale artifact, save or
 script.
+
+## 11. MSYS Python breaks the game-library headers
+
+**Symptom.** After a tree normalisation (every source touched, full rebuild),
+96 game sources fail with `dwc/net_common_internal.h: No such file or
+directory` (also `nitrowifi/`, `vct/`, `dsprot.h`); the other 996 compile.
+The headers exist under `build/upstream/lib/include/`, reached only through
+`-idirafter`.
+
+**Cause.** The driver ran under MSYS Python, so every path renders as
+`/home/...`. The mingw `arm-none-eabi-gcc` silently drops an `-idirafter`
+directory in that form: `gcc -E -v` prints every `-I` dir translated to
+`C:/...` but the `-idirafter` dir is absent from the search list, while the
+`C:/` form of the same flag appears and preprocesses cleanly. Only the 96
+sources including the game-library headers need that directory, so only they
+fail. An incremental build on warm objects hides this for months: the failure
+appears only on a full rebuild.
+
+**Rule.** On Windows, run the driver under Windows Python
+(`C:\Program Files\Python315\python.exe`, the same 3.15.2 the staged packets'
+manifests record). Bisecting the flag list is the fast diagnostic: the break
+appears exactly when the `-idirafter` dir leaves the `-E -v` search list.
+
+## 12. The `py` launcher follows the shebang
+
+**Symptom.** `py tools/hgss_game.py ...` still produces `/home/...` paths and
+the §11 failure, even though `py -c` runs Windows Python 3.15.
+
+**Cause.** The script starts with `#!/usr/bin/env python3`, which the `py`
+launcher honours: it resolves `python3` on `PATH` and finds MSYS Python
+(`c:\devkitPro\msys2\usr\bin\python3.exe`, on the system `PATH`).
+
+**Rule.** Invoke the Windows interpreter by explicit path. Do not rely on
+`py script.py` for any tool that passes paths to native binaries.
+
+## 13. MSYS-style `DEVKITARM` under Windows Python
+
+**Symptom.** The Windows-Python driver dies in `alias_tool_environment`:
+`C:\opt\devkitpro\devkitARM\bin\arm-none-eabi-objcopy` not found.
+
+**Cause.** The machine-wide `DEVKITARM` is `/opt/devkitpro/devkitARM`. MSYS
+Python tolerates it (own-path translation); Windows Python joins it onto the
+current drive, giving `C:\opt\...`.
+
+**Rule.** Export `DEVKITPRO=C:\devkitPro` and
+`DEVKITARM=C:\devkitPro\devkitARM` in the build shell.
+
+## 14. objcopy/readelf must be on `PATH`
+
+**Symptom.** With §11–13 fixed, exactly 3 objects (lobby ×2, pokewalker ×1)
+fail with `arm-none-eabi-objcopy/readelf must be on PATH` from the
+post-compile alias step.
+
+**Cause.** The build shell did not carry `devkitARM/bin` on `PATH`; only the
+files needing object aliasing reach that step, so the failure is a confusing
+3-file subset, not the whole tree.
+
+**Rule.** Prepend `C:\devkitPro\devkitARM\bin` to `PATH` in every build shell.
+Full recipe: explicit Windows Python + `C:\`-form `DEVKITPRO`/`DEVKITARM` +
+`devkitARM/bin` on `PATH`.
