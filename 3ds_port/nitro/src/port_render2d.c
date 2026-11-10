@@ -78,8 +78,15 @@ typedef u32 __attribute__((may_alias)) u32a;
 /* Slice-A profile ticks: the 3DS's tick counter (port_os.c's pattern: the
  * port never includes libctru's headers, so the one prototype it needs is
  * declared here). Host builds have no counter: phases measure 0 there and
- * only the counts are exact. */
-#ifdef __3DS__
+ * only the counts are exact.
+ *
+ * HGSS_PROFILE_OFF (tools/hgss_game.py, tools/hgss_nitro.py) is the OFF build
+ * for timing claims: the per-draw tick reads -- 26 per engine draw, about 52
+ * a frame -- disappear, so a PROFILE-vs-OFF A/B measures their cost instead
+ * of assuming it. The counters that remain are plain memory increments. */
+#ifdef HGSS_PROFILE_OFF
+#define R2D_NOW() 0
+#elif defined(__3DS__)
 extern u64 svcGetSystemTick(void);
 #define R2D_NOW() svcGetSystemTick()
 #else

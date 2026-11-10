@@ -2026,7 +2026,14 @@ static inline __attribute__((always_inline)) void execute(unsigned op,const uint
 #ifdef HGSS_GX3D_LISTCACHE
         listcache_scene();
 #endif
+#ifndef HGSS_PROFILE_OFF
         if(++sDiag.scenes>=120)diag_log();
+#else
+        /* OFF build: the counters stay ordinary increments so a later
+         * PROFILE run of the same work is comparable, but the formatting
+         * and the log write (three long lines) are compiled out. */
+        ++sDiag.scenes;
+#endif
         break;
     }
     case 0x60:

@@ -210,6 +210,16 @@ def port_cflags(target: str, cxx: bool = False) -> list[str]:
              "-fno-aggressive-loop-optimizations",
              "-fno-delete-null-pointer-checks"]
     flags += PORT_DEFINES
+    # Instrumentation build (Packet A / PICA200-INSTRUMENTATION §B): the
+    # default is PROFILE (every counter and counter log compiled in).
+    # HGSS_PROFILE=off compiles an OFF build for timing claims: the 2D
+    # renderer's per-draw tick reads (R2D_NOW) become zero and the geometry
+    # diagnostics stop logging. The two builds must differ only in this
+    # define; everything else (flags, commit, inputs) stays identical.
+    # The same define must reach libnitro.a/libnitrosystem.a, which is why
+    # tools/hgss_nitro.py also injects it (see its sdk_includes callers).
+    if os.environ.get("HGSS_PROFILE") == "off":
+        flags += ["-DHGSS_PROFILE_OFF"]
     # Diagnostic build only: never enable texture timing in normal releases.
     if target == "3ds" and os.environ.get("HGSS_TEXTURE_PROFILE") == "1":
         flags += ["-DHGSS_TEXTURE_PROFILE=1"]
@@ -880,7 +890,8 @@ def smdh_names(build_id: str | None = None) -> tuple[str, str, str]:
     rest = build_id[len(short_sha):]
     base = short_sha + ("-dirty" if rest.startswith("-dirty") else "")
     flags = [part for part in ("gxhot", "gxidx", "listcache", "statededup",
-                               "fusehash", "lazy", "slot3", "adpcm", "a0diag")
+                               "fusehash", "lazy", "slot3", "adpcm", "a0diag",
+                               "profoff")
              if f"-{part}" in rest]
     title = f"{game}-{build_id}"
     long = " ".join(flags)
@@ -1032,6 +1043,11 @@ def experiment_build_id(short: str, dirty: bool) -> str:
                              ("HGSS_A0_DIAG", "-a0diag")):
         if os.environ.get(variable) == "1":
             tag += suffix
+    # The instrumentation mode must be visible in the run's banner too: a
+    # PROFILE and an OFF log from the same commit are otherwise identical in
+    # their first line, and a timing claim would be unattributable.
+    if os.environ.get("HGSS_PROFILE") == "off":
+        tag += "-profoff"
     return tag
 
 
@@ -1450,6 +1466,16 @@ def gx3d_sdk_mode() -> str:
                      "HGSS_GX3D_FUSEHASH", "HGSS_GX3D_LAZYINSERT"))
 
 
+def profile_mode() -> str:
+    """The instrumentation mode compiled into the archives (see hgss_nitro)."""
+    return "off" if os.environ.get("HGSS_PROFILE") == "off" else "profile"
+
+
+def profile_mode_matches(out: Path) -> bool:
+    marker = out / "sdk" / ".profile-mode"
+    return marker.is_file() and marker.read_text().strip() == profile_mode()
+
+
 def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool, list[Path]]:
     """libnitro.a and libnitrosystem.a through tools/hgss_nitro.py.
 
@@ -1485,6 +1511,14 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
     if not a0_marker.exists() or a0_marker.read_text().strip() != a0_mode:
         (sdk_out / "port" / "port_gx3d.o").unlink(missing_ok=True)
         (sdk_out / "port" / "port_render2d.o").unlink(missing_ok=True)
+    prof_mode = profile_mode()
+    prof_marker = sdk_out / ".profile-mode"
+    if not prof_marker.exists() or prof_marker.read_text().strip() != prof_mode:
+        # HGSS_PROFILE toggles the 2D tick reads (port_render2d.c) and the
+        # geometry diagnostics (port_gx3d.c); both objects must rebuild so a
+        # PROFILE and an OFF artifact never share one archive.
+        (sdk_out / "port" / "port_gx3d.o").unlink(missing_ok=True)
+        (sdk_out / "port" / "port_render2d.o").unlink(missing_ok=True)
     nitro_cmd = [sys.executable, str(TOOLS / "hgss_nitro.py"), "make",
                  "--target", target, "--out", str(sdk_out), "--subproject", "nitro",
                  "lib", "-k", "-j", str(jobs)]
@@ -1502,6 +1536,7 @@ def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool
             bg3slot_marker.write_text(bg3slot_mode + "\n")
             sndadpcm_marker.write_text(sndadpcm_mode + "\n")
             a0_marker.write_text(a0_mode + "\n")
+            prof_marker.write_text(prof_mode + "\n")
         ok = ok and proc.returncode == 0
     libs = [p for p in (sdk_out / "libnitrosystem.a", sdk_out / "libnitro.a")
             if p.is_file()]
@@ -1636,6 +1671,11 @@ def main(argv: list[str] | None = None) -> int:
     _, libs = build_libraries(root, args.target, out, args.jobs)
     if not palette_sdk_mode_matches(out):
         print("   error: palette-hash SDK mode was not built; refusing a potentially stale archive", file=sys.stderr)
+        return 1
+    if not profile_mode_matches(out):
+        print("   error: instrumentation mode was not built; refusing a "
+              "potentially stale archive (PROFILE and OFF must never share "
+              "one libnitro.a)", file=sys.stderr)
         return 1
 
     print("== overlay table", flush=True)

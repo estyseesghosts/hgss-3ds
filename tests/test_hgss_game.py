@@ -1647,12 +1647,15 @@ class PerformanceSliceATests(unittest.TestCase):
 
     def test_ticks_come_from_the_3ds_counter_only(self):
         text = (self.NITRO / "port_render2d.c").read_text()
+        # The instrumentation gate comes first: HGSS_PROFILE_OFF must never
+        # reach the counter, so a timing build has no tick reads at all.
+        self.assertLess(text.index("#ifdef HGSS_PROFILE_OFF"),
+                        text.index("#elif defined(__3DS__)"))
         # port_os.c's pattern: the port never includes libctru's headers.
-        self.assertIn("#ifdef __3DS__", text)
         self.assertIn("extern u64 svcGetSystemTick(void);", text)
         self.assertIn("#define R2D_NOW() svcGetSystemTick()", text)
-        # Host builds (tests, tools) have no counter: phases read 0, counts
-        # stay exact, and no undefined reference is introduced.
+        # Host builds (tests, tools) and the OFF build have no counter: phases
+        # read 0, counts stay exact, and no undefined reference is introduced.
         self.assertIn("#define R2D_NOW() 0", text)
 
     def test_draw_engine_time_per_phase(self):
@@ -2426,6 +2429,14 @@ class BuildIdTests(unittest.TestCase):
         with patch.dict(os.environ, {"HGSS_A0_DIAG": "1"}):
             self.assertEqual(hg.experiment_build_id("abc1234", True),
                              "abc1234-dirty-a0diag")
+        # The instrumentation mode must be attributable from the banner alone:
+        # a PROFILE and an OFF log of one commit are otherwise identical.
+        with patch.dict(os.environ, {"HGSS_PROFILE": "off"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True),
+                             "abc1234-dirty-profoff")
+        with patch.dict(os.environ, {"HGSS_PROFILE": "profile"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", True),
+                             "abc1234-dirty")
 
     def test_header_written_only_on_change(self):
         with tempfile.TemporaryDirectory() as tmp:

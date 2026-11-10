@@ -2,7 +2,25 @@
 
 `3ds_port/` is vendored from [GabeSud0/pokeplatinum-3ds](https://github.com/GabeSud0/pokeplatinum-3ds)
 at the commit in `platinum.lock` (GPL-3.0). Everything here is Platinum's
-except the one change below.
+except the changes below.
+
+## 2. Instrumentation gate (`nitro/src/port_render2d.c`, `nitro/src/port_gx3d.c`)
+
+Added 2026-11-09 for the benchmark contract in `PICA200-INSTRUMENTATION.md` §B.
+`HGSS_PROFILE_OFF` (set by `tools/hgss_game.py` / `tools/hgss_nitro.py` when
+`HGSS_PROFILE=off`) compiles out the per-draw `svcGetSystemTick()` reads in
+`R2D_NOW()` (26 per engine draw, about 52 a frame) and the per-120-scene
+`[gx3d]` diagnostic logging. The PROFILE build is unchanged: without the
+define every branch behaves exactly as before.
+
+Why: timing claims must come from an uninstrumented artifact, and the
+profiler's own cost must be measured, not assumed. `tools/bench_ab.py` runs
+matched alternating trials of the two builds. Activation is checked by
+`arm-none-eabi-nm` (`port_render2d.o` references `svcGetSystemTick` in PROFILE
+and not in OFF) and by the `-profoff` build banner.
+
+This is a build-time gate, not a behaviour change: no rendering path, pixel
+or counter differs between the builds when the define is absent.
 
 ## 1. Camera-plane triangles (`nitro/src/port_gx3d.c`)
 
