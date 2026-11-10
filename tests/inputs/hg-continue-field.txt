@@ -1,0 +1,26 @@
+# HeartGold: cold boot with an existing save -> title -> main menu ->
+# CONTINUE -> Goldenrod field at rest. Frame-indexed from power-on.
+#
+# Calibrated 2026-11-09 (Azahar, Old-3DS mode, save: player AAR, 2 badges):
+# the title is up by ~4200, START opens the main menu, A on the first entry
+# (CONTINUE) loads the field by ~9000. The presses are repeated over short
+# windows because Azahar's frame pacing jitters; they stop before the field
+# settles so no menu opens there.
+every: 10
+0 -
+5000 START
+5010 START
+5020 START
+5030 START
+5040 START
+5050 START
+5100 START
+5110 START
+5120 START
+5130 START
+5140 START
+5150 START
+8000 A
+8020 A
+8040 A
+end: 16000

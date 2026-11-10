@@ -1,0 +1,34 @@
+# HeartGold: cold boot with a save -> CONTINUE -> Goldenrod field -> walk.
+#
+# Same calibration as hg-continue-field.txt (2026-11-09, Azahar O3DS): the
+# field is up by ~9000, so the walk starts at 12000 and runs five 120-frame
+# straight legs alternating direction. Each leg scrolls the tilemap and turns
+# the camera; keep the pattern identical between baseline and candidate runs.
+every: 10
+0 -
+5000 START
+5010 START
+5020 START
+5030 START
+5040 START
+5050 START
+5100 START
+5110 START
+5120 START
+5130 START
+5140 START
+5150 START
+8000 A
+8020 A
+8040 A
+12000 DOWN
+12120 -
+12300 LEFT
+12420 -
+12600 UP
+12720 -
+12900 RIGHT
+13020 -
+13200 DOWN
+13320 -
+end: 15000
