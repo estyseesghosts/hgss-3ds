@@ -17,6 +17,17 @@ the stage/end phases no longer publish a wrapped `u64`). Open: the drawer's
 12 ms, publish 1-6 ms) and is the next target; the PROFILE-vs-OFF hardware
 A/B is still open because those two runs are not matched.
 
+**2026-11-10 (later): the drawer's change detector, measured.** The pass cost
+is not the full-VRAM hash as first assumed: with engine B on a referenced-range
+signature its pass goes **2.52 -> 0.63 ms** in Azahar (drawer 4.61 -> 2.74),
+while engine A never reaches its hash at all - A shows the 3D, a new 3D image
+counts as a change, so it re-renders every pass. That re-render's per-frame
+`setup` is the top screen's 50 ms (12.1% of a core, 0 rasterised lines), and
+the new `[perf] 2d:` split puts it in `key` (BgKeyCached/FoldClearVariant:
+pal 0.1% vs key 3.3% in Azahar). Next target: that per-pass key walk inside
+A's forced re-render, not the hash. Artifacts: PROFILE/OFF packets at
+`0d7849e`.
+
 **In progress (2026-11-06): Azahar 30fps campaign (Goldenrod, N3DS off,
 80% clock).** Goal: full-speed ticks (60/s wall, already achieved and
 re-measured twice via in-probe `wall-{mark}.txt` stamps) plus 30 presented
