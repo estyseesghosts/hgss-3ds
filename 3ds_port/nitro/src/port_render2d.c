@@ -4409,7 +4409,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     NitroRender2DProfile *prof = &sProfile[pe];
     u64 frameKey[4];
     u32 emptyText = 0;
-    u64 tSetup = R2D_NOW();
+    u64 tSetup = R2D_NOW(), tPart;
+    u64 setupPal = 0, setupKey = 0;
 
     if (eva > 16) {
         eva = 16;
@@ -4420,8 +4421,11 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     if (evy > 16) {
         evy = 16;
     }
+    tPart = R2D_NOW();
     FindExtPalettes(e);
     MakePalettes(e);
+    setupPal = R2D_NOW() - tPart;
+    tPart = R2D_NOW();
     for (bg = 0; bg < 4; bg++) {
         bgcnt[bg] = Rd16(io, 8 + bg * 2);
         kind[bg] = (dispcnt & (0x100u << bg)) ? BgKind(e, bg, dispcnt) : BG_NONE;
@@ -4439,6 +4443,8 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         sTextKey[pe][bg] = kind[bg] == BG_TEXT ? FoldClearVariant(e, bg, frameKey[bg]) : 0;
     }
     prof->setupTicks += R2D_NOW() - tSetup;
+    prof->setupPalTicks += setupPal;
+    prof->setupKeyTicks += R2D_NOW() - tPart;
     if (e->isA && kind[0] == BG_3D && split == NULL) {
         e->height = H;   /* (a tall picture with the 3D: only in two layers, the 3D on the DS's lines) */
     }
@@ -6526,7 +6532,7 @@ static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask, int ski
     return h;
 }
 
-static int sRefHashB, sRefHashDiagnostic;
+static int sRefHashB, sRefHashA, sRefHashDiagnostic;
 static u64 sRefHashBytes, sFullHashBytes;
 static unsigned sRefHashDisagreements;
 /* Half-A L4: engine B's signature split into per-part pieces. rest (the
@@ -6544,32 +6550,25 @@ typedef struct PartialBParts {
     u32 extPal;
 } PartialBParts;
 static u32 EngineBReferencedSignature(const u8 *io, const u8 *oam, const u8 *pltt, int *modelled, PartialBParts *parts);
+static u32 EngineReferencedSignature(int engine, const u8 *io, const u8 *oam,
+                                     const u8 *pltt, int *modelled);
+static u32 EngineFullVramSignature(int engine, const u8 *io);
 
 static u32 EngineVramSignature(int engine, const u8 *io, const u8 *oam)
 {
-    u32 h = 2166136261u;
+    const u8 *pltt = oam == sState[engine].oam ? sState[engine].pltt : NitroPort_Pltt;
 
-    if (engine == 0) {
-        h = HashWords(NitroPort_BgVram, 0x80000, h);
-        h = HashWords(NitroPort_ObjVram, 0x40000, h);
-        h = HashWords(NitroPort_LcdcVram + 0x80000, 0x18000, h);   /* E, F, G */
-        if (((Rd32(io, 0) >> 16) & 3) == 2) {                       /* VRAM display */
-            h = HashWords(NitroPort_LcdcVram + ((Rd32(io, 0) >> 18) & 3) * 0x20000, 0x20000, h);
+    /* The bytes the frame's layers can read, when that is modelled here;
+     * every byte of VRAM otherwise. */
+    if (engine == 0 ? sRefHashA : sRefHashB) {
+        int modelled = 1;
+        u32 ref = EngineReferencedSignature(engine, io, oam, pltt, &modelled);
+
+        if (modelled) {
+            return ref;
         }
-    } else {
-        if (sRefHashB) {
-            int modelled = 1;
-            u32 ref = EngineBReferencedSignature(io, oam, oam == sState[1].oam ? sState[1].pltt : NitroPort_Pltt, &modelled, NULL);
-            if (modelled) return ref;
-            /* Unmodelled engine-B state (display off, VRAM/main-memory
-             * display, bitmap/large modes): the full hash below. */
-        }
-        h = HashWords(NitroPort_DbBgVram, 0x20000, h);
-        h = HashWords(NitroPort_DbObjVram, 0x20000, h);
-        h = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, h);    /* H, I */
-        sFullHashBytes += 0x4C000;
     }
-    return h;
+    return EngineFullVramSignature(engine, io);
 }
 
 /* L3: engine B's reference set.  This deliberately follows the same address
@@ -6741,6 +6740,152 @@ void NitroPort_Render2DSetReferenceHash(int enabled, int diagnostic)
     sRefHashDiagnostic = diagnostic != 0;
     if (sRefHashDiagnostic)
         NitroPort_Log("[2d] refHashDiag=on (reference/full change cross-check)");
+}
+
+void NitroPort_Render2DSetReferenceHashA(int enabled)
+{
+    sRefHashA = enabled != 0;
+    if (sRefHashA)
+        NitroPort_Log("[2d] refHashA=on (referenced engine-A ranges)");
+}
+
+/* L4a: engine A's reference set -- the same idea as engine B's above, on
+ * engine A's banks. The change detector used to hash 864 KB of BG/OBJ VRAM
+ * and LCDC on every drawer pass to prove "nothing changed"; that is the
+ * drawer's whole cost on an Old 3DS (the rasterizer draws no lines in a
+ * still picture, yet the pass takes 50 ms). Only the bytes the display can
+ * actually read are hashed: each enabled BG's map and the characters that
+ * map names, the extended palette banks the display has mapped, and the
+ * tiles of the sprites OAM shows.
+ *
+ * Exactness: a byte outside this set cannot be read by this frame's layers,
+ * so it cannot change the picture. Anything not modelled here (bitmap
+ * modes, the large BG, bitmap OBJ, a VRAM/main-memory display) sets
+ * *modelled = 0 and the caller keeps the full hash. */
+static u32 EngineReferencedSignature(int engine, const u8 *io, const u8 *oam,
+                                     const u8 *pltt, int *modelled)
+{
+    Engine eng;
+    const u8 *bg = engine == 0 ? NitroPort_BgVram : NitroPort_DbBgVram;
+    const u8 *obj = engine == 0 ? NitroPort_ObjVram : NitroPort_DbObjVram;
+    u32 h = 2166136261u, dispcnt = Rd32(io, 0);
+    u32 bgMask = engine == 0 ? 0x7FFFFu : 0x1FFFFu;
+    u32 objMask = engine == 0 ? 0x3FFFFu : 0x1FFFFu;
+    int b;
+
+    *modelled = 1;
+    memset(&eng, 0, sizeof(eng));
+    eng.isA = engine == 0;
+    eng.io = io;
+    eng.ioAll = io - (engine ? 0x1000 : 0);
+    eng.oam = oam + (engine ? 0x400 : 0);
+
+    /* The tiled BGs of the graphics display only. */
+    if (((dispcnt >> 16) & 3) != 1 || (dispcnt & 7) > 5) {
+        *modelled = 0;
+        return 0;
+    }
+    for (b = 0; b < 4; b++) {
+        u16 cnt;
+        int kind, bpp8, mapW, mapH;
+        u32 map, chars, mapBytes, maxTile = 0, i;
+
+        if (!(dispcnt & (0x100u << b))) {
+            continue;
+        }
+        cnt = Rd16(io, 0x08 + b * 2);
+        kind = BgKind(&eng, b, dispcnt);
+        if (kind == BG_NONE || kind == BG_3D) {
+            continue;                       /* (the 3D reads no VRAM) */
+        }
+        if (kind == BG_LARGE || (kind == BG_EXTENDED && (cnt & 0x80))) {
+            *modelled = 0;                  /* (bitmaps keep the full hash) */
+            return 0;
+        }
+        bpp8 = kind == BG_TEXT ? ((cnt & 0x80) != 0) : 1;
+        if (kind == BG_TEXT) {
+            mapW = sTextSizes[cnt >> 14][0];
+            mapH = sTextSizes[cnt >> 14][1];
+        } else {
+            mapW = mapH = 128 << (cnt >> 14);
+        }
+        map = ScreenBase(&eng, cnt, dispcnt);
+        chars = CharBase(&eng, cnt, dispcnt);
+        mapBytes = (u32)(mapW / 8) * (u32)(mapH / 8) * (kind == BG_AFFINE ? 1u : 2u);
+        h = RefHashRange(h, bg, map, mapBytes, bgMask);
+        for (i = 0; i < mapBytes / (kind == BG_AFFINE ? 1u : 2u); i++) {
+            u32 tile = kind == BG_AFFINE ? bg[(map + i) & bgMask]
+                                         : Rd16(bg, (map + i * 2) & bgMask) & 0x3FFu;
+            if (tile > maxTile) {
+                maxTile = tile;
+            }
+        }
+        h = RefHashRange(h, bg, chars, (maxTile + 1) * (bpp8 ? 64u : 32u), bgMask);
+    }
+    /* Engine A's palettes (both halves) are already in the small signature. */
+    if (engine != 0) {
+        h = RefHashRange(h, pltt + 0x400, 0, 0x400, 0x7FF);
+    }
+    /* The extended palette banks the display has mapped: A's E-G hold BG
+     * slots and the OBJ palette; B's H/I. One bank each, hashed whole. */
+    {
+        int first = engine == 0 ? 4 : 7, end = engine == 0 ? 7 : 9;
+
+        for (b = first; b < end; b++) {
+            u8 cnt = BankCnt(eng.ioAll, b);
+            int mst = cnt & 7;
+            int used = engine == 0 ? (mst == 4 || mst == 5) : (mst == 2 || mst == 3);
+
+            if ((cnt & 0x80) && used) {
+                h = RefHashRange(h, NitroPort_LcdcVram, sBankLcdc[b], 0x4000, 0xBFFFF);
+            }
+        }
+    }
+    /* The tiles of every sprite OAM shows, addressed exactly as the
+     * rasterizer addresses them. */
+    for (b = 0; b < 128; b++) {
+        Obj o;
+        int tx, ty;
+
+        if (!ReadObj(&eng, b, &o)) {
+            continue;
+        }
+        if (o.mode == 3) {
+            *modelled = 0;                  /* (bitmap OBJ: the full hash) */
+            return 0;
+        }
+        for (ty = 0; ty < o.boxH; ty += 8) {
+            for (tx = 0; tx < o.boxW; tx += 8) {
+                u32 at = ObjCharAddr(&o, dispcnt, tx, ty) & objMask;
+
+                h = RefHashRange(h, obj, at, o.bpp8 ? 64u : 32u, objMask);
+            }
+        }
+    }
+    return h;
+}
+
+/* Every byte of VRAM the engine owns: the old change detector, kept for the
+ * states the reference set does not model and as the diagnostic's reference. */
+static u32 EngineFullVramSignature(int engine, const u8 *io)
+{
+    u32 h = 2166136261u;
+
+    if (engine == 0) {
+        h = HashWords(NitroPort_BgVram, 0x80000, h);
+        h = HashWords(NitroPort_ObjVram, 0x40000, h);
+        h = HashWords(NitroPort_LcdcVram + 0x80000, 0x18000, h);   /* E, F, G */
+        if (((Rd32(io, 0) >> 16) & 3) == 2) {                       /* VRAM display */
+            h = HashWords(NitroPort_LcdcVram + ((Rd32(io, 0) >> 18) & 3) * 0x20000, 0x20000, h);
+        }
+        sFullHashBytes += 0xD8000u;
+    } else {
+        h = HashWords(NitroPort_DbBgVram, 0x20000, h);
+        h = HashWords(NitroPort_DbObjVram, 0x20000, h);
+        h = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, h);    /* H, I */
+        sFullHashBytes += 0x4C000u;
+    }
+    return h;
 }
 
 /* The band renderer's range form, defined with Render below. band = 0 is
@@ -7665,8 +7810,8 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
 {
     /* (its own record: the 3D doesn't come into these layers) */
     static struct { u32 small, vram, serial; int valid, vramValid; } last[2];
-    static u32 lastFullB, lastFullBgPrefix, lastFullObjPrefix;
-    static int lastFullBValid;
+    static u32 lastFull[2];
+    static int lastFullValid[2];
     int e = engine ? 1 : 0;
     SplitReuse *r = &sSplitReuse[e];
     int force = r->valid || last[e].serial != sSplitPictureSerial[e];
@@ -7762,44 +7907,21 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0),
                                split->snapshot ? sState[e].oam : NitroPort_Oam);
     int forceChanged = 0;
-    if (e == 1 && sRefHashB && sRefHashDiagnostic) {
-        u32 full = 2166136261u, bgPrefix, objPrefix;
-        int fullChanged;
+    if (sRefHashDiagnostic && (e == 0 ? sRefHashA : sRefHashB)) {
+        const u8 *dio = (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0);
+        u32 full = EngineFullVramSignature(e, dio);
+        int fullChanged = !lastFullValid[e] || full != lastFull[e];
 
-        full = HashWords(NitroPort_DbBgVram, 0x20000, full);
-        bgPrefix = full;
-        full = HashWords(NitroPort_DbObjVram, 0x20000, full);
-        objPrefix = full;
-        full = HashWords(NitroPort_LcdcVram + 0x98000, 0xC000, full);
-        sFullHashBytes += 0x4C000;
-        fullChanged = !lastFullBValid || full != lastFullB;
         if (last[e].vramValid && (vram != last[e].vram) != fullChanged) {
             sRefHashDisagreements++;
-            NitroPort_Log("[2d] refHashB disagreement #%u: reference-changed %d full-changed %d; full-prefix BG %d BG+OBJ %d",
-                          sRefHashDisagreements, vram != last[e].vram, fullChanged,
-                          bgPrefix != lastFullBgPrefix, objPrefix != lastFullObjPrefix);
-#ifdef HGSS_A0_DIAG
-            {
-                const u8 *checkIo = (split->snapshot ? sState[e].io : NitroPort_IoReg) + 0x1000;
-                const u8 *checkOam = split->snapshot ? sState[e].oam : NitroPort_Oam;
-                u32 retryRef = EngineVramSignature(e, checkIo, checkOam);
-                u32 retryFull = 2166136261u;
-                retryFull = HashWords(NitroPort_DbBgVram, 0x20000, retryFull);
-                retryFull = HashWords(NitroPort_DbObjVram, 0x20000, retryFull);
-                retryFull = HashWords(NitroPort_LcdcVram + 0x98000, 0xc000, retryFull);
-                sFullHashBytes += 0x4c000;
-                NitroPort_Log("[a0] refHash disagreement rescan: reference-changed %d full-changed %d",
-                              retryRef != vram, retryFull != full);
-            }
-#endif
-            /* The reference path is experimental: a disagreement must never
+            NitroPort_Log("[2d] refHash%c disagreement #%u: reference-changed %d full-changed %d",
+                          e ? 'B' : 'A', sRefHashDisagreements, vram != last[e].vram, fullChanged);
+            /* The reference set is experimental: a disagreement must never
              * become a stale skip. Treat the frame as changed. */
             forceChanged = 1;
         }
-        lastFullB = full;
-        lastFullBgPrefix = bgPrefix;
-        lastFullObjPrefix = objPrefix;
-        lastFullBValid = 1;
+        lastFull[e] = full;
+        lastFullValid[e] = 1;
     }
     if (last[e].vramValid && vram == last[e].vram && !forceChanged) {
 #ifdef HGSS_A0_DIAG

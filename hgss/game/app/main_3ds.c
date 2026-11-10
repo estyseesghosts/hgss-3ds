@@ -801,6 +801,7 @@ static volatile bool sToastDirty;
 static int sIniLower30;
 static int sIniDrawerAB;
 static int sIniRefHashB;
+static int sIniRefHashA;
 static int sIniRefHashDiag;
 static int sIniPartialB;
 static int sIniPartialBDiag;
@@ -1888,7 +1889,7 @@ static void PerfLog(u64 now)
          * ms/s per phase, i.e. percent of a core, plus line counts). Slice B
          * adds the per-frame setup and the text-row cache hit rate. */
         NitroRender2DProfile cur[2], *a = &cur[0], *b = &cur[1];
-        u64 text, layer, obj, merge, blend, window, finish, setup;
+        u64 text, layer, obj, merge, blend, window, finish, setup, setupPal, setupKey;
         u64 el = now - sPerfLastTick;
         double inv;
         unsigned rows, rowsHit;
@@ -1903,14 +1904,17 @@ static void PerfLog(u64 now)
         window = (a->windowTicks - sPerf2d[0].windowTicks) + (b->windowTicks - sPerf2d[1].windowTicks);
         finish = (a->finishTicks - sPerf2d[0].finishTicks) + (b->finishTicks - sPerf2d[1].finishTicks);
         setup = (a->setupTicks - sPerf2d[0].setupTicks) + (b->setupTicks - sPerf2d[1].setupTicks);
+        setupPal = (a->setupPalTicks - sPerf2d[0].setupPalTicks) + (b->setupPalTicks - sPerf2d[1].setupPalTicks);
+        setupKey = (a->setupKeyTicks - sPerf2d[0].setupKeyTicks) + (b->setupKeyTicks - sPerf2d[1].setupKeyTicks);
         rowsHit = (a->rowHits - sPerf2d[0].rowHits) + (b->rowHits - sPerf2d[1].rowHits);
         rows = rowsHit + (a->rowMisses - sPerf2d[0].rowMisses) + (b->rowMisses - sPerf2d[1].rowMisses);
         inv = el ? 100.0 / (double)el : 0.0;
         NitroPort_Log("[perf] 2d: text %.1f%%, affine %.1f%%, obj %.1f%%, merge %.1f%%, blend %.1f%%, "
-                      "window %.1f%%, finish %.1f%%, setup %.1f%% (%u lines, %u empty, %u blend, rows %u/%u)",
+                      "window %.1f%%, finish %.1f%%, setup %.1f%% (pal %.1f%%, key %.1f%%, %u lines, %u empty, %u blend, rows %u/%u)",
                       (double)text * inv, (double)layer * inv, (double)obj * inv,
                       (double)merge * inv, (double)blend * inv, (double)window * inv,
                       (double)finish * inv, (double)setup * inv,
+                      (double)setupPal * inv, (double)setupKey * inv,
                       (unsigned)((a->lines - sPerf2d[0].lines) + (b->lines - sPerf2d[1].lines)),
                       (unsigned)((a->emptyLines - sPerf2d[0].emptyLines) +
                                  (b->emptyLines - sPerf2d[1].emptyLines)),
@@ -2817,7 +2821,8 @@ static void ReadDisplayOptions(void)
     sIniSched = 0;
     sIniLower30 = 0;
     sIniDrawerAB = 0;
-    sIniRefHashB = 0;
+    sIniRefHashB = 1;
+    sIniRefHashA = 1;          /* (the drawer's cost on an Old 3DS) */
     sIniRefHashDiag = 0;
     sIniPartialB = 0;
     sIniPartialBDiag = 0;
@@ -2914,6 +2919,14 @@ static void ReadDisplayOptions(void)
             NitroPort_Log("[perf] refHashB=on (referenced engine-B ranges)");
         }
     }
+    if (IniValue("refHashA", value, sizeof(value))) {
+        if (!IniOnOff(value, &sIniRefHashA)) {
+            NitroPort_Log("[perf] port.ini refHashA=%s is not on/off; using on", value);
+            sIniRefHashA = 1;
+        }
+        NitroPort_Log("[perf] refHashA=%s (referenced engine-A ranges: the change check reads only what the frame shows)",
+                      sIniRefHashA ? "on" : "off");
+    }
     if (IniValue("refHashDiag", value, sizeof(value))) {
         if (!IniOnOff(value, &sIniRefHashDiag)) {
             NitroPort_Log("[perf] port.ini refHashDiag=%s is not on/off; using off", value);
@@ -2991,6 +3004,7 @@ static void ReadDisplayOptions(void)
     NitroPort_Log("[perf] display options: filter %d, stereo %d, wide %d, texscale %d",
                   sIniFilter, sIniStereo, sIniWide, sIniTexScale);
     NitroPort_Render2DSetReferenceHash(sIniRefHashB, sIniRefHashDiag);
+    NitroPort_Render2DSetReferenceHashA(sIniRefHashA);
     NitroPort_Render2DSetPartialBChar(sIniPartialBChar);
     NitroPort_Render2DSetPartialB(sIniPartialB, sIniPartialBDiag);
     NitroPort_ComposeSetBandPublish(sIniBandPubB, sIniBandPubBDiag);

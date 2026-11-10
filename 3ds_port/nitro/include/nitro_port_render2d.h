@@ -169,6 +169,10 @@ unsigned NitroPort_Render2DMasterBright(int engine, int snapshot);
 /* Half-A L1/L3 switches, owned by the shell's port.ini: referenced-range
  * engine-B hashing (off by default) and its full-hash diagnostic. */
 void NitroPort_Render2DSetReferenceHash(int enabled, int diagnostic);
+/* Referenced-range change detection for engine A (on by default): the
+ * drawer's full-VRAM hash (864 KB a pass) reduced to the bytes the frame's
+ * layers can read. */
+void NitroPort_Render2DSetReferenceHashA(int enabled);
 /* Half-A L4: engine-B band redraw (off by default) and its diagnostic. */
 void NitroPort_Render2DSetPartialB(int enabled, int diagnostic);
 void NitroPort_Render2DSetPartialBChar(int enabled);
@@ -272,6 +276,8 @@ typedef struct NitroRender2DProfile {
     uint32_t blendLines;  /* lines finished by BlendLine */
     uint32_t emptyLines;  /* plain-path lines with nothing drawn (backdrop fill) */
     uint64_t setupTicks;  /* per-frame setup: keys, art lookups, palettes, splits */
+    uint64_t setupPalTicks;  /* (of it: FindExtPalettes + MakePalettes) */
+    uint64_t setupKeyTicks;  /* (of it: the per-BG BgKeyCached/FoldClearVariant) */
     uint32_t rowHits;     /* Slice B text-row cache hits */
     uint32_t rowMisses;   /* Slice B text-row cache misses (one row render each) */
     /* Slice S5 reject attribution (port_render2d.c owns counting, shell

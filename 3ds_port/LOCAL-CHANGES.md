@@ -4,6 +4,37 @@
 at the commit in `platinum.lock` (GPL-3.0). Everything here is Platinum's
 except the changes below.
 
+## 4. Referenced-range change detection (`nitro/src/port_render2d.c`)
+
+Added 2026-11-10 from the first Old-3DS hardware logs. Two engines, two
+answers:
+
+- **Engine B** (the static screen) did pay the full-VRAM hash: 304 KB per
+  drawer pass. `EngineReferencedSignature()` cuts that to 182 KB in the field
+  and the pass goes **2.52 -> 0.63 ms** in Azahar (4x). Enabled by default.
+- **Engine A** does not take the hash path in the field at all: its state
+  changes every pass, so `SplitIfChanged` re-renders instead of hashing. The
+  referenced path (`refHashA`, 864 KB -> 3.0 KB where it does fire) is kept
+  because it is exact and helps wherever A is static, but it is **not** the
+  field drawer's cost.
+
+`EngineReferencedSignature()` hashes only the bytes the frame can read: each
+enabled BG's map and the characters up to the highest tile that map names,
+the extended palette banks the display has mapped, and the tiles of every
+sprite OAM shows -- addressed through the rasterizer's own `ScreenBase`,
+`CharBase`, `ReadObj` and `ObjCharAddr`, so the set follows the drawing code
+rather than a copy of it. Anything it does not model (bitmap modes 3-5's
+BG2/BG3, the large BG, bitmap OBJ, a VRAM/main-memory display) keeps the old
+full hash, so an unfamiliar mode costs time, never correctness.
+
+`refHashDiag` compares each engine's referenced signature with the full hash
+on every pass and forces a redraw on any disagreement: 0 disagreements over
+boot -> title -> Goldenrod field, A alone and both engines.
+
+The drawer's remaining cost is the per-frame `setup` block (12.1% of a core
+on hardware, 0 rasterised lines); the `[perf] 2d:` line now splits it into
+`pal` and `key` so the next run attributes it.
+
 ## 3. Compose-phase counters (`game/app/port_compose_pica.c`)
 
 The stage and end phases accumulated with `sDbgStageTicks -= now ... += now`,
