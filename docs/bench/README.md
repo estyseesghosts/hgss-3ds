@@ -122,7 +122,11 @@ Azahar run is functional coverage, never Old 3DS timing.
 - **Baseline (Azahar 2126.2, Old-3DS mode, 268 MHz profile)**, 2026-11-09:
   - Goldenrod field, frames 9000-18000: **21 composes/s**, 60 publishes/s,
     drawer **4.61 ms/frame**, 2 GPU BG takes/frame, geometry **30.8 ms/scene**
-    at 92% busy. Geometry worker is the binding stage; the drawer is cheap.
+    at 92% busy.
+  - **Superseded on hardware (2026-11-10):** from this emulator sample the
+    geometry worker looked like the binding stage and the drawer cheap. The
+    Old 3DS disagrees by 20-40x on the drawer (92 ms, not 4.6), so do not rank
+    stages from an Azahar run. See the hardware bullet below.
   - Title screen, frames 4200-14400: drawer 48-54 ms/frame (16 fps),
     36-38 composes/s, **zero GPU BG takes and zero nomination attempts**.
   - Per-120-scene counts: 1,683,600 vertices in, 113,637 triangles out,
@@ -135,10 +139,24 @@ Azahar run is functional coverage, never Old 3DS timing.
   emulator's noise (~±3%), so the baseline numbers stand within that bound;
   the same A/B must run on hardware.
   See [claims/2026-11-09-profile-vs-off.md](claims/2026-11-09-profile-vs-off.md).
-- **Old 3DS hardware run: pending.** Two packets are staged:
-  - `build/bench/sd-hg/` — PROFILE build (counters and `[gx3d]` lines; use
-    for *work* proof).
-  - `build/bench/sd-hg-off/` — OFF build (`-profoff`; use for *timing*
-    claims; it is the binary the profile-vs-off A/B measures).
-  Copy either `3ds` folder to the card root, run it, and send back `log.txt`
-  plus the manifest. Both boot the same save into Goldenrod with no input.
+- **Old 3DS hardware baseline, 2026-11-10** (`hgss-private/log-0`; PROFILE
+  `b3024a0` and OFF `b3024a0-profoff`, same save/script/ini, frames 9000+,
+  field at rest):
+  - composes/s 8.6-9.8, publishes/s 4.0-5.5, **drawer 92-179 ms**, geometry
+    35-36 ms/scene at 99-100% busy, GPU 12.1 ms (clears 6.1), game clock
+    ≤55-57 Hz, lag 4 VBlanks, 51-59 late per 600 frames, 0-3 dropped.
+  - The **drawer** is the wall; the GPU is ~12% busy. The 27 scenes/s that
+    geometry completes are not evidence of oversupply (the counters
+    double-count skipped scenes) and cutting production cannot raise
+    presentation - a consumer-paced throttle was measured and reverted.
+  - The pair is **not a matched A/B**: OFF is 2x faster on the title screen
+    and 2x slower in the field while every cost the gate cannot touch matches
+    within 3%. The PROFILE-vs-OFF hardware claim stays open. The OFF log also
+    exposed a broken compose-phase counter, fixed in `port_compose_pica.c`.
+  - Full account:
+    [../progress/agent-notes/2026-11-10-o3ds-baseline-and-the-pacing-mistake.md](../progress/agent-notes/2026-11-10-o3ds-baseline-and-the-pacing-mistake.md).
+- **Packets** (unchanged layout): `build/bench/sd-hg/` (PROFILE: counters and
+  `[gx3d]` lines, *work* proof) and `build/bench/sd-hg-off/` (`-profoff`,
+  *timing* claims). Copy either `3ds` folder to the card root, run it, and
+  send back `log.txt` plus the manifest. Both boot the same save into
+  Goldenrod with no input.

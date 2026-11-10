@@ -1,5 +1,22 @@
 # Current state
 
+**2026-11-10: first Old 3DS hardware baseline of the remaster path; one
+claim corrected.** Two matched Goldenrod runs (`hgss-private/log-0`,
+`b3024a0` / `b3024a0-profoff`, same save/script/ini) measure 8.6-9.8
+composes/s, 4.0-5.5 publishes/s, drawer **92-179 ms**, geometry 35-36
+ms/scene at 99-100% busy, GPU 12.1 ms of which the clears are 6.1, and a game
+clock at or below 55-57 Hz. Presentation is bounded by the **drawer**, not by
+geometry: do not read the 27 scenes/s / 6 scene-draws gap as licence to cut
+scene production - the `sSwapsDone` counters behind it double-count skipped
+scenes (see the 2026-11-06 correction above), and a consumer-paced throttle
+built from it was measured and reverted. Full account:
+[2026-11-10-o3ds-baseline-and-the-pacing-mistake.md](agent-notes/2026-11-10-o3ds-baseline-and-the-pacing-mistake.md).
+Landed that session: the compose-phase counter fix (`port_compose_pica.c`;
+the stage/end phases no longer publish a wrapped `u64`). Open: the drawer's
+92 ms is unattributed (top 50 ms vs bottom 7, zero rasterised 2D lines, GPU
+12 ms, publish 1-6 ms) and is the next target; the PROFILE-vs-OFF hardware
+A/B is still open because those two runs are not matched.
+
 **In progress (2026-11-06): Azahar 30fps campaign (Goldenrod, N3DS off,
 80% clock).** Goal: full-speed ticks (60/s wall, already achieved and
 re-measured twice via in-probe `wall-{mark}.txt` stamps) plus 30 presented
