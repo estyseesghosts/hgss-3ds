@@ -72,11 +72,11 @@ OVERRIDES = {
 
 
 def symbols(nm: str, objects: list[str]) -> tuple[set[str], set[str]]:
-    # In batches: all ~1,100 objects on one command line would pass Windows'
-    # 32 KB command-line limit (building in MSYS2).
-    out = "".join(subprocess.run([nm, *objects[i:i + 200]], check=True, capture_output=True,
+    # In batches: all ~1,300 objects on one command line would pass Windows'
+    # 32 KB command-line limit (native builds as well as MSYS2).
+    out = "".join(subprocess.run([nm, *objects[i:i + 100]], check=True, capture_output=True,
                                  text=True).stdout
-                  for i in range(0, len(objects), 200))
+                  for i in range(0, len(objects), 100))
     defined: set[str] = set()
     undefined: set[str] = set()
     for line in out.splitlines():
@@ -195,10 +195,19 @@ def main() -> int:
     parser.add_argument("--sources", type=Path, nargs="*", default=[],
                         help="Wi-Fi SDK source folders: anything they define counts as Wi-Fi")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("objects", nargs="+")
+    parser.add_argument("--objects-from", type=Path, default=None,
+                        help="read object paths (one per line) from FILE instead of the "
+                             "command line: ~1,300 absolute paths exceed Windows' "
+                             "32 KB command-line limit")
+    parser.add_argument("objects", nargs="*")
     args = parser.parse_args()
 
-    defined, undefined = symbols(args.nm, args.objects)
+    objects = list(args.objects)
+    if args.objects_from is not None:
+        objects += [line.strip() for line in
+                    args.objects_from.read_text(encoding="utf-8").splitlines()
+                    if line.strip()]
+    defined, undefined = symbols(args.nm, objects)
     from_sources = wifi_source_names(args.sources)
     names = sorted(s for s in undefined - defined if WIFI.match(s) or s in from_sources)
     text = render(names, wide_returns(args.headers, set(names)))

@@ -6,8 +6,8 @@ you copy onto a 3DS SD card.
 
 Everything here is done with three small Python scripts in `scripts/`. They
 are ordinary Python 3 (no bash, no WSL on Linux/macOS), and they run the same
-way on Linux and macOS. Windows is not supported directly yet; the same steps
-work inside WSL2 — see [WINDOWS.md](WINDOWS.md).
+way on Linux and macOS. Windows builds natively too — same scripts, plus a
+one-time toolchain install — see [WINDOWS.md](WINDOWS.md).
 
 > **What you need**
 >
@@ -227,5 +227,5 @@ Every script has `--help` with the details.
 - [SD-Card-Layout](wiki/SD-Card-Layout.md) — every file and folder on the card
 - [Hardware-Testing](wiki/Hardware-Testing.md) — what to check on the console
 - [3DS-Pitfalls](wiki/3DS-Pitfalls.md) — known problems and their fixes
-- [WINDOWS.md](WINDOWS.md) — the hypothetical Windows setup
+- [WINDOWS.md](WINDOWS.md) — the Windows setup (native build, tested)
 - [Getting-Started](wiki/Getting-Started.md) — the developer/contributor setup

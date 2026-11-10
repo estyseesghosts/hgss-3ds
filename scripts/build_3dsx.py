@@ -35,6 +35,7 @@ import argparse
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -107,11 +108,18 @@ def compile_3dsx(build_dir: Path, jobs: int, game: str, info: dict[str, str]) ->
 
 
 def verify_program(program: Path) -> None:
-    """Use 3dsxdump when devkitPro has it; it is the console loader's view."""
+    """Use 3dsxdump when devkitPro has it; it is the console loader's view.
+
+    3dsxdump needs an output file on some platforms (Windows refuses a
+    bare input), so always give it a throwaway extraction path and parse
+    the section summary it prints either way.
+    """
     dump = u.which("3dsxdump")
     if dump is None:
         return
-    code, text = u.capture_status([dump, program])
+    with tempfile.TemporaryDirectory(prefix="pokeheartgold-3dsx-") as tmp:
+        out = Path(tmp) / (program.stem + ".elf")
+        code, text = u.capture_status([dump, program, out])
     if code != 0:
         u.fail(f"3dsxdump refused the .3dsx (exit {code}):\n{text}")
     last = " / ".join(

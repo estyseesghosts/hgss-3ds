@@ -30,6 +30,7 @@ override the Makefiles' own assignments, so nothing vendored changes.
 """
 import argparse
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -105,14 +106,93 @@ def nns_sources(root):
     return sorted(p.name for p in base.glob("*.c"))
 
 
+def _abspath(link, target):
+    """The absolute path `target` refers to from `link`'s directory."""
+    link, target = Path(link), Path(target)
+    return target if target.is_absolute() else link.parent / target
+
+
+def posix(path) -> str:
+    """Forward-slash spelling of a path (`C:/...`), for native Windows tools.
+
+    Native devkitARM/3dsxtool binaries accept forward slashes, while no shell
+    sits between this process and them, so backslashes would also work; the
+    forward-slash form is used for consistency. It must NOT cross into msys
+    sh/python (see msys()): their runtime treats `C:/...` as relative.
+    """
+    return Path(path).as_posix()
+
+
+def msys(path) -> str:
+    """msys-absolute spelling of a path (`/c/...`), for values passed to make.
+
+    Every make variable and `-C` directory crosses msys sh, whose runtime
+    eats backslashes as escapes and fails `C:/...` drive paths as relative;
+    only `/c/...` reaches both msys programs (python3, sh scripts) and native
+    ones (msys converts back to `C:\\...` for non-msys executables).
+    """
+    text = Path(path).as_posix()
+    match = re.match(r"^([A-Za-z]):/(.*)$", text)
+    return f"/{match.group(1).lower()}/{match.group(2)}" if match else text
+
+
+def link_points_to(link, target) -> bool:
+    """True when `link` already reaches `target`.
+
+    Follows symlinks and Windows directory junctions alike, so a tree built
+    with the junction fallback below still counts as up to date.
+    """
+    try:
+        return Path(link).resolve() == _abspath(link, target).resolve()
+    except OSError:
+        return False
+
+
+def create_link(link, target):
+    """Create `link` pointing at `target`, without needing admin rights.
+
+    Plain symlinks first; on Windows without the symlink privilege this falls
+    back to a directory junction (for directories, removable with unlink) or
+    a hard link / copy (for files).
+    """
+    link, target = Path(link), Path(target)
+    try:
+        link.symlink_to(target)
+        return
+    except OSError:
+        pass
+    real = _abspath(link, target)
+    if real.is_dir():
+        proc = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(real)],
+            capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise OSError(f"mklink /J {link} {real}: {proc.stdout}{proc.stderr}")
+    else:
+        try:
+            os.link(real, link)
+        except OSError:
+            shutil.copy2(real, link)
+
+
 def _link(link, target):
     link = Path(link)
     target = Path(target)
     link.parent.mkdir(parents=True, exist_ok=True)
-    if link.is_symlink() and Path(os.readlink(link)) != target:
+    if link_points_to(link, target):
+        return
+    if link.is_symlink():
         link.unlink()
-    if not link.exists() and not link.is_symlink():
-        link.symlink_to(target)
+    elif link.exists():
+        try:
+            # A stale Windows junction (is_symlink() is False for junctions).
+            os.readlink(link)
+        except OSError:
+            # A real file or directory, never produced by _link: keep it.
+            return
+        link.unlink()
+    if not link.exists():
+        create_link(link, target)
 
 
 def make_shim(root):
@@ -132,7 +212,7 @@ def make_shim(root):
     (gen / "fx_const.csv").write_text("# stand-in: see tools/hgss_nitro.py\n")
     (gen / "gen_fx_const.py").write_text(
         "import shutil, sys\n"
-        f"shutil.copyfile({str(root / 'lib/include/nitro/fx/fx_const.h')!r}, sys.argv[2])\n")
+        f"shutil.copyfile({msys(root / 'lib/include/nitro/fx/fx_const.h')!r}, sys.argv[2])\n")
 
     # NitroSystem shim for the nitrosystem build and the nitro tests that compile NNS files
     # directly (test_gx3d: g3d/src/gecom.c, test_vram_transfer: gfd/.../gfd_VramTransferManager.c).
@@ -154,8 +234,11 @@ def make_shim(root):
     return sdk, nns
 
 
-def sdk_includes(root, sdk, nitro, gen):
-    return [f"-I{nitro}/include", f"-I{gen}", f"-I{REPO}/hgss/compat/include",
+def sdk_includes(root, sdk, nitro, gen, msys_paths=False):
+    conv = msys if msys_paths else posix
+    nitro, gen, sdk, root = conv(nitro), conv(gen), conv(sdk), conv(root)
+    repo = conv(REPO)
+    return [f"-I{nitro}/include", f"-I{gen}", f"-I{repo}/hgss/compat/include",
             f"-I{sdk}/include",
             # the decomp's own order puts the game's include/ before the SDK dirs: several SDK files
             # `#include "global.h"` and must get the game's, not include-pokediamond's
@@ -172,7 +255,23 @@ def sdk_includes(root, sdk, nitro, gen):
             # declaration truncates a double return through int and leaves `isfinite`
             # undefined at link. hgss/compat/include/hgss_port_math.h declares the surface
             # with the standard prototypes (the system header is shadowed by the SDK's).
-            "-include", f"{REPO}/hgss/compat/include/hgss_port_math.h"]
+            "-include", f"{repo}/hgss/compat/include/hgss_port_math.h"] + profile_defines()
+
+
+PROFILE_OFF_DEFINE = "-DHGSS_PROFILE_OFF"
+
+
+def profile_defines():
+    """Build switches that must reach the vendored libraries as well as the app.
+
+    HGSS_PROFILE=off compiles the OFF build for timing claims (see
+    PICA200-INSTRUMENTATION.md §B): the 2D tick reads and the geometry
+    diagnostics disappear. The vendored Makefiles take their defines from
+    common.mk, so the switch travels with the include flags (which the
+    Makefiles append after PORT_CFLAGS); tools/hgss_game.py adds the same
+    define to the app objects. Both builds otherwise share every flag.
+    """
+    return [PROFILE_OFF_DEFINE] if os.environ.get("HGSS_PROFILE") == "off" else []
 
 
 def _make_out(subproject, out):
@@ -185,22 +284,22 @@ def _make_out(subproject, out):
     """
     if out is None:
         return None
-    return os.path.relpath(out, REPO / "3ds_port" / subproject)
+    return Path(os.path.relpath(out, REPO / "3ds_port" / subproject)).as_posix()
 
 
 def nitro_overrides(root, target, out=None, subdir="nitro"):
     sdk, nns = make_shim(root)
     keep, _ = sdk_sources(root)
     nitro = REPO / "3ds_port" / "nitro"
-    gen = f"{out}/gen" if out else f"{nitro}/build/{target}/gen"
-    extra = [f"OUT={_make_out(subdir, out)}", f"GEN={out}/gen"] if out else []
-    return extra + [f"SDK={sdk}",
+    gen = msys(Path(out) / "gen") if out else msys(nitro / "build" / target / "gen")
+    extra = [f"OUT={_make_out(subdir, out)}", f"GEN={msys(Path(out) / 'gen')}"] if out else []
+    return extra + [f"SDK={msys(sdk)}",
             "SDK_SRCS=" + " ".join(["hgss/" + k for k in keep]
                                    + ["hgss_compat/" + c for c in COMPAT_SRCS]),
             "ARM7_SOUND_SRCS=" + " ".join(["hgss_sub/" + f for f in ARM7_SOUND_FILES]
                                           + ["hgss_compat/" + f for f in ARM7_COMPAT_FILES]),
-            "SDK_INCLUDES=" + " ".join(sdk_includes(root, sdk, nitro, gen)),
-            f"NNS={nns}", f"NNS_INCLUDES=-I{nns}/include"]
+            "SDK_INCLUDES=" + " ".join(sdk_includes(root, sdk, nitro, gen, msys_paths=True)),
+            f"NNS={msys(nns)}", f"NNS_INCLUDES=-I{msys(nns)}/include"]
 
 
 def write_nns_all_headers(out_gen, root, nns):
@@ -256,7 +355,7 @@ def _write_nm_wrapper(out, target):
     wrapper = base / "nm-for-weaken.sh"
     devkitarm = os.environ.get("DEVKITARM")
     if target == "3ds" and devkitarm:
-        real = f"{devkitarm}/bin/arm-none-eabi-nm"
+        real = f"{msys(devkitarm)}/bin/arm-none-eabi-nm"
     else:
         real = os.environ.get("NM", "nm")
     wrapper.write_text(
@@ -280,8 +379,9 @@ def _write_nm_wrapper(out, target):
 def nitrosystem_overrides(root, target, out=None):
     sdk, nns = make_shim(root)
     nitrosystem = REPO / "3ds_port" / "nitrosystem"
-    gen = out + "/gen" if out else str(nitrosystem / "build" / target / "gen")
-    write_nns_all_headers(gen, root, nns)
+    gen_path = Path(out) / "gen" if out else nitrosystem / "build" / target / "gen"
+    gen = msys(gen_path)
+    write_nns_all_headers(gen_path, root, nns)
     ov = nitro_overrides(root, target, out, subdir="nitrosystem")
     nns_srcs = (["hgss_nns/" + n for n in nns_sources(root)]
                 + ["hgss_nns_compat/" + c for c in NNS_COMPAT_SRCS])
@@ -290,10 +390,10 @@ def nitrosystem_overrides(root, target, out=None):
         # common.mk hardcodes this under 3ds_port/nitrosystem/build/<target>;
         # keep it inside --out so two builds never share it (both the unity
         # object and this file are regenerated on every run).
-        Path(gen).mkdir(parents=True, exist_ok=True)
-        extra += [f"NNS_INLINE_SYMS={gen}/nns_inline.syms",
-                  f"LIBNITRO={out}/libnitro.a"]
-    extra.append(f"NM={_write_nm_wrapper(out, target)}")
+        Path(gen_path).mkdir(parents=True, exist_ok=True)
+        extra += [f"NNS_INLINE_SYMS={msys(gen_path / 'nns_inline.syms')}",
+                  f"LIBNITRO={msys(Path(out) / 'libnitro.a')}"]
+    extra.append(f"NM={msys(_write_nm_wrapper(out, target))}")
     return ov + ["NNS_SRCS=" + " ".join(nns_srcs)] + extra
 
 
@@ -338,7 +438,16 @@ def ensure_nns_res(root):
 
 
 def run_make(subdir, target, variables, goals):
-    cmd = ["make", "-C", str(subdir), f"TARGET={target}", *variables, *goals]
+    # The vendored recipes interpolate $(DEVKITARM)/bin/... and
+    # $(DEVKITPRO)/... into shell commands, so both must arrive in msys form:
+    # a Windows `C:\...` spelling inherited from the environment would eat its
+    # backslashes in sh. Command-line assignments beat the environment and the
+    # Makefiles' own `/opt/devkitpro` defaults alike.
+    root = Path(os.environ.get("DEVKITPRO", "/opt/devkitpro"))
+    arm = Path(os.environ.get("DEVKITARM", str(root / "devkitARM")))
+    cmd = ["make", "-C", msys(subdir), f"TARGET={target}",
+           f"DEVKITPRO={msys(root)}", f"DEVKITARM={msys(arm)}",
+           *variables, *goals]
     print("+ " + " ".join(cmd), flush=True)
     return subprocess.call(cmd)
 
@@ -363,7 +472,7 @@ def run_sdat_render(root, target, out):
                   nitrosystem_overrides(root, target, str(out)), ["lib"])
     if rc:
         return rc
-    variables = nitro_overrides(root, target, str(out)) + [f"SDAT_NNS_LIB={out / 'libnitrosystem.a'}"]
+    variables = nitro_overrides(root, target, str(out)) + [f"SDAT_NNS_LIB={msys(out / 'libnitrosystem.a')}"]
     return run_make(nitro_dir, target, variables, ["sdat_render", "sdat_render_release"])
 
 

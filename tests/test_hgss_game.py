@@ -508,8 +508,12 @@ class CommandTests(unittest.TestCase):
         self.assertIn("--nm", cmd)
         self.assertIn("--headers", cmd)
         self.assertIn("--sources", cmd)
-        # everything after -- is the object list
-        self.assertEqual(cmd[cmd.index("--") + 1:], [str(o) for o in objects])
+        # ~1,300 absolute paths would pass Windows' 32 KB command line: the
+        # object list travels in a response file the stub tool reads instead.
+        self.assertNotIn("--", cmd)
+        objects_from = Path(cmd[cmd.index("--objects-from") + 1])
+        self.assertEqual(objects_from.read_text(encoding="utf-8").split(),
+                         [str(o) for o in objects])
         self.assertIn(str(root / "lib/NitroDWC/include"), cmd)
         self.assertNotIn(str(root / "lib/NitroWiFi/include"), cmd)  # absent
 

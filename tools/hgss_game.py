@@ -366,6 +366,20 @@ GX3D_SHADERS = ("gx3d_passthrough.v.pica", "gx3d_shadow_cast.v.pica",
                 "gx3d_shadow_recv.v.pica")
 
 
+def devkit_tool(*parts: str) -> Path:
+    """A devkitPro tool path, with .exe resolved on native Windows.
+
+    The bare names (`picasso`, `3dsxtool`) never exist as files there, so the
+    `is_file()` gates would misreport every tool as missing.
+    """
+    tool = devkitpro().joinpath(*parts)
+    if os.name == "nt":
+        exe = tool.with_suffix(".exe")
+        if exe.is_file():
+            return exe
+    return tool
+
+
 def gx3d_shader_sources() -> list[Path]:
     """The .v.pica files linked into the 3DS program, in DVLE order."""
     app = REPO / "3ds_port" / "game" / "app"
@@ -386,9 +400,11 @@ def gx3d_shader_object(out: Path) -> Path:
     shbin = app / "gx3d_passthrough.shbin"
     asm = app / "gx3d_passthrough_shbin.s"
     obj = app / "gx3d_passthrough_shbin.o"
-    picasso = devkitpro() / "tools" / "bin" / "picasso"
-    bin2s = devkitpro() / "tools" / "bin" / "bin2s"
+    picasso = devkit_tool("tools", "bin", "picasso")
+    bin2s = devkit_tool("tools", "bin", "bin2s")
     assembler = devkitarm_bin() / "arm-none-eabi-as"
+    if os.name == "nt" and assembler.with_suffix(".exe").is_file():
+        assembler = assembler.with_suffix(".exe")
     for tool in (picasso, bin2s, assembler):
         if not tool.is_file():
             raise RuntimeError(f"missing {tool} (devkitPro tools)")
@@ -600,7 +616,7 @@ def alias_tool_environment(out: Path, tools: dict[str, str]) -> dict[str, str]:
         target = shutil.which(tool) or tool
         if link.is_symlink() or link.exists():
             link.unlink()
-        link.symlink_to(target)
+        nitro.create_link(link, target)
     env = dict(os.environ)
     env["PATH"] = str(directory) + os.pathsep + env.get("PATH", "")
     return env
@@ -800,7 +816,11 @@ def prepare_command(root: Path, out: Path) -> list[str]:
 
 def wifi_stub_command(nm: str, root: Path, objects: list[Path],
                       output: Path) -> list[str]:
-    """tools/make_game_wifi_stubs.py over the objects that were compiled."""
+    """tools/make_game_wifi_stubs.py over the objects that were compiled.
+
+    The object list (~1,300 absolute paths) travels in a response file:
+    on the command line it would pass Windows' 32 KB limit.
+    """
     headers = [root / "lib" / "NitroDWC" / "include",
                root / "lib" / "NitroWiFi" / "include",
                root / "lib" / "libVCT" / "include",
@@ -809,12 +829,14 @@ def wifi_stub_command(nm: str, root: Path, objects: list[Path],
     sources = [root / "lib" / "NitroDWC", root / "lib" / "NitroWiFi",
                root / "lib" / "libCPS", root / "lib" / "libVCT",
                root / "lib" / "dsprot"]
+    objects_from = output.parent / "wifi_stubs_objects.txt"
+    objects_from.write_text("\n".join(str(p) for p in objects) + "\n",
+                            encoding="utf-8")
     cmd = [sys.executable, str(TOOLS / "make_game_wifi_stubs.py"),
            "--nm", nm, "--headers"]
     cmd += [str(p) for p in headers if p.is_dir()]
     cmd += ["--sources"] + [str(p) for p in sources if p.is_dir()]
-    cmd += ["--output", str(output), "--"]
-    cmd += [str(p) for p in objects]
+    cmd += ["--output", str(output), "--objects-from", str(objects_from)]
     return cmd
 
 
@@ -874,7 +896,7 @@ def make_smdh(binary: Path, build_id: str | None = None) -> Path | None:
     so the Homebrew Launcher shows a unique entry per build. None keeps the
     old generic names (host-tool callers and tests).
     """
-    tool = devkitpro() / "tools" / "bin" / "smdhtool"
+    tool = devkit_tool("tools", "bin", "smdhtool")
     icon = REPO / "hgss" / "game" / "assets" / "placeholder-icon.png"
     smdh = binary.with_suffix(".smdh")
     if not tool.is_file() or not icon.is_file():
@@ -1087,7 +1109,7 @@ def package_three_dsx(binary: Path, target: str,
     """
     if target != "3ds":
         return None
-    tool = devkitpro() / "tools" / "bin" / "3dsxtool"
+    tool = devkit_tool("tools", "bin", "3dsxtool")
     dsx = binary.with_name(binary.name.replace("-3ds.elf", "").replace(".elf", "")
                            + ".3dsx")
     if not tool.is_file():
@@ -1122,9 +1144,12 @@ def link_command(cc: str, target: str, app_objects: list[Path],
                  rsp_path: Path) -> list[str]:
     """The link. Game objects go through a response file (over a thousand
     paths); the overlay table is last among the game's objects so its 4-byte
-    section tails land at the end (tools/game_overlays.py)."""
+    section tails land at the end (tools/game_overlays.py).
+
+    Response-file entries use forward slashes: GNU ld processes backslashes
+    as escapes inside @files, so native Windows spellings arrive mangled."""
     ordered = list(app_objects) + list(game_objects) + list(stub_objects)
-    rsp_path.write_text("\n".join(str(p) for p in ordered) + "\n",
+    rsp_path.write_text("\n".join(Path(p).as_posix() for p in ordered) + "\n",
                         encoding="utf-8")
     if target == "host32":
         flags = [*HOST_FLAGS, "-no-pie", "-pthread"]

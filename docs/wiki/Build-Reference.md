@@ -530,7 +530,7 @@ Do not move `CC` from gcc-10 or Wine from 10.0 as part of an unrelated change.
 ## See also
 
 - [Player's Guide](../USER-GUIDE.md): the three Python scripts for building and playing without the container.
-- [Windows Setup](../WINDOWS.md): the hypothetical WSL2 path.
+- [Windows Setup](../WINDOWS.md): the native Windows build (tested).
 - [Getting-Started](Getting-Started.md): first run, with expected output at every step.
 - [Daily-Workflow](Daily-Workflow.md): the edit → test → gate loop, and patch authoring.
 - [Tools-Reference](Tools-Reference.md): every script and test runner.

@@ -1,198 +1,203 @@
-# Windows: a hypothetical setup
+# Windows: build and run natively
 
-> **Status: hypothetical, not tested.** This page describes how a Windows
-> user *would* build and play pokeheartgold-3ds today. Nobody has run these
-> exact steps on Windows yet, and `scripts/setup_toolchain.py` deliberately
-> refuses to run there. The supported player instructions are
-> [USER-GUIDE.md](USER-GUIDE.md) (Linux and macOS). Treat this page as a plan
-> to try and report back on, not as a promise.
-
-## The short answer: use WSL2
-
-The build is a normal Linux toolchain (devkitARM, `make`, a Python harness).
-The least surprising way to get it on Windows is **WSL2** (Windows Subsystem
-for Linux), which runs a real Ubuntu beside Windows. The three player scripts
-then run unchanged, and only the final copy to the SD card crosses back to
-Windows.
-
-Native Windows (MSYS2 + devkitPro's Windows packages) is *possible* in
-principle — devkitPro ships Windows builds — but this project has not tested
-it, the scripts' tool discovery assumes `/opt/devkitpro`, and the build uses
-`make` and POSIX shell snippets. Do not start there.
+> **Status: tested, native.** This page is the Windows build/run guide. It was
+> worked through end to end on a Windows 11 machine in November 2026
+> (devkitPro at `C:\devkitPro`, Azahar 2126.2, Python 3.15, Git for Windows):
+> `tools/bootstrap.py` fetches the pinned decomp and applies all 87 patches,
+> `tools/hgss_game.py --target 3ds` links `pokeheartgold.3dsx`, and the app
+> boots its intro/title 3D in Azahar in Old-3DS mode. No WSL, no container,
+> no MWCC/Nitro SDK. The matching DS build (Phase 0) is still Linux/macOS
+> only. An untested WSL2 fallback is sketched at the bottom.
 
 ## What you need
 
-- Windows 10 (version 2004 or newer) or Windows 11, 64-bit
-- virtualization enabled in the BIOS/UEFI (WSL2 needs it)
-- at least 8 GB of RAM (the compiler runs several jobs at once)
-- a New 3DS/New 2DS with the Homebrew Launcher
-- your own US HeartGold or SoulSilver `.nds` dump
-- an SD card reader
+- Windows 10 (version 2004 or newer) or Windows 11, 64-bit.
+- devkitPro's Windows install at `C:\devkitPro`, with the **`3ds-dev`**
+  package group (devkitARM, libctru, citro3d/citro2d, `3dsxtool`,
+  `smdhtool`, `3dsxdump`), plus **`general-tools`** (`bin2s`) and
+  **`picasso`** (the shader assembler). The devkitPro graphical updater
+  installs all of these; `tex3ds` comes along with the group.
+- devkitPro's bundled MSYS2 (at `C:\devkitPro\msys2`), plus two extra
+  packages for the build's POSIX layer (host `gcc`, host `python3`):
+  ```powershell
+  C:\devkitPro\msys2\usr\bin\pacman.exe -S --noconfirm --needed gcc python
+  ```
+  (`make` 4.4.1 ships with MSYS2 already. The post-transaction `info`
+  hook may report an error; `gcc --version`/`python3 --version` still work.)
+- Git for Windows and a Windows Python 3.9 or newer
+  (tested: 3.15.2 at `C:\Program Files\Python315\python.exe`).
+- Your own US HeartGold or SoulSilver `.nds` dump. The scripts only read it.
+- Azahar (tested: 2126.2 at `C:\Program Files\Azahar`).
+- Optional: `dspfirm.cdc` from your own 3DS for sound. Without it the port
+  runs silent and says so in `log.txt`; that is expected, not an error.
 
-## 1. Install WSL2 and Ubuntu
+`scripts/setup_toolchain.py` does **not** run on Windows (it says so and
+stops). Install the toolchain once as above instead; everything else is the
+same three player scripts as Linux/macOS.
 
-Open **PowerShell as Administrator**:
+## 0. Shell setup (every PowerShell window)
+
+The scripts default to `/opt/devkitpro`, which does not exist on Windows,
+so export the install location first. Do this in **each** PowerShell window
+you build from:
 
 ```powershell
-wsl --install -d Ubuntu-24.04
+$env:DEVKITPRO = 'C:\devkitPro'
+$env:DEVKITARM = 'C:\devkitPro\devkitARM'
+$env:PATH = 'C:\Program Files\Git\cmd;C:\devkitPro\msys2\usr\bin;C:\devkitPro\tools\bin;C:\devkitPro\devkitARM\bin;' + $env:PATH
 ```
 
-Reboot when Windows asks. On first start, Ubuntu asks for a Linux username
-and password; they are separate from your Windows account. Check it worked:
+Order matters: Git's `cmd` before MSYS2 (so both gits agree on line
+endings), then the devkitPro bins (so `make`, host `gcc`/`python3`,
+`3dsxtool` and `arm-none-eabi-gcc` resolve).
+
+> **Never run bare `py`.** Installing MSYS2's `python` adds a `py` that
+> shadows `C:\Windows\py.exe`, and the MSYS Python mangles Windows script
+> paths. Always invoke the full interpreter:
+> `& 'C:\Program Files\Python315\python.exe' <script> ...`
+> (adjust the path to your install). Inside MSYS2 make recipes `python3`
+> correctly resolves to the MSYS build.
+
+To make the variables permanent instead, use `setx` once (new windows only):
 
 ```powershell
-wsl --status
-wsl --list --verbose
+setx DEVKITPRO 'C:\devkitPro'
+setx DEVKITARM 'C:\devkitPro\devkitARM'
 ```
 
-`VERSION` should be `2`. If WSL is already installed but old, run
-`wsl --update`. If `wsl --install` reports that virtualization is disabled,
-enable Intel VT-x/AMD-V in the firmware settings.
+## 1. Fetch and patch the decompilation
 
-From now on, run the commands below **inside Ubuntu** (open “Ubuntu” from the
-Start menu, or type `wsl` in PowerShell). The prompt looks like
-`you@PC:~$`.
-
-## 2. Work inside the Linux filesystem
-
-Do not build in `/mnt/c/...`. WSL is dramatically slower there, and Windows
-permissions confuse git and the compiler. Keep the project in your Linux home
-folder:
-
-```sh
-cd ~
-git clone https://github.com/estyseesghosts/hgss-3ds.git
-cd hgss-3ds
+```powershell
+cd C:\Users\<You>\workdir\hgss-3ds   # wherever your checkout is
+& 'C:\Program Files\Python315\python.exe' tools\bootstrap.py
 ```
 
-If you downloaded the project as a ZIP in Windows, copy it in once:
+Expect `upstream: already at 8cbb4a19ab78 with 87 patches` on repeat runs.
+Two Windows notes:
 
-```sh
-cp -r /mnt/c/Users/<YourName>/Downloads/hgss-3ds-main ~/hgss-3ds
+- The build uses directory junctions/hard links where POSIX uses symlinks
+  (no elevated privileges needed); `tools/` handles that itself.
+- After the **first** fetch, align the two gits on line endings, or the
+  next run reports `build/upstream has local changes` while everything
+  looks clean:
+  ```powershell
+  git -C build\upstream config core.autocrlf true
+  ```
+  Re-apply this after `tools/bootstrap.py --clean`, which deletes the
+  setting along with the checkout.
+
+## 2. Prepare the game data from your ROM
+
+```powershell
+& 'C:\Program Files\Python315\python.exe' scripts\prepare_game.py C:\path\to\heartgold.nds
 ```
 
-## 3. Install the toolchain
+This verifies the dump (clean US ROM only), extracts it to
+`build/game-data/`, and packs `build/heartgold3ds.pak` (about 120 MiB).
+SoulSilver works the same way and produces `build/soulsilver3ds.pak`.
 
-```sh
-cd ~/hgss-3ds
-python3 scripts/setup_toolchain.py
+## 3. Build the app and the SD-card folder
+
+One command does bootstrap (fast when done), the 3DS compile/link/package,
+and the SD-card staging:
+
+```powershell
+& 'C:\Program Files\Python315\python.exe' scripts\build_3dsx.py --pak build\heartgold3ds.pak
 ```
 
-Ubuntu takes the Debian path: the script adds devkitPro's apt repository,
-installs `devkitpro-pacman`, and then `3ds-dev`, `general-tools` and
-`picasso` (the compiler, libctru, citro3d, `3dsxtool`, `bin2s` and the
-shader assembler). It asks for your **Linux** password for `sudo`.
-
-Check it without changing anything:
-
-```sh
-python3 scripts/setup_toolchain.py --check
-```
-
-A fresh WSL Ubuntu normally has Python 3, `git` and `make` already, or the
-script installs them with `apt`.
-
-## 4. Bring your ROM into WSL
-
-The ROM stays yours and stays local. Copy it from the Windows drive, quoting
-paths that contain spaces:
-
-```sh
-cp "/mnt/c/Users/<YourName>/Downloads/pokemon-heartgold.nds" ~/game.nds
-```
-
-Use the file's real name and path. The `C:` drive appears as `/mnt/c`,
-`D:` as `/mnt/d`, and so on.
-
-## 5. Prepare, build and stage
-
-Exactly as in the [player's guide](USER-GUIDE.md):
-
-```sh
-python3 scripts/prepare_game.py ~/game.nds
-python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak
-```
-
-The staging folder is `~/hgss-3ds/dist/sd-card/`. The first build fetches the
-decompilation and takes roughly ten minutes on a typical laptop.
-
-## 6. Copy to the SD card
-
-Plug the card into Windows. It appears as a drive letter, for example `E:`.
-WSL sees that drive at `/mnt/e`. The simplest path is to stage directly onto
-the card:
-
-```sh
-python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak --out /mnt/e
-```
-
-This merges into `E:\3ds\` and leaves everything else on the card alone. The
-card then has:
+The first build takes about ten minutes (1,092 game files, the vendored
+`libnitro`/`libnitrosystem` through MSYS2 `make`, then the link); later
+builds are incremental. It stages into `dist\sd-card\`:
 
 ```
-E:\3ds\pokeheartgold.3dsx
-E:\3ds\pokeheartgold\heartgold3ds.pak
-E:\3ds\pokeheartgold\manifest.json
-E:\3ds\pokesoulsilver.3dsx
-E:\3ds\pokeheartgold-ss\soulsilver3ds.pak
-E:\3ds\pokeheartgold-ss\manifest.json
+dist\sd-card\
+└── 3ds/
+    ├── pokeheartgold.3dsx
+    └── pokeheartgold/
+        ├── heartgold3ds.pak
+        └── manifest.json
 ```
 
-Run the same command with `--pak build/soulsilver3ds.pak` to add SoulSilver.
+A successful run ends with `packaged ... pokeheartgold.3dsx` and
+`LASTEXITCODE 0`; the reference HeartGold build is 5,834,596 bytes. To
+redo only the compile exactly as the script runs it:
 
-If you prefer Explorer, the staging folder is reachable from Windows at
-`\\wsl$\Ubuntu\home\<your-linux-name>\hgss-3ds\dist\sd-card\`; drag its `3ds`
-folder onto the card and choose **Merge**.
+```powershell
+& 'C:\Program Files\Python315\python.exe' C:\...\hgss-3ds\tools\hgss_game.py --game heartgold --target 3ds --keep-going --out C:\...\hgss-3ds\build\game-3ds -j 8
+```
 
-Eject the card properly, put it in the 3DS, and start **pokeheartgold** or
-**pokesoulsilver** from the Homebrew Launcher. The first start writes
-`heartgold.sav` or `soulsilver.sav` into that game's folder.
+## 4. Run it in Azahar (Old-3DS mode)
 
-## Sound, saves and updates
+Azahar emulates its SD card at `%APPDATA%\Azahar\sdmc\` (that trailing
+`sdmc\`). Copy the staged `3ds` folder onto it, or point the script at it:
 
-- **Sound** needs your own console's DSP dump at `E:\3ds\dspfirm.cdc`. Without
-  it the port runs silent and says so in `log.txt`; that is expected.
-- **Saves** are raw 512 KiB files in `E:\3ds\pokeheartgold\heartgold.sav` or
-  `E:\3ds\pokeheartgold-ss\soulsilver.sav`. Back one up before replacing the
-  pack or the app.
-- **Updating**: `git pull`, then run step 5 again. The save stays where it is.
-  Copy the new `.3dsx` and (if the pack changed) the pack and manifest.
+```powershell
+Copy-Item dist\sd-card\3ds $env:APPDATA\Azahar\sdmc\ -Recurse -Force
+```
+
+The card must end up with:
+
+```
+%APPDATA%\Azahar\sdmc\3ds\pokeheartgold.3dsx
+%APPDATA%\Azahar\sdmc\3ds\pokeheartgold\heartgold3ds.pak
+%APPDATA%\Azahar\sdmc\3ds\pokeheartgold\manifest.json
+```
+
+Then pin Azahar to the Old 3DS and start the game:
+
+1. Close Azahar if it is running.
+2. In `%APPDATA%\Azahar\config\qt-config.ini`, under `[System]`, set
+   **both** lines (the `\default=false` marks the value as user-set; the
+   value alone is ignored and Azahar resets it to New 3DS):
+   ```ini
+   is_new_3ds\default=false
+   is_new_3ds=false
+   ```
+3. Optional but recommended: `attrib +R` the ini file so Azahar cannot
+   flip the console back on exit. (UI setting changes then don't persist;
+   `attrib -R` to unpin.)
+4. Start Azahar opening the app:
+   ```powershell
+   Start-Process 'C:\Program Files\Azahar\azahar.exe' -ArgumentList "$env:APPDATA\Azahar\sdmc\3ds\pokeheartgold.3dsx"
+   ```
+
+What to check:
+
+- `%APPDATA%\Azahar\log\azahar_log.txt` shows
+  `System_IsNew3ds: false` near the top.
+- The port writes `%APPDATA%\Azahar\sdmc\3ds\pokeheartgold\log.txt`.
+  In O3DS mode its perf lines read `drawer 0 (core 0, both screens)` and
+  `smooth 0` (New-3DS runs show a `core 2` drawer and nonzero smooth).
+- Without the pack/manifest the app shows its "cannot read the data pack"
+  error screen — that still proves the `.3dsx` runs. With them, the boot
+  reaches 3D scenes within a minute (frame counter and `gx3d` lines
+  advance; a `heartgold.sav` appears once the game first saves).
+- Without `sdmc\3ds\dspfirm.cdc` there is no audio; the log says so.
 
 ## Troubleshooting
 
-- **`wsl --install` fails or WSL will not start.** Enable virtualization in
-  the firmware, run `wsl --update`, and check `wsl --status`. On Windows 10,
-  the “Virtual Machine Platform” and “Windows Subsystem for Linux” optional
-  features must be on (`optionalfeatures.exe`).
-- **The build is extremely slow.** You are probably in `/mnt/c`. Move the
-  project to `~/` inside WSL as in step 2.
-- **`Permission denied` or CRLF errors after copying from Windows.** Copy the
-  project again inside WSL (`git clone` is best) rather than editing it
-  through `/mnt/c`. If git complains about line endings:
-  `git config --global core.autocrlf false`, then clone again.
-- **The clock is wrong and downloads fail with certificate errors.** WSL's
-  clock can drift after sleep; run `sudo hwclock -s` (or restart WSL with
-  `wsl --shutdown` from PowerShell).
-- **Out of memory during the build.** Use fewer jobs:
-  `python3 scripts/build_3dsx.py --pak build/heartgold3ds.pak -j 2`. You can
-  also cap WSL's memory in `C:\Users\<You>\.wslconfig`:
-  ```ini
-  [wsl2]
-  memory=8GB
-  ```
-  then `wsl --shutdown`.
-- **A tool is missing after the install.** Open a new Ubuntu terminal and run
-  `python3 scripts/setup_toolchain.py --check`. The install writes to
-  `/opt/devkitpro`; the scripts add it to `PATH` themselves.
-- **Antivirus scans every compiled file.** Exclude the WSL virtual disk or
-  your project folder from real-time scanning if builds are unusually slow.
+- **`build/upstream has local changes` right after a clean fetch.** The
+  MSYS2 and Windows gits disagree on CRLF. Apply the `core.autocrlf true`
+  step from section 1.
+- **`FileNotFoundError` naming `python3`, `picasso`, `smdhtool`, ...**
+  The PATH order in section 0 is wrong, or a bare `py` picked up MSYS
+  Python. Re-export PATH exactly as shown and use the full interpreter
+  path.
+- **`WinError 206 (filename too long)`.** Fixed in `tools/` (response
+  files); update your checkout if you see it.
+- **Azahar boots as New 3DS (`System_IsNew3ds: true`).** Both ini lines
+  from step 4.2 are required, and Azahar must have been closed when you
+  edited them.
+- **The emulator shows nothing / exits.** Check the port `log.txt` first:
+  a missing pack or manifest stops the boot with an on-screen message and
+  names the file in the log.
+- **Slow emulation.** Expected on first boot (shader/pipeline warmup) and
+  generally slower than a New 3DS; measure frame rate on hardware, not here.
 
-## Why not native Windows?
+## WSL2 fallback (untested)
 
-devkitPro does publish Windows packages, so a native build is not impossible.
-But this repository's toolchain setup, its `make` invocations and its shell
-helpers were written and tested on Linux and macOS; the player scripts are
-Python and would need their devkitPro discovery (`/opt/devkitpro`) taught
-about `C:\devkitPro`. Until someone does that work and tests a full build,
-WSL2 is the honest recommendation. If you try native Windows and it works (or
-fails in a new way), a short report with the exact commands is welcome.
+If the native path fails somewhere new, the original WSL2 plan still
+applies: install WSL2 + Ubuntu, keep the checkout in `~/` (never in
+`/mnt/c`), run the three player scripts unchanged inside Ubuntu, and copy
+`dist/sd-card/3ds` onto the SD card or Azahar's `sdmc`. Details were never
+verified; report back if you go this way.

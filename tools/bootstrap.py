@@ -34,6 +34,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+TOOLS = ROOT / "tools"
+sys.path.insert(0, str(TOOLS))
+from hgss_nitro import create_link, link_points_to  # noqa: E402 (shared link fallback, native Windows has no symlink privilege)
 
 # (patch directory under patches/, directory inside the checkout it applies to)
 PATCH_STACKS = (
@@ -126,7 +129,10 @@ def generate_headers(upstream: Path) -> None:
     if not tool_dir.is_dir() or header.exists():
         return
     print("  generating lib/include/nitro/fx/fx_const.h")
-    for cmd in (["make", "-s"], ["./gen_fx_consts", str(header)]):
+    # Native Windows builds produce gen_fx_consts.exe; the extensionless exec
+    # works only through a POSIX shell, which subprocess does not use here.
+    prog = str(tool_dir / "gen_fx_consts.exe") if os.name == "nt" else "./gen_fx_consts"
+    for cmd in (["make", "-s"], [prog, str(header)]):
         r = subprocess.run(cmd, cwd=tool_dir, text=True, capture_output=True)
         if r.returncode != 0:
             sys.exit(f"{' '.join(cmd)} failed in tools/gen_fx_consts:\n{r.stdout}{r.stderr}")
@@ -137,11 +143,11 @@ def link_sdks(root: Path) -> None:
     for name in SDK_LINKS:
         link = build / name
         target = Path("upstream") / "lib" / name
+        if link_points_to(link, target):
+            continue
         if link.is_symlink() or link.exists():
-            if link.is_symlink() and os.readlink(link) == str(target):
-                continue
             sys.exit(f"{link} exists and is not the expected symlink; run with --clean")
-        link.symlink_to(target)
+        create_link(link, target)
 
 
 def bootstrap(root: Path, clean: bool = False) -> None:
@@ -155,6 +161,14 @@ def bootstrap(root: Path, clean: bool = False) -> None:
             if d.is_symlink():
                 d.unlink()
             elif d.exists():
+                try:
+                    # A Windows junction (is_symlink() is False for junctions):
+                    # remove the link itself, never the target it points at.
+                    os.readlink(d)
+                    d.unlink()
+                    continue
+                except OSError:
+                    pass
                 print(f"Removing {d.relative_to(root)}")
                 shutil.rmtree(d)
 
