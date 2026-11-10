@@ -255,6 +255,11 @@ void NitroPort_Gx3dFlush(void);
 /* The thread's busy time (in ticks), scenes finished, and scenes left out
  * because it was behind (the game never waits for it). */
 void NitroPort_Gx3dThreadStats(uint64_t *busy, uint32_t *scenes, uint32_t *skipped);
+#ifndef HGSS_PROFILE_OFF
+/* P1: scenes the worker transformed, and worker ticks split by the finished
+ * scene's fate. Deltas belong to the [perf] geometry line. */
+void NitroPort_Gx3dSceneSplit(uint32_t *built, uint64_t *builtTicks, uint64_t *skippedTicks);
+#endif
 /* Scene-flow census (no behavior change): scenes the game queued vs the
  * worker finished vs finished-but-never-consumed (mailbox newest-wins kept
  * a newer one). Per-interval deltas in the shell's geometry line. */

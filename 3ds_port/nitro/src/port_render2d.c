@@ -2643,6 +2643,9 @@ static inline __attribute__((always_inline)) u64 BgKeyT(const Engine *e, int bg,
     u32 banks = 0, entries, i;
     int bpp8, wide16;   /* 8-bit tiles; 16-bit map entries */
     u64 h = KEY_START;
+#ifndef HGSS_PROFILE_OFF
+    u32 tileBytes = 0;  /* P1: tile bytes actually walked below */
+#endif
 #define ADD(h, v) (quick ? QuickAdd(h, v) : KeyAdd(h, v))
 
     if (kind == BG_TEXT) {
@@ -2676,6 +2679,9 @@ static inline __attribute__((always_inline)) u64 BgKeyT(const Engine *e, int bg,
         if (!(used[i >> 5] & (1u << (i & 31)))) {
             continue;
         }
+#ifndef HGSS_PROFILE_OFF
+        tileBytes += size;
+#endif
         for (k = 0; k < size; k += 4) {
             h = ADD(h, Rd32(vram, (charBase + i * size + k) & mask));
         }
@@ -2711,6 +2717,11 @@ static inline __attribute__((always_inline)) u64 BgKeyT(const Engine *e, int bg,
         }
     }
 #undef ADD
+#ifndef HGSS_PROFILE_OFF
+    /* P1: bytes actually walked (map entries + used tiles; palettes excluded). */
+    sProfile[e->isA ? 0 : 1].keyMapBytes += (u64)entries * (wide16 ? 2u : 1u);
+    sProfile[e->isA ? 0 : 1].keyTileBytes += tileBytes;
+#endif
     return h ? h : 1;
 }
 
@@ -2731,16 +2742,33 @@ static int TextBgTransparent(const Engine *e, u16 bgcnt, u32 dispcnt)
     u32 screen = ScreenBase(e, bgcnt, dispcnt), chars = CharBase(e, bgcnt, dispcnt);
     u32 entries = (u32)(sTextSizes[bgcnt >> 14][0] / 8) * (u32)(sTextSizes[bgcnt >> 14][1] / 8);
     u32 bytes = (bgcnt & 0x80) ? 64 : 32;
+#ifndef HGSS_PROFILE_OFF
+    u32 tileBytes = 0;  /* P1: tile bytes actually walked below */
+#endif
 
     for (u32 i = 0; i < entries; i++) {
         u32 tile = Rd16(e->bgVram, (screen + i * 2) & e->bgMask) & 0x3FFu;
         u32 bit = 1u << (tile & 31);
         if (seen[tile >> 5] & bit) continue;
         seen[tile >> 5] |= bit;
+#ifndef HGSS_PROFILE_OFF
+        tileBytes += bytes;
+#endif
         for (u32 k = 0; k < bytes; k += 4) {
-            if (Rd32(e->bgVram, (chars + tile * bytes + k) & e->bgMask)) return 0;
+            if (Rd32(e->bgVram, (chars + tile * bytes + k) & e->bgMask)) {
+#ifndef HGSS_PROFILE_OFF
+                /* P1: count the walk even on the early (nontransparent) exit. */
+                sProfile[e->isA ? 0 : 1].keyMapBytes += (u64)entries * 2u;
+                sProfile[e->isA ? 0 : 1].keyTileBytes += tileBytes;
+#endif
+                return 0;
+            }
         }
     }
+#ifndef HGSS_PROFILE_OFF
+    sProfile[e->isA ? 0 : 1].keyMapBytes += (u64)entries * 2u;
+    sProfile[e->isA ? 0 : 1].keyTileBytes += tileBytes;
+#endif
     return 1;
 }
 
@@ -4411,6 +4439,9 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     u32 emptyText = 0;
     u64 tSetup = R2D_NOW(), tPart;
     u64 setupPal = 0, setupKey = 0;
+#ifndef HGSS_PROFILE_OFF
+    u64 setupTransparent = 0, setupDecide = 0;  /* P1: finer setup split */
+#endif
 
     if (eva > 16) {
         eva = 16;
@@ -4452,12 +4483,17 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         if (e->top == 0) {
             /* (a tall field: no pictures split, no hand-drawn ones: those
              * are the DS's lines' at the wider screen's 320) */
+            tPart = R2D_NOW();
             DecideSplits(e, kind, bgcnt, dispcnt);
             LookUpArt(e, kind, bgcnt, dispcnt, frameKey);
+#ifndef HGSS_PROFILE_OFF
+            setupDecide += R2D_NOW() - tPart;
+#endif
         }
         if (e->reusePixels && split != NULL && split->gpuBgs && e->isA &&
             (dispcnt & 0x108) == 0x108 && !(dispcnt & 0xE000) && e->lines == NULL &&
             e->height == H && e->top == 0 && !e->circles[0].on && !e->circles[1].on) {
+            tPart = R2D_NOW();
             for (bg = 1; bg < 4; bg++) {
                 if (kind[bg] == BG_TEXT && e->art[bg] == NULL && !e->split[bg] &&
                     !((e->partBgs | e->picBgs) & (1u << bg)) &&
@@ -4465,10 +4501,23 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
                     emptyText |= 1u << bg;
                 }
             }
+#ifndef HGSS_PROFILE_OFF
+            setupTransparent += R2D_NOW() - tPart;
+#endif
         }
+        tPart = R2D_NOW();
         DecideBandFills(e, kind, bgcnt, dispcnt, emptyText);
+#ifndef HGSS_PROFILE_OFF
+        setupDecide += R2D_NOW() - tPart;
+#endif
         DecideTallEdges(e, kind, bgcnt, dispcnt);
         DecideTallWindows(e, kind);
+#ifndef HGSS_PROFILE_OFF
+        /* P1: alongside the pal/key split (TallEdges/Windows stay in the
+         * setup residual). */
+        prof->setupTransparentTicks += setupTransparent;
+        prof->setupDecideTicks += setupDecide;
+#endif
     }
     /* S5/S6 bundle take stash (function scope: takes are evaluated in the
      * split block, committed after SortObjs). Per taken BG: slot index =
@@ -4479,6 +4528,9 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
     u32 committedText = 0;
     int takeBlend[NITRO_GPU_BG_SLOTS], takeBehind[NITRO_GPU_BG_SLOTS], takeBands[NITRO_GPU_BG_SLOTS];
     int takeHofs[NITRO_GPU_BG_SLOTS], takeVofs[NITRO_GPU_BG_SLOTS];
+#ifndef HGSS_PROFILE_OFF
+    u64 tTake = 0;  /* P1: take/commit block start (assigned on the split path) */
+#endif
     if (split != NULL) {
         /* The 3D header before frameOk reads it: Render zeroes the split
          * ahead of `over` on every call, so frameOk must see this call's
@@ -4500,6 +4552,9 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         /* S5/S6 bundle: quads and slots start empty every frame; takes
          * below fill them. (A stale quad drawn over a menu would be a
          * wrong picture, not just a slow one.) */
+#ifndef HGSS_PROFILE_OFF
+        tTake = R2D_NOW();
+#endif
         split->nGpuQuads = 0;
         split->gpuQuadsBehind = 0;
         for (int s = 0; s < NITRO_GPU_BG_SLOTS; s++) {
@@ -5019,7 +5074,13 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
              * Refill on EVERY call: content changes and new buffers are safe;
              * there is no new unchanged-memory or writer-coverage assumption. */
              Fill(out, backdrop, width * H);
+#ifndef HGSS_PROFILE_OFF
+             { u64 tFlat = R2D_NOW(); memset(split->over, 0, (size_t)width * H * sizeof(u16));
+               prof->flatFillTicks += R2D_NOW() - tFlat;
+               prof->takeTicks += R2D_NOW() - tTake; }
+#else
               memset(split->over, 0, (size_t)width * H * sizeof(u16));
+#endif
               split->flatCpuPlanes = 1;
              split->scroll3dLines = 0;
              sSplitReuse[pe].flat = 1;
@@ -5027,9 +5088,16 @@ static inline __attribute__((always_inline)) void DrawEngineT(Engine *e, u16 *ou
         }
         if ((e->reusePixels & ~R2D_TRY_FLAT) == committedText) {
             split->scroll3dLines = 0;
+#ifndef HGSS_PROFILE_OFF
+            prof->takeTicks += R2D_NOW() - tTake;
+#endif
             return;
         }
     }
+#ifndef HGSS_PROFILE_OFF
+    /* P1: the take/commit block ends here on the full-render path. */
+    if (split != NULL) prof->takeTicks += R2D_NOW() - tTake;
+#endif
     if (!anyWindow) {
         memset(enableLine, 0x3F, (size_t)width);
     }
@@ -7843,6 +7911,9 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     }
     if (r->valid && r->under == under && r->over == split->over && r->alpha == split->overAlpha) {
         const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
+#ifndef HGSS_PROFILE_OFF
+        u64 tCheck = R2D_NOW();
+#endif
         u32 candidate = (EngineSmallSignature(e, split->snapshot, r->mask, 0, 0) * 31u) ^
                         SplitLayoutSignature(e, split);
 
@@ -7857,6 +7928,9 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
                     moved = 1;
                 }
             }
+#ifndef HGSS_PROFILE_OFF
+            sProfile[e].setupCheckTicks += R2D_NOW() - tCheck;
+#endif
 #ifdef HGSS_A0_DIAG
             sA0Redraw.vramBytes[e] += e ? 0x4C000u : A0FullVramBytes(e, io);
             A0SubTrack(e, split->snapshot, split, 0);
@@ -7876,8 +7950,16 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
             return 1;       /* current quads must be published, pixels reused */
         }
     }
+#ifndef HGSS_PROFILE_OFF
+    u64 tCheckSmall = R2D_NOW();
+#endif
     small = (EngineSmallSignature(e, split->snapshot, 0, 0, 0) * 31u) ^
             SplitLayoutSignature(e, split);
+#ifndef HGSS_PROFILE_OFF
+    /* P1: the small signature runs on every non-reuse pass; time it here so
+     * the early (small-changed) return below still attributes its check. */
+    sProfile[e].setupCheckTicks += R2D_NOW() - tCheckSmall;
+#endif
     /* The small parts changed (a scroll, a sprite, a colour: most frames of
      * anything moving): drawn, without reading the VRAM through to find
      * out about that as well. Only when they're the same is the VRAM
@@ -7904,8 +7986,15 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
         last[e].serial = sSplitPictureSerial[e];
         return 1;
     }
+#ifndef HGSS_PROFILE_OFF
+    u64 tCheckVram = R2D_NOW();
+#endif
     vram = EngineVramSignature(e, (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0),
                                split->snapshot ? sState[e].oam : NitroPort_Oam);
+#ifndef HGSS_PROFILE_OFF
+    /* P1: the referenced-range VRAM signature (the expensive check). */
+    sProfile[e].setupCheckTicks += R2D_NOW() - tCheckVram;
+#endif
     int forceChanged = 0;
     if (sRefHashDiagnostic && (e == 0 ? sRefHashA : sRefHashB)) {
         const u8 *dio = (split->snapshot ? sState[e].io : NitroPort_IoReg) + (e ? 0x1000 : 0);

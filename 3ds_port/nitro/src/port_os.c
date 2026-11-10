@@ -117,6 +117,11 @@ NitroLineRegs NitroPort_LineRegs;
 
 /* The last walk's three parts, in ARM11 ticks (NitroPort_HBlankSplit). */
 static u64 sHBlankKeepTicks, sHBlankDmaTicks, sHBlankIrqTicks;
+#ifndef HGSS_PROFILE_OFF
+/* P1: the parts outside the keep/dma/irq split: the per-walk refresh, the
+ * thread-switch step, and the line compare scan. */
+static u64 sHBlankRefreshTicks, sHBlankSwitchTicks, sHBlankCmpTicks;
+#endif
 
 /* A line's registers; not DISPSTAT and VCOUNT (0x04-0x07: they draw
  * nothing, and the V-count is each line's own: every frame with the
@@ -177,11 +182,18 @@ void NitroPort_HBlankLines(void)
      * through the SDK's dispatcher) and the per-line register copy; guessing
      * between them has already been wrong once. */
     sHBlankKeepTicks = sHBlankDmaTicks = sHBlankIrqTicks = 0;
+#ifndef HGSS_PROFILE_OFF
+    sHBlankRefreshTicks = sHBlankSwitchTicks = sHBlankCmpTicks = 0;
+#endif
     memset(sHBlankIrqBitTicks, 0, sizeof(sHBlankIrqBitTicks));
     memset(sHBlankIrqBitCalls, 0, sizeof(sHBlankIrqBitCalls));
     /* (GXSTAT and the GXFIFO level interrupt once, not once a scanline: see
      * raise_irq) */
+#ifndef HGSS_PROFILE_OFF
+    { u64 tR = PORT_NOW(); NitroPort_GxRefresh(); sHBlankRefreshTicks += PORT_NOW() - tR; }
+#else
     NitroPort_GxRefresh();
+#endif
     /* One scheduler switch for the whole walk, not 192: see
      * NitroPort_IrqThreadSwitch. */
     NitroPort_IrqSwitchWanted = 0;
@@ -202,16 +214,28 @@ void NitroPort_HBlankLines(void)
     reg_OS_IF &= ~OS_IE_H_BLANK;   /* (not left pending for later) */
     NitroPort_IrqSwitchDeferred = 0;
     if (NitroPort_IrqSwitchWanted) {
+#ifndef HGSS_PROFILE_OFF
+        u64 tS = PORT_NOW();
+#endif
         NitroPort_IrqSwitchWanted = 0;
         NitroPort_IrqThreadSwitch();
+#ifndef HGSS_PROFILE_OFF
+        sHBlankSwitchTicks += PORT_NOW() - tS;
+#endif
     }
     reg_GX_DISPSTAT &= (u16)~REG_GX_DISPSTAT_HBLK_MASK;
     reg_GX_VCOUNT = vcount;
     NitroPort_LineRegs.active = 0;
+#ifndef HGSS_PROFILE_OFF
+    { u64 tC = PORT_NOW();
+#endif
     for (y = 1; y < NITRO_PORT_SCREEN_H && !NitroPort_LineRegs.active; y++) {
         NitroPort_LineRegs.active = memcmp(NitroPort_LineRegs.regs[0][y], NitroPort_LineRegs.regs[0][0], NITRO_LINE_REGS) != 0 ||
                                     memcmp(NitroPort_LineRegs.regs[1][y], NitroPort_LineRegs.regs[1][0], NITRO_LINE_REGS) != 0;
     }
+#ifndef HGSS_PROFILE_OFF
+      sHBlankCmpTicks += PORT_NOW() - tC; }
+#endif
 }
 
 /* The last walk's three parts, in ARM11 ticks (NitroPort_HBlankLines). */
@@ -221,6 +245,16 @@ void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq)
     *dma = sHBlankDmaTicks;
     *irq = sHBlankIrqTicks;
 }
+#ifndef HGSS_PROFILE_OFF
+/* P1: the parts outside the keep/dma/irq split: the per-walk refresh, the
+ * thread-switch step, and the line compare scan. */
+void NitroPort_HBlankSplit2(u64 *refresh, u64 *sw, u64 *cmp)
+{
+    if (refresh != NULL) *refresh = sHBlankRefreshTicks;
+    if (sw != NULL) *sw = sHBlankSwitchTicks;
+    if (cmp != NULL) *cmp = sHBlankCmpTicks;
+}
+#endif
 
 /* The last walk's interrupt handlers, by IRQ bit (NitroPort_HBlankLines). */
 void NitroPort_HBlankIrqByBit(NitroPortIrqTime *out)

@@ -660,6 +660,14 @@ static u64 sDbgNeedA, sDbgNeedB;
 static u64 sDbgDrawsScene, sDbgSerialSkipped;
 static u64 sDbgPickTicks, sDbgPrepareTicks, sDbgStageTicks, sDbgEndTicks,
     sDbgSkipTicks;
+#ifndef HGSS_PROFILE_OFF
+/* P1: compose causes + end-phase split (no behavior change). A composed
+ * frame's cause is its trigger, scene first: a new scene serial on either
+ * composed screen counts SCENE even when the 2D set also changed. */
+enum { COMPOSE_CAUSE_SCENE, COMPOSE_CAUSE_SET, COMPOSE_CAUSE_FORCED, COMPOSE_CAUSE_OTHER };
+static u64 sDbgCause[4];
+static u64 sDbgEndXferTicks, sDbgEndFlightTicks, sDbgEndLockTicks, sDbgEndSubmitTicks;
+#endif
 
 void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
                                u64 *noBuf, u64 *draws, u64 *pickTicks,
@@ -683,6 +691,23 @@ void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
     if (drawsScene != NULL) *drawsScene = sDbgDrawsScene;
     if (serialSkipped != NULL) *serialSkipped = sDbgSerialSkipped;
 }
+#ifndef HGSS_PROFILE_OFF
+/* P1: compose causes + end-phase split (see sDbgCause). Cumulative; the
+ * shell diffs per interval. Causes sum to composes: every composed frame
+ * takes exactly one cause branch above. */
+void NitroPort_ComposeCauseStats(u64 *scene, u64 *set, u64 *forced, u64 *other,
+                                 u64 *endXfer, u64 *endFlight, u64 *endLock, u64 *endSubmit)
+{
+    if (scene != NULL) *scene = sDbgCause[COMPOSE_CAUSE_SCENE];
+    if (set != NULL) *set = sDbgCause[COMPOSE_CAUSE_SET];
+    if (forced != NULL) *forced = sDbgCause[COMPOSE_CAUSE_FORCED];
+    if (other != NULL) *other = sDbgCause[COMPOSE_CAUSE_OTHER];
+    if (endXfer != NULL) *endXfer = __atomic_load_n(&sDbgEndXferTicks, __ATOMIC_RELAXED);
+    if (endFlight != NULL) *endFlight = __atomic_load_n(&sDbgEndFlightTicks, __ATOMIC_RELAXED);
+    if (endLock != NULL) *endLock = __atomic_load_n(&sDbgEndLockTicks, __ATOMIC_RELAXED);
+    if (endSubmit != NULL) *endSubmit = __atomic_load_n(&sDbgEndSubmitTicks, __ATOMIC_RELAXED);
+}
+#endif
 
 int NitroPort_ComposeSceneWaiting(uint32_t sceneSerial)
 {
@@ -1149,9 +1174,15 @@ static int compose_init(const ComposeConfig *config, int small)
                                         : ", outlines on the GPU",
                   !config->stereo ? ""
                   : sConfig.edges && !config->edges3d ? " (none with the slider up)" : "",
-                  !sSmoothReady ? ""
+                  /* P1: say whether 2x2 is in use, not merely allocated.
+                   * The buffers are made whatever the setting (the options
+                   * page can arm it mid-run); use additionally needs the
+                   * upper screen showing 3D, and the slider up unless
+                   * smooth3d == 2 (see smoothable). Old 3DS defaults off. */
+                  !sSmoothReady ? ", no 2x2 buffer (the slider's 3D drawn as it is)"
+                  : config->smooth3d == 0 ? ", 2x2 buffer held but smooth3d off (the slider's 3D drawn as it is)"
                   : config->smooth3d == 1 ? ", with the slider up the upper screen drawn 2x2 and scaled down"
-                                          : ", the upper screen drawn 2x2 and scaled down",
+                                          : ", the upper screen drawn 2x2 and scaled down whenever it shows 3D",
                   config->flipV ? ", 2D flipped" : "");
     return 1;
 fail:
@@ -3680,6 +3711,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                            int forced, int flush, int mid)
 {
     int s, drawn = 0, stereoNow, need[2] = { 0, 0 }, timed = 0, edges = 0, lcdBuf[2] = { -1, -1 }, top3d = 0;
+#ifndef HGSS_PROFILE_OFF
+    int causeS[2] = { COMPOSE_CAUSE_OTHER, COMPOSE_CAUSE_OTHER };  /* P1: per-screen trigger */
+#endif
     int edgesWanted = 0, smoothable = 0, drawnAs = DRAWN_PLAIN, smooth3d;
     int underCleared[2] = { 0, 0 };
     int menu[2] = { 0, 0 };            /* (the lower screen as the menu) */
@@ -3696,6 +3730,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     u32 current2d[2];
     u64 start = svcGetSystemTick(), gpuStart, prepareTicks = 0, texTicksBefore, texTicksAfter, texels;
     u64 stageStart = 0, stageTicks = 0, endStart = 0, endTicks = 0;
+#ifndef HGSS_PROFILE_OFF
+    u64 endXfer = 0, endFlight = 0, endLock = 0, endSubmit = 0;  /* P1: end-phase split */
+#endif
 
     if (!sReady) {
         return 0;
@@ -3925,6 +3962,12 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
             continue;
         }
         sets[s] = set;
+#ifndef HGSS_PROFILE_OFF
+        /* P1: this screen's compose trigger (scene first; see sDbgCause). */
+        causeS[s] = (has3d && sceneSerial != scr->shownScene) ? COMPOSE_CAUSE_SCENE :
+                    forced ? COMPOSE_CAUSE_FORCED :
+                    (set->seq != scr->shownSeq) ? COMPOSE_CAUSE_SET : COMPOSE_CAUSE_OTHER;
+#endif
         if (s == 0 && !keptBlack) {
             sUpperShownBright = set->info.displayOff ? -16 : NitroPort_LowerMenuBrightness(set->info.masterBright);
         }
@@ -3948,6 +3991,19 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
     if (need[0]) sDbgNeedA++;
     if (need[1]) sDbgNeedB++;
     sDbgDraws++;
+#ifndef HGSS_PROFILE_OFF
+    if (need[0] || need[1]) {
+        int cause = COMPOSE_CAUSE_OTHER;
+
+        if ((need[0] && causeS[0] == COMPOSE_CAUSE_SCENE) || (need[1] && causeS[1] == COMPOSE_CAUSE_SCENE))
+            cause = COMPOSE_CAUSE_SCENE;
+        else if (forced)
+            cause = COMPOSE_CAUSE_FORCED;
+        else if ((need[0] && causeS[0] == COMPOSE_CAUSE_SET) || (need[1] && causeS[1] == COMPOSE_CAUSE_SET))
+            cause = COMPOSE_CAUSE_SET;
+        sDbgCause[cause]++;
+    }
+#endif
     __atomic_fetch_add(&sDbgPickTicks, svcGetSystemTick() - start, __ATOMIC_RELAXED);
     NitroPort_PicaTextureStats(&texBefore, &texels, &texTicksBefore);
     /* (an in-between scene has its scene's serial: told apart) */
@@ -4131,6 +4187,9 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
 
         /* The targets into the screens' LCD framebuffers, after the
          * drawing (queued behind it). */
+#ifndef HGSS_PROFILE_OFF
+        u64 tX = svcGetSystemTick();
+#endif
         for (s = 0; s < 2; s++) {
             Screen *scr = &sScreens[s];
             int eye;
@@ -4150,11 +4209,18 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
                                    s == 0 ? TOP_SCREEN_TRANSFER_FLAGS : SCREEN_TRANSFER_FLAGS);
             }
         }
+#ifndef HGSS_PROFILE_OFF
+        endXfer += svcGetSystemTick() - tX;
+#endif
         gpuStart = svcGetSystemTick();
         sCpuTicks += gpuStart - start;
         /* The frame before done (the GPU's had it while this one was
          * built), then this one to the GPU. */
+#ifndef HGSS_PROFILE_OFF
+        { u64 tF = svcGetSystemTick(); flight_finish(1); endFlight += svcGetSystemTick() - tF; }
+#else
         flight_finish(1);
+#endif
         sGpuSubmitted++;
         sFlightQueue = sGxRecording;
         sFlightMark = mark;
@@ -4171,7 +4237,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         }
         /* (its 2D: no longer held by it as a frame being built, busy till
          * the GPU's drawn it) */
+#ifndef HGSS_PROFILE_OFF
+        { u64 tL = svcGetSystemTick(); LightLock_Lock(&sSetLock); endLock += svcGetSystemTick() - tL; }
+#else
         LightLock_Lock(&sSetLock);
+#endif
         for (s = 0; s < 2; s++) {
             if (sets[s] != NULL) {
                 sets[s]->held--;
@@ -4199,7 +4269,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
         NitroPort_PicaFrameRunning(mark);
         if (sGxQueue[sFlightQueue].numEntries > 0) {
             sFlight = 1;
+#ifndef HGSS_PROFILE_OFF
+            { u64 tS = svcGetSystemTick(); gxCmdQueueRun(&sGxQueue[sFlightQueue]); endSubmit += svcGetSystemTick() - tS; }
+#else
             gxCmdQueueRun(&sGxQueue[sFlightQueue]);
+#endif
         } else {
             /* (nothing for the GPU: drawn as it is) */
             __atomic_add_fetch(&sGpuDone, 1u, __ATOMIC_ACQ_REL);
@@ -4242,7 +4316,11 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
      * V-blanks after the game made its scene (+1: the DS shows a scene the
      * frame after); anything else for the next one. */
     vblanks = __atomic_load_n(&sVBlanks, __ATOMIC_RELAXED);
+#ifndef HGSS_PROFILE_OFF
+    { u64 tL = svcGetSystemTick(); LightLock_Lock(&sPresentLock); endLock += svcGetSystemTick() - tL; }
+#else
     LightLock_Lock(&sPresentLock);
+#endif
     for (s = 0; s < 2; s++) {
         Screen *scr = &sScreens[s];
         int screen3d = (s == 0) == (aOnTop != 0);
@@ -4359,6 +4437,13 @@ int NitroPort_ComposeFrame(const NitroGx3dScene *scene, uint32_t sceneSerial, in
      * corrupting the window. */
     __atomic_fetch_add(&sDbgStageTicks, stageTicks, __ATOMIC_RELAXED);
     __atomic_fetch_add(&sDbgEndTicks, endTicks, __ATOMIC_RELAXED);
+#ifndef HGSS_PROFILE_OFF
+    /* P1: end-phase split, same local-then-atomic publication. */
+    __atomic_fetch_add(&sDbgEndXferTicks, endXfer, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&sDbgEndFlightTicks, endFlight, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&sDbgEndLockTicks, endLock, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&sDbgEndSubmitTicks, endSubmit, __ATOMIC_RELAXED);
+#endif
     return drawn;
 }
 

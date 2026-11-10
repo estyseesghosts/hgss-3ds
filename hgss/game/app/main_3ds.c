@@ -123,6 +123,11 @@ void NitroPort_ComposeDbgStats(u64 *noNeed, u64 *wait2D, u64 *midLate,
                                u64 *endTicks, u64 *skipTicks,
                                u64 *needA, u64 *needB,
                                u64 *drawsScene, u64 *serialSkipped);
+#ifndef HGSS_PROFILE_OFF
+/* P1: compose causes + end-phase split (port_compose_pica.c). */
+void NitroPort_ComposeCauseStats(u64 *scene, u64 *set, u64 *forced, u64 *other,
+                                 u64 *endXfer, u64 *endFlight, u64 *endLock, u64 *endSubmit);
+#endif
 /* Display-loop passes and sGpuWake signals (counted here, at the sites). */
 static u64 sDbgLoopIters, sDbgWakes;
 /* The display state's H-blank lines: captured once a V-blank, so a battle's
@@ -130,6 +135,10 @@ static u64 sDbgLoopIters, sDbgWakes;
 int NitroPort_HBlankLinesOnce(void);
 /* The same walk split into the register copy, the DMAs and the handlers. */
 void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq);
+#ifndef HGSS_PROFILE_OFF
+/* P1: the H-blank parts outside keep/dma/irq (port_os.c). */
+void NitroPort_HBlankSplit2(u64 *refresh, u64 *sw, u64 *cmp);
+#endif
 /* Slice S4: H-blank attribution counters (3ds_port/nitro, diagnostics only).
  * The walk's interrupt handlers, one entry per IRQ bit (layout mirrors
  * nitro_port.h's NitroPortIrqTime, which this file cannot include next to
@@ -245,8 +254,20 @@ static u64 sFrameHBlankTicks, sFrameHandoffTicks;
 static u64 sPrevHBlankTicks, sPrevHandoffTicks;
 static u64 sFrameHbKeep, sFrameHbDma, sFrameHbIrq;
 static u64 sPrevHbKeep, sPrevHbDma, sPrevHbIrq;
+#ifndef HGSS_PROFILE_OFF
+/* P1: the H-blank parts outside keep/dma/irq (see NitroPort_HBlankSplit2). */
+static u64 sFrameHbRefresh, sFrameHbSwitch, sFrameHbCmp;
+static u64 sPrevHbRefresh, sPrevHbSwitch, sPrevHbCmp;
+#endif
 static int sFrameCap = DEFAULT_FPS;
 static u64 sNextFrameTick;
+#ifndef HGSS_PROFILE_OFF
+/* P1: game-thread accounting (see WaitForFrameCap): work ticks from the
+ * OnFrame entry to the cap call, ticks slept in the cap, and frames that
+ * arrived already late. */
+static u64 sGameWorkTicks, sGameSleepTicks;
+static u32 sGameLateFrames;
+#endif
 
 /* The last log lines, for the exception log. */
 static char sRing[LOG_RING][LOG_LINE];
@@ -409,6 +430,8 @@ static void ExitToLauncher(void);
 
 #ifdef HGSS_A0_DIAG
 static void A0ThreadRunning(const char *role);
+#endif
+#if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
 /* Lowest-priority probes count completed batches, not CPU cycles. Their
  * startup calibration measures the available idle rate on each core; OS
  * scheduling and the requested core-1 share are part of that baseline. */
@@ -479,7 +502,8 @@ static void A0IdleStop(void)
         }
     }
 }
-#else
+#endif
+#ifndef HGSS_A0_DIAG
 #define A0ThreadRunning(role) ((void)0)
 #endif
 
@@ -743,8 +767,19 @@ typedef struct Drawer {
     volatile unsigned drawn;        /* screens actually redrawn */
     volatile u64 screenRenderTicks[2]; /* physical top/bottom, wall ticks */
     volatile unsigned screenRenderCalls[2];
+#ifndef HGSS_PROFILE_OFF
+    /* P1: offer-to-start latency. The game thread stamps signalTick at
+     * LightEvent_Signal; the drawer accumulates start - signalTick. */
+    volatile u64 signalTick;
+    volatile u64 signalLatency;
+    volatile unsigned signalCount;
+#endif
     u64 logTicks, logRenderTicks, logPublishTicks;
     unsigned logCount, logDrawn, logBskips;
+#ifndef HGSS_PROFILE_OFF
+    u64 logSignalLatency;
+    unsigned logSignalCount;
+#endif
     u64 logScreenRenderTicks[2];
     unsigned logScreenRenderCalls[2];
 } Drawer;
@@ -762,6 +797,11 @@ static volatile unsigned sA0MustDraw[2];
  * wakes the display thread: one compose per game frame on an Old 3DS (one
  * drawer, both screens), one for the pair on a New 3DS. */
 static volatile int sDrawFramePending;
+#ifndef HGSS_PROFILE_OFF
+/* P1: DrawFrame offers dropped because every drawer was busy. Written on the
+ * game thread, read at the log. */
+static volatile unsigned sDrawDropped;
+#endif
 static Thread sVBlankThread;
 static volatile bool sVBlankRunning;
 
@@ -1154,6 +1194,13 @@ static void DrawerMain(void *arg)
             continue;
         }
         start = svcGetSystemTick();
+#ifndef HGSS_PROFILE_OFF
+        /* P1: offer-to-start latency (see signalTick). */
+        __atomic_fetch_add(&d->signalLatency,
+                           start - __atomic_load_n(&d->signalTick, __ATOMIC_ACQUIRE),
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&d->signalCount, 1u, __ATOMIC_RELAXED);
+#endif
         if (d->screens & ENGINE_A) {
             u64 t = svcGetSystemTick();
             int screen = OnTop(0, d->aOnTop) ? 0 : 1;
@@ -1320,6 +1367,9 @@ static bool DrawFrame(void)
     }
     sFrameHBlankTicks = svcGetSystemTick() - phase;
     NitroPort_HBlankSplit(&sFrameHbKeep, &sFrameHbDma, &sFrameHbIrq);
+#ifndef HGSS_PROFILE_OFF
+    NitroPort_HBlankSplit2(&sFrameHbRefresh, &sFrameHbSwitch, &sFrameHbCmp);
+#endif
     phase = svcGetSystemTick();
     for (i = 0; i < sDrawerCount; i++) {
         if (!__atomic_load_n(&sDrawers[i].busy, __ATOMIC_ACQUIRE)) {
@@ -1328,6 +1378,10 @@ static bool DrawFrame(void)
         }
     }
     if (!any) {
+#ifndef HGSS_PROFILE_OFF
+        /* P1: the offer died here (every drawer busy). */
+        sDrawDropped++;
+#endif
         sFrameHandoffTicks = svcGetSystemTick() - phase;
         return false;
     }
@@ -1351,6 +1405,9 @@ static bool DrawFrame(void)
             }
             __atomic_store_n(&d->reading, true, __ATOMIC_RELEASE);
             __atomic_store_n(&d->busy, true, __ATOMIC_RELEASE);
+#ifndef HGSS_PROFILE_OFF
+            __atomic_store_n(&d->signalTick, svcGetSystemTick(), __ATOMIC_RELEASE);
+#endif
             LightEvent_Signal(&d->go);
         }
     }
@@ -1486,6 +1543,11 @@ typedef struct PerfGeometry {
     u64 producerWait;
     u32 wakeups;
     u32 flowQueued, flowDone, flowDropped;
+#ifndef HGSS_PROFILE_OFF
+    /* P1: built vs skipped split (NitroPort_Gx3dSceneSplit). */
+    u32 built;
+    u64 builtTicks, skippedTicks;
+#endif
 } PerfGeometry;
 
 static bool sPerfHave;
@@ -1502,8 +1564,21 @@ static u64 sPerfSyncCalls, sPerfSyncTicks, sPerfPumpTicks;
 static u32 sPerfPumpCalls, sPerfDmaXfers;
 /* The audio thread's mixer time (written there, read at the log). */
 static volatile u64 sSoundMixTicks;
+#ifndef HGSS_PROFILE_OFF
+/* P1: DrawFrame-drop baseline (see the [perf] offers line). */
+static unsigned sPerfDrawDropped;
+#endif
 static PerfDisplay sPerfDisplay;
 static PerfGeometry sPerfGeometry;
+#if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
+/* P1: idle-probe baselines (see the [perf] idle line). */
+static u64 sPerfIdleCount[2], sPerfIdleSpan;
+#endif
+#ifndef HGSS_PROFILE_OFF
+/* P1: game-thread accounting baselines (see the [perf] game line). */
+static u64 sPerfGameWork, sPerfGameSleep;
+static u32 sPerfGameLate;
+#endif
 
 static double PerfPerSecond(u32 count, double seconds)
 {
@@ -1539,6 +1614,10 @@ static void PerfLog(u64 now)
     u64 soundTicks;
     u32 scenes, skipped, wakeups, converted;
     u32 flowQueued, flowDone, flowDropped;
+#ifndef HGSS_PROFILE_OFF
+    u32 built = 0;
+    u64 builtTicks = 0, skippedTicks = 0;
+#endif
     ComposeStats st;
     float cmdPeak;
     unsigned cmdCut;
@@ -1553,6 +1632,9 @@ static void PerfLog(u64 now)
     NitroPort_ComposeStats(&st);
     NitroPort_PicaCmdStats(&cmdPeak, &cmdCut);
     NitroPort_Gx3dThreadStats(&busy, &scenes, &skipped);
+#ifndef HGSS_PROFILE_OFF
+    NitroPort_Gx3dSceneSplit(&built, &builtTicks, &skippedTicks);
+#endif
     producerWait = NitroPort_Gx3dProducerWaitMicros();
     NitroPort_Gx3dThreadWakeups(&wakeups, &longest);
     NitroPort_Gx3dSceneFlow(&flowQueued, &flowDone, &flowDropped);
@@ -1564,17 +1646,30 @@ static void PerfLog(u64 now)
         static u64 lastIters, lastWakes, lastNoNeed, lastWait2D, lastMidLate,
             lastNoBuf, lastDraws, lastPick, lastPrepare, lastStage, lastEnd,
             lastSkip, lastNeedA, lastNeedB, lastDrawsScene, lastSerialSkipped;
+#ifndef HGSS_PROFILE_OFF
+        /* P1: compose-cause + end-split baselines. */
+        static u64 lastCauseScene, lastCauseSet, lastCauseForced, lastCauseOther,
+            lastEndXfer, lastEndFlight, lastEndLock, lastEndSubmit;
+#endif
         static u32 lastVBlanks;
         u32 vblanks = NitroPort_ComposeVBlanks();
         u64 noNeed, wait2D, midLate, noBuf, draws;
         u64 pickTicks, prepareTicks, stageTicks, endTicks, skipTicks;
         u64 needA, needB, drawsScene, serialSkipped;
         u64 dDraws, dSkips;
+#ifndef HGSS_PROFILE_OFF
+        u64 causeScene, causeSet, causeForced, causeOther;
+        u64 endXfer, endFlight, endLock, endSubmit;
+#endif
 
         NitroPort_ComposeDbgStats(&noNeed, &wait2D, &midLate, &noBuf, &draws,
                                   &pickTicks, &prepareTicks, &stageTicks,
                                   &endTicks, &skipTicks, &needA, &needB,
                                   &drawsScene, &serialSkipped);
+#ifndef HGSS_PROFILE_OFF
+        NitroPort_ComposeCauseStats(&causeScene, &causeSet, &causeForced, &causeOther,
+                                    &endXfer, &endFlight, &endLock, &endSubmit);
+#endif
         dDraws = draws - lastDraws;
         dSkips = noNeed - lastNoNeed;
         NitroPort_Log("[perf] loop: %llu passes (%llu draws, %llu nonew, %llu wait2d, %llu midlate, %llu nobuf), %llu wakes; need upper %llu lower %llu; %u vblanks; scene-draws %llu serials-skipped %llu",
@@ -1595,12 +1690,33 @@ static void PerfLog(u64 now)
         lastNeedB = needB;
         lastDrawsScene = drawsScene;
         lastSerialSkipped = serialSkipped;
-        NitroPort_Log("[perf] compose-phase ms/draw: pick %.2f prepare %.2f stage %.2f end %.2f; skip %.2f ms/pass",
+        NitroPort_Log("[perf] compose-phase ms/draw: pick %.2f prepare %.2f stage %.2f end %.2f"
+#ifndef HGSS_PROFILE_OFF
+                      " (xfer %.2f flight %.2f lock %.2f submit %.2f)"
+#endif
+                      "; skip %.2f ms/pass"
+#ifndef HGSS_PROFILE_OFF
+                      "; cause scene %llu set %llu forced %llu other %llu"
+#endif
+                      ,
                       dDraws ? (double)(pickTicks - lastPick) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
                       dDraws ? (double)(prepareTicks - lastPrepare) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
                       dDraws ? (double)(stageTicks - lastStage) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
                       dDraws ? (double)(endTicks - lastEnd) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
-                      dSkips ? (double)(skipTicks - lastSkip) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dSkips : 0.0);
+#ifndef HGSS_PROFILE_OFF
+                      dDraws ? (double)(endXfer - lastEndXfer) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dDraws ? (double)(endFlight - lastEndFlight) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dDraws ? (double)(endLock - lastEndLock) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+                      dDraws ? (double)(endSubmit - lastEndSubmit) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dDraws : 0.0,
+#endif
+                      dSkips ? (double)(skipTicks - lastSkip) * 1000.0 / (double)SYSCLOCK_ARM11 / (double)dSkips : 0.0
+#ifndef HGSS_PROFILE_OFF
+                      , (unsigned long long)(causeScene - lastCauseScene),
+                      (unsigned long long)(causeSet - lastCauseSet),
+                      (unsigned long long)(causeForced - lastCauseForced),
+                      (unsigned long long)(causeOther - lastCauseOther)
+#endif
+                      );
         lastIters = sDbgLoopIters;
         lastWakes = sDbgWakes;
         lastNoNeed = noNeed;
@@ -1613,6 +1729,16 @@ static void PerfLog(u64 now)
         lastStage = stageTicks;
         lastEnd = endTicks;
         lastSkip = skipTicks;
+#ifndef HGSS_PROFILE_OFF
+        lastCauseScene = causeScene;
+        lastCauseSet = causeSet;
+        lastCauseForced = causeForced;
+        lastCauseOther = causeOther;
+        lastEndXfer = endXfer;
+        lastEndFlight = endFlight;
+        lastEndLock = endLock;
+        lastEndSubmit = endSubmit;
+#endif
     }
 
     if (!sPerfHave) {
@@ -1671,6 +1797,10 @@ static void PerfLog(u64 now)
             d->logCount = __atomic_load_n(&d->count, __ATOMIC_RELAXED);
             d->logDrawn = __atomic_load_n(&d->drawn, __ATOMIC_RELAXED);
             d->logBskips = __atomic_load_n(&d->bSkips, __ATOMIC_RELAXED);
+#ifndef HGSS_PROFILE_OFF
+            d->logSignalLatency = __atomic_load_n(&d->signalLatency, __ATOMIC_RELAXED);
+            d->logSignalCount = __atomic_load_n(&d->signalCount, __ATOMIC_RELAXED);
+#endif
             for (int screen = 0; screen < 2; screen++) {
                 d->logScreenRenderTicks[screen] = __atomic_load_n(&d->screenRenderTicks[screen], __ATOMIC_RELAXED);
                 d->logScreenRenderCalls[screen] = __atomic_load_n(&d->screenRenderCalls[screen], __ATOMIC_RELAXED);
@@ -1775,18 +1905,37 @@ static void PerfLog(u64 now)
         u32 fQueued = flowQueued - sPerfGeometry.flowQueued;
         u32 fDone = flowDone - sPerfGeometry.flowDone;
         u32 fDropped = flowDropped - sPerfGeometry.flowDropped;
+#ifndef HGSS_PROFILE_OFF
+        u32 didBuild = built - sPerfGeometry.built;
+        u64 buildTicks = builtTicks - sPerfGeometry.builtTicks;
+        u64 skipTicks = skippedTicks - sPerfGeometry.skippedTicks;
+#endif
 
         NitroPort_Log("[perf] geometry: %.1f scenes/s, busy %.0f%% (%.2f ms/scene), %u skipped, "
                       "producer wait %.1f ms, %u wakeups (longest %.1f ms); "
-                      "flow queued %u done %u dropped %u",
+                      "flow queued %u done %u dropped %u"
+#ifndef HGSS_PROFILE_OFF
+                      "; built %u (%.2f ms/built), %.2f ms/skipped"
+#endif
+                      ,
                       PerfPerSecond(made, seconds),
                       seconds > 0.0 ? 100.0 * (double)geoBusy / (double)SYSCLOCK_ARM11 / seconds : 0.0,
                       PerfMsPer(geoBusy, made), (unsigned)left, producerMs,
                       (unsigned)geoWakeups,
                       (double)longest * 1000.0 / (double)SYSCLOCK_ARM11,
-                      (unsigned)fQueued, (unsigned)fDone, (unsigned)fDropped);
+                      (unsigned)fQueued, (unsigned)fDone, (unsigned)fDropped
+#ifndef HGSS_PROFILE_OFF
+                      , (unsigned)didBuild, PerfMsPer(buildTicks, didBuild),
+                      PerfMsPer(skipTicks, left)
+#endif
+                      );
         sPerfGeometry.scenes = scenes;
         sPerfGeometry.skipped = skipped;
+#ifndef HGSS_PROFILE_OFF
+        sPerfGeometry.built = built;
+        sPerfGeometry.builtTicks = builtTicks;
+        sPerfGeometry.skippedTicks = skippedTicks;
+#endif
         sPerfGeometry.busy = busy;
         sPerfGeometry.wakeups = wakeups;
         sPerfGeometry.producerWait = producerWait;
@@ -1794,6 +1943,49 @@ static void PerfLog(u64 now)
         sPerfGeometry.flowDone = flowDone;
         sPerfGeometry.flowDropped = flowDropped;
     }
+
+#if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
+    /* P1: idle share per core from the lowest-priority spin probes, against
+     * their pre-worker calibration. Skipped when the probes never started. */
+    {
+        u64 span = now - sPerfIdleSpan;
+        int core;
+
+        if ((__atomic_load_n(&sA0IdleAlive[0], __ATOMIC_ACQUIRE) ||
+             __atomic_load_n(&sA0IdleAlive[1], __ATOMIC_ACQUIRE)) &&
+            sA0IdleCalTicks > 0 && span > 0) {
+            double pct[2];
+
+            for (core = 0; core < 2; core++) {
+                u64 delta = __atomic_load_n(&sA0IdleCounter[core].count, __ATOMIC_RELAXED) -
+                            sPerfIdleCount[core];
+                double expected = (double)sA0IdleCal[core] * (double)span /
+                                  (double)sA0IdleCalTicks;
+                pct[core] = expected > 0.0 ? 100.0 * (double)delta / expected : 0.0;
+                if (pct[core] < 0.0) pct[core] = 0.0;
+                if (pct[core] > 100.0) pct[core] = 100.0;
+            }
+            NitroPort_Log("[perf] idle: core0 %.1f%% core1 %.1f%%", pct[0], pct[1]);
+        }
+        for (core = 0; core < 2; core++)
+            sPerfIdleCount[core] = __atomic_load_n(&sA0IdleCounter[core].count, __ATOMIC_RELAXED);
+        sPerfIdleSpan = now;
+    }
+#endif
+#ifndef HGSS_PROFILE_OFF
+    /* P1: game-thread accounting (WaitForFrameCap accumulators). */
+    {
+        u64 work = sGameWorkTicks - sPerfGameWork;
+        u64 slept = sGameSleepTicks - sPerfGameSleep;
+        u32 late = sGameLateFrames - sPerfGameLate;
+
+        NitroPort_Log("[perf] game: work %.2f ms, slept %.2f ms, late %u",
+                      PerfMsPer(work, 1), PerfMsPer(slept, 1), (unsigned)late);
+        sPerfGameWork = sGameWorkTicks;
+        sPerfGameSleep = sGameSleepTicks;
+        sPerfGameLate = sGameLateFrames;
+    }
+#endif
 
     {
         u64 mix = soundTicks - sPerfSoundTicks;
@@ -1852,6 +2044,16 @@ static void PerfLog(u64 now)
         sPerfDmaXfers = dmaXfers;
     }
 
+#ifndef HGSS_PROFILE_OFF
+    /* P1: DrawFrame offers dropped because every drawer was busy. */
+    {
+        unsigned dropped = sDrawDropped - sPerfDrawDropped;
+
+        NitroPort_Log("[perf] offers: %u dropped (drawer busy)", dropped);
+        sPerfDrawDropped = sDrawDropped;
+    }
+#endif
+
     for (i = 0; i < sDrawerCount; i++) {
         Drawer *d = &sDrawers[i];
         u64 ticks = __atomic_load_n(&d->ticks, __ATOMIC_RELAXED) - d->logTicks;
@@ -1860,14 +2062,26 @@ static void PerfLog(u64 now)
         unsigned count = __atomic_load_n(&d->count, __ATOMIC_RELAXED) - d->logCount;
         unsigned drawn = __atomic_load_n(&d->drawn, __ATOMIC_RELAXED) - d->logDrawn;
         unsigned bskips = __atomic_load_n(&d->bSkips, __ATOMIC_RELAXED) - d->logBskips;
+#ifndef HGSS_PROFILE_OFF
+        u64 sigLat = __atomic_load_n(&d->signalLatency, __ATOMIC_RELAXED) - d->logSignalLatency;
+        unsigned sigCount = __atomic_load_n(&d->signalCount, __ATOMIC_RELAXED) - d->logSignalCount;
+#endif
 
         NitroPort_Log("[perf] drawer %d (core %d, %s): %.1f frames/s, %.2f ms/frame, "
-                      "%.2f ms render, %.2f ms publish, %u drawn, %u lower deferred",
+                      "%.2f ms render, %.2f ms publish, %u drawn, %u lower deferred"
+#ifndef HGSS_PROFILE_OFF
+                      ", %.2f ms signal"
+#endif
+                      ,
                       i, d->core,
                       d->screens == (ENGINE_A | ENGINE_B) ? "both screens"
                       : (d->screens == ENGINE_A) == sAOnTop ? "upper" : "lower",
                       PerfPerSecond(count, seconds), PerfMsPer(ticks, count),
-                      PerfMsPer(render, count), PerfMsPer(publish, count), drawn, bskips);
+                      PerfMsPer(render, count), PerfMsPer(publish, count), drawn, bskips
+#ifndef HGSS_PROFILE_OFF
+                      , PerfMsPer(sigLat, sigCount)
+#endif
+                      );
         for (int screen = 0; screen < 2; screen++) {
             u64 st = __atomic_load_n(&d->screenRenderTicks[screen], __ATOMIC_RELAXED);
             unsigned sc = __atomic_load_n(&d->screenRenderCalls[screen], __ATOMIC_RELAXED);
@@ -1883,6 +2097,10 @@ static void PerfLog(u64 now)
         d->logCount += count;
         d->logDrawn += drawn;
         d->logBskips += bskips;
+#ifndef HGSS_PROFILE_OFF
+        d->logSignalLatency += sigLat;
+        d->logSignalCount += sigCount;
+#endif
     }
     {
         /* Slice A: where the drawer render time goes (both engines combined;
@@ -1909,18 +2127,47 @@ static void PerfLog(u64 now)
         rowsHit = (a->rowHits - sPerf2d[0].rowHits) + (b->rowHits - sPerf2d[1].rowHits);
         rows = rowsHit + (a->rowMisses - sPerf2d[0].rowMisses) + (b->rowMisses - sPerf2d[1].rowMisses);
         inv = el ? 100.0 / (double)el : 0.0;
+#ifndef HGSS_PROFILE_OFF
+        /* P1: finer setup split + take/commit + flat fills + key byte counts. */
+        {
+            u64 transp = (a->setupTransparentTicks - sPerf2d[0].setupTransparentTicks) +
+                         (b->setupTransparentTicks - sPerf2d[1].setupTransparentTicks);
+            u64 decide = (a->setupDecideTicks - sPerf2d[0].setupDecideTicks) +
+                         (b->setupDecideTicks - sPerf2d[1].setupDecideTicks);
+            u64 take = (a->takeTicks - sPerf2d[0].takeTicks) + (b->takeTicks - sPerf2d[1].takeTicks);
+            u64 flatfill = (a->flatFillTicks - sPerf2d[0].flatFillTicks) +
+                           (b->flatFillTicks - sPerf2d[1].flatFillTicks);
+            u64 keyMap = (a->keyMapBytes - sPerf2d[0].keyMapBytes) + (b->keyMapBytes - sPerf2d[1].keyMapBytes);
+            u64 keyTile = (a->keyTileBytes - sPerf2d[0].keyTileBytes) + (b->keyTileBytes - sPerf2d[1].keyTileBytes);
+            u64 check = (a->setupCheckTicks - sPerf2d[0].setupCheckTicks) +
+                        (b->setupCheckTicks - sPerf2d[1].setupCheckTicks);
+            NitroPort_Log("[perf] 2d: text %.1f%%, affine %.1f%%, obj %.1f%%, merge %.1f%%, blend %.1f%%, "
+                          "window %.1f%%, finish %.1f%%, setup %.1f%% (pal %.1f%%, key %.1f%%, %u lines, %u empty, %u blend, rows %u/%u), "
+                          "decide %.1f%%, transp %.1f%%, check %.1f%%, take %.2f ms, flatfill %.2f ms, key %llu/%llu B",
+#else
         NitroPort_Log("[perf] 2d: text %.1f%%, affine %.1f%%, obj %.1f%%, merge %.1f%%, blend %.1f%%, "
                       "window %.1f%%, finish %.1f%%, setup %.1f%% (pal %.1f%%, key %.1f%%, %u lines, %u empty, %u blend, rows %u/%u)",
-                      (double)text * inv, (double)layer * inv, (double)obj * inv,
-                      (double)merge * inv, (double)blend * inv, (double)window * inv,
-                      (double)finish * inv, (double)setup * inv,
-                      (double)setupPal * inv, (double)setupKey * inv,
-                      (unsigned)((a->lines - sPerf2d[0].lines) + (b->lines - sPerf2d[1].lines)),
-                      (unsigned)((a->emptyLines - sPerf2d[0].emptyLines) +
-                                 (b->emptyLines - sPerf2d[1].emptyLines)),
-                      (unsigned)((a->blendLines - sPerf2d[0].blendLines) +
-                                 (b->blendLines - sPerf2d[1].blendLines)),
-                      rowsHit, rows);
+#endif
+                          (double)text * inv, (double)layer * inv, (double)obj * inv,
+                          (double)merge * inv, (double)blend * inv, (double)window * inv,
+                          (double)finish * inv, (double)setup * inv,
+                          (double)setupPal * inv, (double)setupKey * inv,
+                          (unsigned)((a->lines - sPerf2d[0].lines) + (b->lines - sPerf2d[1].lines)),
+                          (unsigned)((a->emptyLines - sPerf2d[0].emptyLines) +
+                                     (b->emptyLines - sPerf2d[1].emptyLines)),
+                          (unsigned)((a->blendLines - sPerf2d[0].blendLines) +
+                                     (b->blendLines - sPerf2d[1].blendLines)),
+                          rowsHit, rows
+#ifndef HGSS_PROFILE_OFF
+                          , (double)decide * inv, (double)transp * inv,
+                          (double)check * inv,
+                          PerfMsPer(take, 1), PerfMsPer(flatfill, 1),
+                          (unsigned long long)keyMap, (unsigned long long)keyTile
+#endif
+                          );
+#ifndef HGSS_PROFILE_OFF
+        } /* (end P1 block) */
+#endif
         /* Slice S5/S6 bundle: why layers stay on software (engine A only).
          * Cumulative counters, differenced per interval like rows; read
          * before the snapshot below. */
@@ -2118,13 +2365,31 @@ static void WaitForFrameCap(u64 frameStart)
         sNextFrameTick = frameStart + period;
     }
     now = svcGetSystemTick();
+#ifndef HGSS_PROFILE_OFF
+    /* P1: game work ends where the cap wait begins (frameStart is the
+     * OnFrame entry tick). */
+    sGameWorkTicks += now - frameStart;
+#endif
     if (now < sNextFrameTick) {
         /* svcSleepThread takes nanoseconds; the grid is in ARM11 ticks. */
         u64 ns = (sNextFrameTick - now) * 1000000000ULL / SYSCLOCK_ARM11;
+#ifndef HGSS_PROFILE_OFF
+        u64 slept = svcGetSystemTick();
         svcSleepThread((s64)ns);
-    } else if (now - sNextFrameTick > period) {
-        sNextFrameTick = now + period;
-        return;
+        sGameSleepTicks += svcGetSystemTick() - slept;
+#else
+        svcSleepThread((s64)ns);
+#endif
+    } else {
+#ifndef HGSS_PROFILE_OFF
+        /* The frame arrived already late (no sleep); a grid reset below
+         * means it was more than a whole period behind. */
+        sGameLateFrames++;
+#endif
+        if (now - sNextFrameTick > period) {
+            sNextFrameTick = now + period;
+            return;
+        }
     }
     sNextFrameTick += period;
 }
@@ -2287,10 +2552,18 @@ void NitroPort_OnFrame(void)
 
         NitroPort_Log("frame %lu", sFrame);
         NitroPort_Log("FRAMETIME frame=%lu game_us=%llu state_us=%llu total_us=%llu "
-                      "hblank_us=%llu handoff_us=%llu hb_keep_us=%llu hb_dma_us=%llu hb_irq_us=%llu",
+                      "hblank_us=%llu handoff_us=%llu hb_keep_us=%llu hb_dma_us=%llu hb_irq_us=%llu"
+#ifndef HGSS_PROFILE_OFF
+                      " hb_ref_us=%llu hb_sw_us=%llu hb_cmp_us=%llu"
+#endif
+                      ,
                       sFrame, gameUs, prevStateUs, totalUs,
                       TicksToUs(sPrevHBlankTicks), TicksToUs(sPrevHandoffTicks),
-                      TicksToUs(sPrevHbKeep), TicksToUs(sPrevHbDma), TicksToUs(sPrevHbIrq));
+                      TicksToUs(sPrevHbKeep), TicksToUs(sPrevHbDma), TicksToUs(sPrevHbIrq)
+#ifndef HGSS_PROFILE_OFF
+                      , TicksToUs(sPrevHbRefresh), TicksToUs(sPrevHbSwitch), TicksToUs(sPrevHbCmp)
+#endif
+                      );
         PerfLog(svcGetSystemTick());
         NitroPort_Log("3D images: %lu (scenes drawn: %lu)",
                       (unsigned long)NitroPort_Gx3dImageCount(), sGpuScenes);
@@ -2387,6 +2660,11 @@ void NitroPort_OnFrame(void)
     sPrevHbKeep = sFrameHbKeep;
     sPrevHbDma = sFrameHbDma;
     sPrevHbIrq = sFrameHbIrq;
+#ifndef HGSS_PROFILE_OFF
+    sPrevHbRefresh = sFrameHbRefresh;
+    sPrevHbSwitch = sFrameHbSwitch;
+    sPrevHbCmp = sFrameHbCmp;
+#endif
 
     /* Last, after both blits and the swap: this is what spaces frame starts
      * when the display work finishes early. */
@@ -2426,7 +2704,7 @@ static void ExitToLauncher(void)
         AudioStop();
         NitroPort_Log("[quit] sound stopped");
     }
-#ifdef HGSS_A0_DIAG
+#if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
     A0IdleStop();
 #endif
     FlushLog();
@@ -3441,7 +3719,7 @@ int main(int argc, char **argv)
          * Idempotent with the display block's call below. */
         RequestCore1Share();
     }
-#ifdef HGSS_A0_DIAG
+#if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
     if (!sNew3ds) A0IdleStart();
 #endif
     if (R_SUCCEEDED(ndspInit())) {
@@ -3590,13 +3868,12 @@ int main(int argc, char **argv)
                       (unsigned long)ndspGetDroppedFrames(),
                       (unsigned long)ndspGetFrameCount());
     }
-#ifdef HGSS_A0_DIAG
+#if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
     A0IdleStop();
 #endif
     NitroPort_Log("stopping (frame %lu)", sFrame);
     NitroPort_CardFlush();
-    if (sGpuStopFailed || sThreadsStuck) {
-        /* A thread is still inside citro3d/libctru/NDSP: tearing the runtime
+    if (sGpuStopFailed || sThreadsStuck) {        /* A thread is still inside citro3d/libctru/NDSP: tearing the runtime
          * down around it crashes on the way out, so end the process (the log
          * above already says which thread and why). */
         NitroPort_Log("[quit] a thread is still running; ending the process");

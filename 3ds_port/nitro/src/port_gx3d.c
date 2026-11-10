@@ -2082,6 +2082,16 @@ static uint64_t A0GeoTick(void) { return sOps.ticks ? sOps.ticks(sOps.context) :
 /* Scenes (SWAP_BUFFERS) handed on / finished, and left out. */
 static uint32_t sSwapsQueued, sSwapsDone, sSwapsSkipped;
 static int sSkipScene;
+#ifndef HGSS_PROFILE_OFF
+/* P1: built vs skipped scene accounting (no behavior change). sSwapsBuilt
+ * counts scenes the worker transformed; sBuiltTicks/sSkippedTicks accumulate
+ * worker ticks between the previous SWAP_BUFFERS and this one, split by the
+ * finished scene's fate. The in-flight scene at thread start is not counted
+ * (one-time boot edge). */
+static uint32_t sSwapsBuilt;
+static uint64_t sBuiltTicks, sSkippedTicks, sSceneTickStart;
+static int sSceneTickInit;
+#endif
 static uint64_t sWorkerBusy;
 static uint32_t sWorkerWakeups;      /* stretches of work (each after a sleep) */
 static uint64_t sWorkerLongest;      /* the longest of them since last read */
@@ -2287,13 +2297,32 @@ static inline __attribute__((always_inline)) void work_op(unsigned op,const uint
             sScenes[sBuilding].shadow_count=0;
             sScenes[sBuilding].dropped=0;
             s.frameVertices=0;s.framePolygons=0;
+#ifndef HGSS_PROFILE_OFF
+            if(sOps.ticks){
+                uint64_t now=sOps.ticks(sOps.context);
+                if(sSceneTickInit)sSkippedTicks+=now-sSceneTickStart;
+                else sSceneTickInit=1;
+                sSceneTickStart=now;
+            }
+#endif
             __atomic_store_n(&sSwapsSkipped,sSwapsSkipped+1u,__ATOMIC_RELAXED);
             __atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
             return;
         }
     }
     execute(op,p);
-    if(op==0x50u)__atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
+    if(op==0x50u){
+#ifndef HGSS_PROFILE_OFF
+        if(sOps.ticks){
+            uint64_t now=sOps.ticks(sOps.context);
+            if(sSceneTickInit)sBuiltTicks+=now-sSceneTickStart;
+            else sSceneTickInit=1;
+            sSceneTickStart=now;
+        }
+        __atomic_store_n(&sSwapsBuilt,sSwapsBuilt+1u,__ATOMIC_RELAXED);
+#endif
+        __atomic_store_n(&sSwapsDone,sSwapsDone+1u,__ATOMIC_RELEASE);
+    }
 }
 /* ------------------------------------------- polygons out of the view
  *
@@ -3657,6 +3686,17 @@ void NitroPort_Gx3dThreadStats(uint64_t *busy,uint32_t *scenes,uint32_t *skipped
     if(scenes)*scenes=__atomic_load_n(&sSwapsDone,__ATOMIC_ACQUIRE);
     if(skipped)*skipped=__atomic_load_n(&sSwapsSkipped,__ATOMIC_RELAXED);
 }
+#ifndef HGSS_PROFILE_OFF
+/* P1: scenes the worker transformed, and worker ticks split by the finished
+ * scene's fate (see sBuiltTicks). Deltas belong to the [perf] geometry line;
+ * built + skipped must equal done in every sample. */
+void NitroPort_Gx3dSceneSplit(uint32_t *built,uint64_t *builtTicks,uint64_t *skippedTicks)
+{
+    if(built)*built=__atomic_load_n(&sSwapsBuilt,__ATOMIC_RELAXED);
+    if(builtTicks)*builtTicks=__atomic_load_n(&sBuiltTicks,__ATOMIC_RELAXED);
+    if(skippedTicks)*skippedTicks=__atomic_load_n(&sSkippedTicks,__ATOMIC_RELAXED);
+}
+#endif
 /* Scene-flow census (no behavior change): game-queued vs worker-completed
  * vs completed-but-never-consumed, per interval in the shell's geometry
  * line. Decides whether the worker's diet or the skip/display policy is

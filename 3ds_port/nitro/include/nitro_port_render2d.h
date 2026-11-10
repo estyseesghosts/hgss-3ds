@@ -278,6 +278,16 @@ typedef struct NitroRender2DProfile {
     uint64_t setupTicks;  /* per-frame setup: keys, art lookups, palettes, splits */
     uint64_t setupPalTicks;  /* (of it: FindExtPalettes + MakePalettes) */
     uint64_t setupKeyTicks;  /* (of it: the per-BG BgKeyCached/FoldClearVariant) */
+#ifndef HGSS_PROFILE_OFF
+    /* P1: finer setup split + take/commit + flat fills + key byte counts. */
+    uint64_t setupTransparentTicks; /* (of setup: the TextBgTransparent loop) */
+    uint64_t setupDecideTicks;  /* (of setup: DecideSplits + LookUpArt + DecideBandFills) */
+    uint64_t takeTicks;         /* S5/S6 take evaluation + commit (incl. SortObjs, also in objTicks) */
+    uint64_t flatFillTicks;     /* the two flat-plane fills */
+    uint64_t setupCheckTicks;   /* change-detection signatures (small + referenced VRAM + scroll check) */
+    uint64_t keyMapBytes;       /* map bytes walked by BgKeyT + TextBgTransparent */
+    uint64_t keyTileBytes;      /* tile bytes walked by BgKeyT + TextBgTransparent */
+#endif
     uint32_t rowHits;     /* Slice B text-row cache hits */
     uint32_t rowMisses;   /* Slice B text-row cache misses (one row render each) */
     /* Slice S5 reject attribution (port_render2d.c owns counting, shell

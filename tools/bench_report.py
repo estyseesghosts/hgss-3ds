@@ -38,7 +38,7 @@ SAMPLE_START = re.compile(r"^\[?(?:\d+\] )?frame (\d+)$")
 FRAMETIME = re.compile(
     r"FRAMETIME frame=(\d+) game_us=(\d+) state_us=(\d+) total_us=(\d+) "
     r"hblank_us=(\d+) handoff_us=(\d+) hb_keep_us=(\d+) hb_dma_us=(\d+) "
-    r"hb_irq_us=(\d+)")
+    r"hb_irq_us=(\d+)(?: hb_ref_us=(\d+) hb_sw_us=(\d+) hb_cmp_us=(\d+))?")
 DISPLAY = re.compile(
     r"\[perf\] display: ([\d.]+) composes/s, ([\d.]+) ms build, "
     r"([\d.]+) ms GPU/waited \(([\d.]+) ms waiting\), ([\d.]+) publishes/s, "
@@ -48,11 +48,21 @@ DISPLAY = re.compile(
     r"([\d.]+) ms\), command list (\d+)% full, (\d+) draws cut")
 GEOMETRY = re.compile(
     r"\[perf\] geometry: ([\d.]+) scenes/s, busy (\d+)% \(([\d.]+) ms/scene\), "
-    r"(\d+) skipped")
+    r"(\d+) skipped(?:.*?; built (\d+) \(([\d.]+) ms/built\), ([\d.]+) ms/skipped)?")
 DRAWER = re.compile(
     r"\[perf\] drawer (\d+) \(core (\d+), ([^)]*)\): ([\d.]+) frames/s, "
     r"([\d.]+) ms/frame, ([\d.]+) ms render, ([\d.]+) ms publish, "
-    r"(\d+) drawn, (\d+) lower deferred")
+    r"(\d+) drawn, (\d+) lower deferred(?:, ([\d.]+) ms signal)?")
+IDLE = re.compile(r"\[perf\] idle: core0 ([\d.]+)% core1 ([\d.]+)%")
+GAMEPERF = re.compile(r"\[perf\] game: work ([\d.]+) ms, slept ([\d.]+) ms, late (\d+)")
+OFFERS = re.compile(r"\[perf\] offers: (\d+) dropped \(drawer busy\)")
+TWOD = re.compile(
+    r"decide ([\d.]+)%, transp ([\d.]+)%, check ([\d.]+)%, take ([\d.]+) ms, "
+    r"flatfill ([\d.]+) ms, key (\d+)/(\d+) B")
+COMPOSEPHASE = re.compile(
+    r"\[perf\] compose-phase ms/draw: pick ([\d.]+) prepare ([\d.]+) stage ([\d.]+) end ([\d.]+)"
+    r"(?: \(xfer ([\d.]+) flight ([\d.]+) lock ([\d.]+) submit ([\d.]+)\))?"
+    r"; skip ([\d.]+) ms/pass(?:; cause scene (\d+) set (\d+) forced (\d+) other (\d+))?")
 GPUBG = re.compile(r"\[perf\] gpubg: taken (\d+),")
 MEM = re.compile(
     r"\[perf\] mem: linear_free=(\d+) KB game_heap_used=(\d+) KB")
@@ -98,9 +108,11 @@ def parse_log(text: str) -> list[dict[str, object]]:
         match = FRAMETIME.search(line)
         if match:
             keys = ("frame", "game_us", "state_us", "total_us", "hblank_us",
-                    "handoff_us", "hb_keep_us", "hb_dma_us", "hb_irq_us")
+                    "handoff_us", "hb_keep_us", "hb_dma_us", "hb_irq_us",
+                    "hb_ref_us", "hb_sw_us", "hb_cmp_us")
             for key, value in zip(keys, match.groups()):
-                current[key] = int(value)
+                if value is not None:
+                    current[key] = int(value)
             continue
         match = DISPLAY.search(line)
         if match:
@@ -118,6 +130,10 @@ def parse_log(text: str) -> list[dict[str, object]]:
             current["geom_busy_pct"] = int(match.group(2))
             current["geom_ms"] = float(match.group(3))
             current["geom_skipped"] = int(match.group(4))
+            if match.group(5) is not None:
+                current["geom_built"] = int(match.group(5))
+                current["geom_built_ms"] = float(match.group(6))
+                current["geom_skipped_ms"] = float(match.group(7))
             continue
         match = DRAWER.search(line)
         if match:
@@ -130,6 +146,51 @@ def parse_log(text: str) -> list[dict[str, object]]:
                 "publish_ms": float(match.group(7)),
                 "drawn": int(match.group(8)),
             }
+            if match.group(10) is not None:
+                current["drawers"][index]["signal_ms"] = float(match.group(10))
+            continue
+        match = IDLE.search(line)
+        if match:
+            current["idle_c0"] = float(match.group(1))
+            current["idle_c1"] = float(match.group(2))
+            continue
+        match = GAMEPERF.search(line)
+        if match:
+            current["game_work_ms"] = float(match.group(1))
+            current["game_slept_ms"] = float(match.group(2))
+            current["game_late"] = int(match.group(3))
+            continue
+        match = OFFERS.search(line)
+        if match:
+            current["offers_dropped"] = int(match.group(1))
+            continue
+        match = TWOD.search(line)
+        if match:
+            current["twod_decide_pct"] = float(match.group(1))
+            current["twod_transp_pct"] = float(match.group(2))
+            current["twod_check_pct"] = float(match.group(3))
+            current["twod_take_ms"] = float(match.group(4))
+            current["twod_flatfill_ms"] = float(match.group(5))
+            current["key_map_bytes"] = int(match.group(6))
+            current["key_tile_bytes"] = int(match.group(7))
+            continue
+        match = COMPOSEPHASE.search(line)
+        if match:
+            current["phase_pick_ms"] = float(match.group(1))
+            current["phase_prepare_ms"] = float(match.group(2))
+            current["phase_stage_ms"] = float(match.group(3))
+            current["phase_end_ms"] = float(match.group(4))
+            if match.group(5) is not None:
+                current["phase_end_xfer_ms"] = float(match.group(5))
+                current["phase_end_flight_ms"] = float(match.group(6))
+                current["phase_end_lock_ms"] = float(match.group(7))
+                current["phase_end_submit_ms"] = float(match.group(8))
+            current["phase_skip_ms"] = float(match.group(9))
+            if match.group(10) is not None:
+                current["cause_scene"] = int(match.group(10))
+                current["cause_set"] = int(match.group(11))
+                current["cause_forced"] = int(match.group(12))
+                current["cause_other"] = int(match.group(13))
             continue
         match = GPUBG.search(line)
         if match:
@@ -188,6 +249,11 @@ COLUMNS = (
     ("gpubg_taken", "bg takes"),
     ("linear_free_kb", "lin free KB"),
     ("dropped", "disp drop"),
+    ("geom_built", "built"),
+    ("idle_c0", "idle c0%"),
+    ("idle_c1", "idle c1%"),
+    ("offers_dropped", "offers drop"),
+    ("cause_scene", "cause scene"),
 )
 
 
@@ -208,6 +274,31 @@ def row_values(row: dict[str, object]) -> dict[str, object]:
         "gpubg_taken": row.get("gpubg_taken"),
         "linear_free_kb": row.get("linear_free_kb"),
         "dropped": row.get("dropped"),
+        # P1 instrumentation (None in older logs).
+        "geom_built": row.get("geom_built"),
+        "geom_built_ms": row.get("geom_built_ms"),
+        "geom_skipped_ms": row.get("geom_skipped_ms"),
+        "idle_c0": row.get("idle_c0"),
+        "idle_c1": row.get("idle_c1"),
+        "game_work_ms": row.get("game_work_ms"),
+        "game_slept_ms": row.get("game_slept_ms"),
+        "game_late": row.get("game_late"),
+        "offers_dropped": row.get("offers_dropped"),
+        "twod_decide_pct": row.get("twod_decide_pct"),
+        "twod_transp_pct": row.get("twod_transp_pct"),
+        "twod_check_pct": row.get("twod_check_pct"),
+        "twod_take_ms": row.get("twod_take_ms"),
+        "twod_flatfill_ms": row.get("twod_flatfill_ms"),
+        "key_map_bytes": row.get("key_map_bytes"),
+        "key_tile_bytes": row.get("key_tile_bytes"),
+        "phase_end_xfer_ms": row.get("phase_end_xfer_ms"),
+        "phase_end_flight_ms": row.get("phase_end_flight_ms"),
+        "phase_end_lock_ms": row.get("phase_end_lock_ms"),
+        "phase_end_submit_ms": row.get("phase_end_submit_ms"),
+        "cause_scene": row.get("cause_scene"),
+        "cause_set": row.get("cause_set"),
+        "cause_forced": row.get("cause_forced"),
+        "cause_other": row.get("cause_other"),
     }
     if values["drawer_ms"] is not None:
         values["drawer_ms"] = round(float(values["drawer_ms"]), 2)
@@ -217,7 +308,8 @@ def row_values(row: dict[str, object]) -> dict[str, object]:
 def summary(rows: list[dict[str, object]]) -> list[tuple[str, float, float, float, float]]:
     metrics: list[tuple[str, list[float]]] = []
     for key in ("frame_ms", "game_ms", "composes_s", "publishes_s", "drawer_ms",
-                "gpubg_taken", "linear_free_kb"):
+                "gpubg_taken", "linear_free_kb", "geom_built", "idle_c0",
+                "idle_c1", "offers_dropped", "cause_scene"):
         values = [float(value) for row in rows
                   for value in [row_values(row).get(key)] if value is not None]
         if values:
