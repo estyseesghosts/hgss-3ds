@@ -1,0 +1,35 @@
+# HeartGold: cold boot with a save -> CONTINUE -> Goldenrod field, then the
+# content changes P5's accept names: the pause menu (this game's X button),
+# a text box (A, at the sign the player stands next to) and the fade-in
+# after CONTINUE (the A presses at 8000-8049, which the frozen field script
+# already has).
+#
+# The fade-in is at frames 8000-9000; the menu opens at 12000 and is closed
+# with B at 13000; the text box is asked for at 14000. Captures are taken
+# at 11400 (the field), 12600 (the menu), 13600 (the field again) and
+# 14600 (the text box).
+every: 10
+0 -
+5000 START
+5010 START
+5020 START
+5030 START
+5040 START
+5050 START
+5060 START
+5070 START
+5080 START
+5090 START
+5100 START
+5110 START
+5120 START
+5130 START
+5140 START
+5150 START
+8000 A
+8020 A
+8040 A
+12000 X
+13000 B
+14000 A
+end: 15500

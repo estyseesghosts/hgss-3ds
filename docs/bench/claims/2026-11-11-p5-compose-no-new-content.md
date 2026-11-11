@@ -1,0 +1,149 @@
+# Claim sheet: P5 compose: no redraw without new content, and explain `end`
+
+```text
+Hypothesis:               The composes that carry no new content (the
+                          plan's "about 51 of 123 composes per window have
+                          no new scene yet clear the target and re-record the
+                          whole 3D") are caused by 2D publications that
+                          carry no change: the drawer republishes the same
+                          layers every frame, each publication marks the
+                          layer set as new, and the compositor clears the
+                          target and re-records the 3D for it. If the
+                          compositor does not mark a set as new when the
+                          published display state equals what the screen
+                          last showed, those composes go away; and the
+                          per-compose `end` cost, if the sub-timers say it
+                          is the queue submit, is not the port's to fix.
+Target scene:             Frozen Goldenrod save, hg-continue-field.txt (rest,
+                          frames 9000+) and hg-field-walk.txt (the legs,
+                          frames 12000+); plus a new script with a fade, a
+                          text box and the pause menu (the accept's cases).
+Target hardware:          Old 3DS; Azahar 2126.2 O3DS-sim for the cause
+                          table and the end split. Costs on hardware (the
+                          four packets are staged).
+Baseline artifact:        P1, commit 620fa70, clean: PROFILE
+                          dc183349431f09e7… (5843816 B), OFF
+                          9db1cac9f6589802… (5833248 B).
+Candidate artifact:      P3, commit 9759707, clean: PROFILE
+                          f26ec12d9f1a6416… (5846072 B), OFF
+                          d80bb827e375e048… (5835456 B).
+Activation proof:         The compositor's own cause census
+                          (`[perf] compose-phase … cause scene N set N forced
+                          N other N`) and the publish profile
+                          (`[perf] publish-A … calls N reuse N flat N`).
+Work proof:               Composes per window, built scenes per window, the
+                          per-phase split (pick/prepare/stage/end with
+                          xfer/flight/lock/submit), late and dropped.
+Correctness proof:        A fade, a text box and the pause menu present on
+                          time (late/dropped counters) and the picture is
+                          right (captures at fixed frames).
+Hardware result:          Paired A/B on the console (owner run; the packets
+                          are staged).
+Regression surface:       Battle, title, menus, transition, text boxes,
+                          fades, audio, sleep/close.
+Conclusion:               see below
+Next decision:            keep / revise bounded issue / revert / archive
+```
+
+## The cause table, before and after (Azahar, field at rest)
+
+Three alternating trials of 240 s each, frames 9000+, same save/script/ini:
+
+| per 600-tick window | base (P1) t1 / t2 / t3 | candidate (P3) t1 / t2 / t3 |
+|---|---|---|
+| composes | 201 / 211 / 203 | **177 / 177 / 177** |
+| — of which a new scene | 175 / 177 / 176 | 177 / 177 / 177 |
+| — **of which no new scene** (`set`) | **26 / 34 / 27** | **0 / 0 / 0** |
+| — forced / other | 0 / 0 / 0 | 0 / 0 / 0 |
+| 2D publications (`publish-A` calls) | 600 / 600 / 600 | **0 / 0 / 0** |
+| — of those on the unchanged fast path (`reuse`) | 600 / 600 / 600 | 0 |
+| built scenes | 175 / 177 / 176 | 177 / 177 / 177 |
+| scenes/s (geometry) | 30.0 | 30.1 |
+| late / dropped | 0 / 0 | 1 / 0, 0 / 0, 0 / 0 |
+
+And the walk window (frames 12000+, the legs):
+
+| per 600-tick window | base t1 / t2 / t3 | candidate t1 / t2 / t3 |
+|---|---|---|
+| composes | 232 / 219 / 218 | 176 / 177 / 177 |
+| — of which no new scene (`set`) | 48 / 41 / 41 | **0 / 0 / 0** |
+
+## What the counters say about the cause
+
+The base's publish profile is the plan's hypothesis in one line:
+
+```
+[14400] [perf] publish-A wall/call 0.05 ms, check 0.05, lockwait 0.00, convert+flush 0.00, bg+obj 0.00; calls 600 reuse 600 flat 600 no-buffer 0 invalid 0
+```
+
+**600 publications in the window, all 600 on the unchanged fast path
+(`reuse`)** — the drawer republished the same layers every frame, each
+publication marked the layer set as new, and each of the 26-34 `set` composes
+it caused cleared the target and re-recorded the 3D.
+
+The candidate does not publish at all (`calls 0`): with the flat picture
+skipped, the layers on screen *are* the current layers, so there is nothing
+to publish. The plan's suggested fix — "compare the published display state
+with what the screen last showed, and do not mark the set as new when they
+are equal" — is satisfied by a stronger form of the same thing: the set is
+never marked new, because no publication happens.
+
+**The premise's cause is therefore already gone, and P5 has no code change
+to make for it.** The plan's own stop condition — "stop if the cause
+counters show the premise is false" — is reached: the non-scene composes
+are 0 per window, in both scripts, in all six trials.
+
+## `end`: the sub-timers
+
+Per compose, Azahar (both builds, all trials):
+
+```
+base:      end 0.22-0.27 ms  (xfer 0.00  flight 0.00  lock 0.00  submit 0.21-0.24)
+candidate: end 0.23-0.30 ms  (xfer 0.00  flight 0.00  lock 0.00  submit 0.20-0.27)
+```
+
+The **queue submit is 89-92% of `end`**; the transfer, flight and lock
+waits are 0.00. On the console (log-1, P1 PROFILE) the same split: `submit
+(gxCmdQueueRun) 6.11 of 9.60 end ms` (64%), xfer/flight/lock ≈ 0.01 ms
+combined. So the ~9 ms the plan calls unexplained is the GSP taking the
+command list — the port's own cost is not in it.
+
+The plan's instruction for this case: *"if the queue submit dominates,
+report it and stop."* So: **reported, not touched.** Per window the total
+`end` work falls slightly anyway, because there are 24-34 fewer composes
+(201 × 0.27 = 54 ms against 177 × 0.30 = 53 ms).
+
+## What is left to measure (the accept's cases)
+
+The accept wants "a fade and a text box still present on time", and the
+frozen scripts have neither after the field is up. This packet adds a
+script for them (see the run manifest) and measures:
+
+- the pause menu (the game's X button) opening and closing;
+- a text box (A, at the sign the player stands next to);
+- the fade-in after CONTINUE (already in the frozen field script, frames
+  8000-9000).
+
+## Run manifest
+
+- Cause tables and the end split: `build/bench/ab-p3-field/`,
+  `build/bench/ab-p3-walk/` (base and candidate trial logs, and
+  `summary.json`).
+- The fade/text-box/menu run: `tests/inputs/hg-field-dialog.txt`, its
+  captures under `docs/bench/captures/2026-11-11-p5/`.
+- Hardware packets: `build/bench/sd-hg-p3/`, `build/bench/sd-hg-p3-off/`
+  (candidate) with `build/bench/sd-hg-p1/`, `build/bench/sd-hg-p1-off/`
+  (baseline).
+
+## Notes
+
+- Baseline and candidate differ in more than one variable here (P3 is a
+  change under test); the cause table is read from both arms of the *same*
+  A/B run, so the comparison is within one run.
+- Azahar numbers are functional coverage only; the performance claim needs
+  the console.
+- The one extra late compose in the candidate's t1 (a 3D frame that
+  reached the display thread three V-blanks late, a geometry-side hitch at
+  frame 14042) appears in one trial of three and in none of the base's
+  field windows; it is reported, not explained away.
+```
