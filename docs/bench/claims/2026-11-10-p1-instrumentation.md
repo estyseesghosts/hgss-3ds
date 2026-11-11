@@ -13,8 +13,8 @@ Baseline artifact:        PROFILE f6b42d07… / OFF bee59e41… (916b953, dirty 
                           default flags). Azahar shape: drawer 2.74/2.72 ms,
                           geometry 30.6 ms/scene, composes ~20.7/s.
 Candidate artifact:       PROFILE 771c4a58… / OFF 48c5fa7a… (instrumented pair,
-                          same tree; tree was dirty with P1 work — final clean
-                          rebuild + confirming A/B below).
+                          same tree); final clean twins PROFILE 8a982f70… /
+                          OFF a5e5a0a5… at 59603bc (dirty: no, default flags).
 Activation proof:         Each new counter observed non-zero in the Azahar
                           field script (PROFILE build, title→field):
                           built 178 + skipped 121 = 299 = done (flow done 299);
@@ -30,7 +30,10 @@ Work proof:               Azahar A/B, both scripts, 3 alternating trials each:
                           field — drawer 2.69 [2.68..2.69] vs 2.72
                           [2.71..2.72] (profile faster by ~1.1%); everything
                           else overlapping. Walk — all five metrics
-                          overlapping. Combined: cost ≈ 0 ±1%, under the bar.
+                          overlapping. Confirming field A/B on the final bytes
+                          (8a982f70 vs a5e5a0a5): drawer 2.69 [2.69..2.70] vs
+                          2.72 [2.71..2.72], everything else overlapping.
+                          Combined: cost ≈ 0 ±1%, under the bar.
 Correctness proof:        `make tool-tests`: 517 tests (506 + 11 new
                           bench_report tests, all passing); zero mine-only
                           failures vs the stashed-tree baseline.
@@ -46,15 +49,19 @@ Regression surface:       Battle, title, menus, transition, audio, sleep/close
                           (instrumentation is read-only; any new drop fails it).
 Conclusion:               beneficial (attribution closes as below; cost within
                           bar; sums verified in Azahar, hardware pending).
-Next decision:            keep; clean rebuild, confirming A/B, then start P2.
+Next decision:            kept. Clean twins built, confirming field A/B agrees.
+                          Start P2.
 ```
 
 ## Run manifest
 
 P0 manifests: `build/bench/p0-profile.manifest.json`,
 `build/bench/p0-off.manifest.json`; trial logs
-`build/bench/ab-p0-{field,walk}/`. P1 re-runs both scripts on the instrumented
-pair and appends the attribution table to `2026-11-10-o3ds-000-results.md`.
+`build/bench/ab-p0-{field,walk}/`. P1 manifests:
+`build/bench/p1-final-profile.manifest.json`,
+`p1-final-off.manifest.json`; trial logs `build/bench/ab-p1-{field,walk}/`
+plus the confirming run `build/bench/ab-p1-final/`; attribution recorded in
+`2026-11-10-o3ds-000-results.md`.
 
 ## Notes
 
