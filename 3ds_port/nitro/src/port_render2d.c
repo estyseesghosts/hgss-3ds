@@ -6587,9 +6587,17 @@ static u32 EngineSmallSignature(int engine, int snapshot, u32 gpuBgMask, int ski
     if (isA) {
         regs[0x60 / 4] &= ~0x3000u;
     }
-    /* MASTER_BRIGHT (0x6C) does not change the split picture: with a split
-     * the compositor applies it on the GPU. Hashing it made every fade
-     * redraw and republish the whole 320x192 screen for nothing. */
+    /* DISPSTAT and VCOUNT (0x04-0x07) draw nothing: the H-blank flag, the
+     * V-blank flag, the two interrupt flags and the beam counter. The
+     * per-line registers leave them out for the same reason (KeepLine:
+     * "they draw nothing, and the V-count is each line's own"), and the
+     * V-count at the snapshot moves with how much the game did since the
+     * V-blank -- so hashing it made every frame look changed (measured on
+     * the field: the flat picture's signature differed on every pass, and
+     * the word that differed was exactly this one).
+     * MASTER_BRIGHT (0x6C) does not change the split picture either: with a
+     * split the compositor applies it on the GPU. */
+    regs[1] = 0;
     regs[0x6C / 4] = 0;
     /* (a BG the compositor draws itself: its scroll isn't in the picture,
      * which needn't be drawn again as it scrolls) */
@@ -7803,6 +7811,46 @@ static u32 SplitLayoutSignature(int engine, const NitroRender2DSplit *split)
  * the palettes, the OAM, the VRAM bank control, the per-line registers
  * and the layout; the VRAM signature covers the bytes the frame's layers
  * can read. The scroll is stored apart: a scrolled BG is a new picture. */
+/* P3: which register word changed between the last flat render and this
+ * pass. The flat picture's decision reads the registers, so "the small
+ * signature differs" has to be answerable: the word mask (28 words of the
+ * 0x70-byte block), the first eight bytes (DISPCNT, DISPSTAT, VCOUNT),
+ * VRAMCNT and POWCNT1 are counted separately. */
+#ifdef HGSS_A0_DIAG
+static u32 sFlatLastRegs[0x70 / 4];
+static u32 sFlatLastVramCnt, sFlatLastPowcnt;
+static int sFlatLastRegsValid;
+static u32 sFlatRegDiffMask;
+static u32 sFlatRegDiffAnd;
+static unsigned sFlatRegDiffFirst8;
+static unsigned sFlatRegByte1Or;
+static unsigned sFlatRegByte1Before, sFlatRegByte1After;
+static unsigned sFlatRegDiffPasses, sFlatVramCntDiff, sFlatPowcntDiff;
+
+/* P3: the flat picture's change detection, read back for the diagnostic. */
+void NitroPort_Render2DFlatRegDiff(uint32_t *mask, uint32_t *first8,
+                                   unsigned *passes, unsigned *vramCnt,
+                                   unsigned *powcnt)
+{
+    if (mask) *mask = sFlatRegDiffMask;
+    if (first8) *first8 = sFlatRegDiffFirst8;
+    if (passes) *passes = sFlatRegDiffPasses;
+    if (vramCnt) *vramCnt = sFlatVramCntDiff;
+    if (powcnt) *powcnt = sFlatPowcntDiff;
+}
+
+/* The words that differ on *every* pass (the AND over the per-pass masks),
+ * and the bits of DISPCNT's second byte that differ. */
+void NitroPort_Render2DFlatRegEvery(uint32_t *every, unsigned *byte1Or,
+                                    unsigned *byte1Before, unsigned *byte1After)
+{
+    if (every) *every = sFlatRegDiffAnd;
+    if (byte1Or) *byte1Or = sFlatRegByte1Or;
+    if (byte1Before) *byte1Before = sFlatRegByte1Before;
+    if (byte1After) *byte1After = sFlatRegByte1After;
+}
+#endif
+
 static void FlatStore(int engine, u32 layout, int snapshot, u32 mask)
 {
     int e = engine ? 1 : 0;
@@ -7823,6 +7871,12 @@ static void FlatStore(int engine, u32 layout, int snapshot, u32 mask)
     for (bg = 1; bg < 4; bg++) {
         f->scroll[bg] = Rd32(io, 0x10 + bg * 4);
     }
+#ifdef HGSS_A0_DIAG
+    memcpy(sFlatLastRegs, io, 0x70);
+    sFlatLastVramCnt = Rd32(io, 0x240);
+    sFlatLastPowcnt = Rd16(io, 0x304);
+    sFlatLastRegsValid = 1;
+#endif
 }
 
 /* P3: is the flat picture the same as the one the last flat pass drew?
@@ -7984,6 +8038,7 @@ static void A0SubHashes(int e, int snapshot, NitroRender2DSplit *split,
 
     memcpy(r, io, sizeof(r));
     if (!e) r[0x60 / 4] &= ~0x3000u;
+    r[1] = 0;              /* DISPSTAT and VCOUNT: they draw nothing */
     r[0x6C / 4] = 0;
     h = HashWords((const u8 *)r, sizeof(r), h);
     h = HashWords(ioAll + 0x240, 0x10, h);
@@ -8121,6 +8176,43 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
             case FLAT_WHY_BUFFERS: FLAT_COUNT_ADD(sFlatWhyBuffers[e]); break;
             default: break;
             }
+#ifdef HGSS_A0_DIAG
+            if (sFlatLastRegsValid) {
+                /* Which register word changed since the last flat render? */
+                const u8 *aio = split->snapshot ? sState[e].io : NitroPort_IoReg;
+                u32 mask = 0;
+                int b;
+
+                for (b = 0; b < 0x70 / 4; b++) {
+                    if (memcmp(aio + b * 4, (const u8 *)sFlatLastRegs + b * 4, 4) != 0) {
+                        mask |= 1u << b;
+                    }
+                }
+                sFlatRegDiffMask |= mask;
+                sFlatRegDiffPasses++;
+                if (sFlatRegDiffPasses == 1) {
+                    sFlatRegDiffAnd = mask;
+                } else {
+                    sFlatRegDiffAnd &= mask;
+                }
+                if (aio[1] != ((const u8 *)sFlatLastRegs)[1]) {
+                    sFlatRegByte1Or |= (unsigned)(aio[1] ^ ((const u8 *)sFlatLastRegs)[1]);
+                    sFlatRegByte1Before = ((const u8 *)sFlatLastRegs)[1];
+                    sFlatRegByte1After = aio[1];
+                }
+                for (b = 0; b < 8; b++) {
+                    if (aio[b] != ((const u8 *)sFlatLastRegs)[b]) {
+                        sFlatRegDiffFirst8 |= 1u << b;
+                    }
+                }
+                if (Rd32(aio, 0x240) != sFlatLastVramCnt) {
+                    sFlatVramCntDiff++;
+                }
+                if (Rd16(aio, 0x304) != sFlatLastPowcnt) {
+                    sFlatPowcntDiff++;
+                }
+            }
+#endif
         }
         if (same && !sRefHashDiagnostic) {
             FLAT_COUNT_ADD(sFlatSkip[e]);
@@ -8129,6 +8221,13 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
 #ifdef HGSS_A0_DIAG
         sA0Redraw.flat[e]++;
         sA0Redraw.scanlines[e] += 192;
+        if (!same) {
+            /* Which part of the small signature differed (the layout, the
+             * registers, the palette, the OAM, or the per-line registers):
+             * the flat branch's decision needs the same attribution the
+             * legacy path has. */
+            A0SubTrack(e, split->snapshot, split, 1);
+        }
 #endif
         if (same && sRefHashDiagnostic && sFlatMetaValid) {
             sFlatScratch = sFlatMeta;

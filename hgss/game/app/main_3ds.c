@@ -2322,6 +2322,17 @@ static void PerfLog(u64 now)
                           (unsigned long long)r0.scanlines, (unsigned long long)r1.smallBytes,
                           (unsigned long long)r1.vramBytes, (unsigned long long)r1.scanlines,
                           mustTop);
+            {
+                /* P3: which register word changed between the last flat
+                 * render and a pass that did not skip. */
+                uint32_t mask, first8, every;
+                unsigned passes, vramCnt, powcnt, b1or, b1b, b1a;
+
+                NitroPort_Render2DFlatRegDiff(&mask, &first8, &passes, &vramCnt, &powcnt);
+                NitroPort_Render2DFlatRegEvery(&every, &b1or, &b1b, &b1a);
+                NitroPort_Log("[a0] flat regdiff: %u passes, word mask 0x%08x, bytes0-7 0x%02x, VRAMCNT %u, POWCNT1 %u, every 0x%08x, dispcnt1 0x%02x (was 0x%02x)",
+                              passes, mask, first8, vramCnt, powcnt, every, b1or, b1b);
+            }
             NitroPort_Log("[a0] partialB whole: shared %llu rest %llu extpal %llu obj-wide %llu bg-kind %llu bg-regs %llu bg-lines %llu bg-char %llu bg-no-map %llu bg-no-band %llu bg-wide %llu mixed %llu",
                           (unsigned long long)p.shared, (unsigned long long)p.rest, (unsigned long long)p.extPal,
                           (unsigned long long)p.objWide, (unsigned long long)p.bgKind,

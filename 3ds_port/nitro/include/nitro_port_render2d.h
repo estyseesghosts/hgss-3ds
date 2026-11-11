@@ -232,6 +232,19 @@ typedef struct NitroFlatStats {
     uint32_t whyBuffers;  /* the drawer's buffers changed */
 } NitroFlatStats;
 void NitroPort_Render2DFlatStats(NitroFlatStats *out);
+#ifdef HGSS_A0_DIAG
+/* P3 (diagnostic): which register word changed between the last flat render
+ * and a pass that did not skip. mask: one bit per 4-byte word of the 0x70
+ * byte display block; first8: one bit per byte of DISPCNT/DISPSTAT/VCOUNT;
+ * vramCnt/powcnt: how often VRAMCNT and POWCNT1 changed. */
+void NitroPort_Render2DFlatRegDiff(uint32_t *mask, uint32_t *first8,
+                                   unsigned *passes, unsigned *vramCnt,
+                                   unsigned *powcnt);
+/* The words that differ on every pass (the AND over the per-pass masks),
+ * and the bits of DISPCNT's second byte that differ. */
+void NitroPort_Render2DFlatRegEvery(uint32_t *every, unsigned *byte1Or,
+                                    unsigned *byte1Before, unsigned *byte1After);
+#endif
 
 /* Slice S5 reject reasons: why a text BG stays on the software path.
  * Indices into NitroRender2DProfile.gpuBgReject (GpuBgOf's checks, in
