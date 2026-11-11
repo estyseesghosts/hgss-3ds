@@ -16,6 +16,7 @@ the shape faster. The previous session's issues are in
 | 25 | The skip still did not fire: one register word changes on every pass | A register-word diff (the AND over the per-pass masks) named it: VCOUNT. It draws nothing, so it is left out of the hash — proved, not assumed |
 | 26 | The retained VRAM signature was taken *after* the draw, so the skip could certify a stale picture | The signature is now taken before the draw (as the legacy path does); the race is measured (P4's question) |
 | 27 | An A/B labelled "off-field" ran the *walk* script: the runner matched the literal string "field" | Match the whole label, and read the script's hash in the manifest before quoting the numbers |
+| 28 | Two emulators ran at once, sharing one `log.txt`: the trial logs and the timings were contaminated | One measurement at a time, a stray-kill before and after each, and a distinct output directory per pair |
 
 ## 1. A multi-line command stops after its first statement
 
@@ -177,6 +178,30 @@ manifest before quoting any number from an A/B.
 a result comes back with a different window than expected, the cheapest
 check is the manifest's `script` hash and `--from-frame`, not a re-read of
 the logs.
+
+## 9. Two emulators, one log file
+
+**Symptom.** The owner noticed two Azahar processes running at once. One
+was the current A/B; the other was a stray from the previous one. Both
+write to the same `sdmc/3ds/pokeheartgold/log.txt`, and both had been
+launched by two A/B runs that also wrote to the same output directory (the
+second because its label matched the first's).
+
+**Why it matters.** Two emulators on one log file interleave their output
+into each other's trial logs, and they compete for the same CPU — so both
+the counts and the timings are contaminated. Neither run can be used, and
+the failure is invisible in the summary: the numbers look plausible.
+
+**Fix.** One measurement at a time. Kill any stray emulator before and
+after each run, and give every pair its own output directory (`--label`
+becomes the directory name, so the labels must differ). The OFF pair was
+re-measured from scratch on both scripts.
+
+**Rule.** A measurement harness that shares mutable state with anything
+else on the machine (a log file, a device, a window) needs a guard, not a
+convention. Check the process list before trusting a run's numbers — and
+when the owner spots it, say so plainly: the numbers were contaminated and
+are being re-measured.
 
 ## Wiki feedback (what the coffeepot wiki still lacks, from this session)
 
