@@ -15,6 +15,7 @@ the shape faster. The previous session's issues are in
 | 24 | The first P3 measurement was "0 skipped", with no way to say why | Per-reason counters in the first implementation, plus the A0 redraw attribution that already existed |
 | 25 | The skip still did not fire: one register word changes on every pass | A register-word diff (the AND over the per-pass masks) named it: VCOUNT. It draws nothing, so it is left out of the hash — proved, not assumed |
 | 26 | The retained VRAM signature was taken *after* the draw, so the skip could certify a stale picture | The signature is now taken before the draw (as the legacy path does); the race is measured (P4's question) |
+| 27 | An A/B labelled "off-field" ran the *walk* script: the runner matched the literal string "field" | Match the whole label, and read the script's hash in the manifest before quoting the numbers |
 
 ## 1. A multi-line command stops after its first statement
 
@@ -137,7 +138,6 @@ not mask a changing register merely to increase hits: first prove which
 pixels, metadata and future states depend on it."
 
 ## 7. A signature taken after the draw certifies a picture that is not there
-
 **Symptom.** None — this one was found by reading, not by a failure. The
 wiki's case study of this port lists it as an open question ("A signature
 may cover the right bytes but race a writer between hashing and rendering"),
@@ -160,6 +160,23 @@ be taken at a time that is *not newer* than the picture. A hash taken
 after the work is a hash of the future. Ask of every retained signature:
 "does this describe the state the pixels on the screen came from?" — and if
 it does not, take it earlier.
+
+## 8. A label that is matched loosely runs the wrong experiment
+
+**Symptom.** The A/B labelled "off-field" (the OFF pair on the field
+script) reported a window of 12000+ — the *walk* window — and its manifest
+named `hg-field-walk.txt`. The runner picked the script with
+`if ($Which -eq "field") { field script } else { walk script }`, and
+"off-field" is not "field".
+
+**Fix.** Match the whole label (`$Which -eq "field" -or $Which -eq
+"off-field"`), and read the *script's hash and the frame window* in the
+manifest before quoting any number from an A/B.
+
+**Rule.** A runner's label is not metadata: it selects the experiment. When
+a result comes back with a different window than expected, the cheapest
+check is the manifest's `script` hash and `--from-frame`, not a re-read of
+the logs.
 
 ## Wiki feedback (what the coffeepot wiki still lacks, from this session)
 

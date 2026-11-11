@@ -28,10 +28,19 @@ leave them out for the same reason. Measured after that: **600 skipped, 0
 redrawn per 600-tick window (100%)**, key bytes 7,372,800/115,200 → **0/0**,
 `take` 706 → 0 ms, `flatfill` 122 → 0 ms, drawer 2.69 → **0.88 ms/frame**.
 The A/B (3 × 240 s, frames 9000+): frame ms and geom ms overlap, late 0,
-dropped 0, lag 4; `composes/s` 20.95 → 17.75 and `publishes/s` 60 → 0 are
+dropped 0, lag 4; `composes/s` 21.00 → 17.70 and `publishes/s` 60 → 0 are
 the skip working (the compositor's cause census: `scene 176 set 31` →
 `scene 177 set 0` — the 3D's presentation rate is unchanged). The
 diagnostic run reports **0 flat disagreements** over boot → title → field.
+The walk script gives the same picture: **600 skipped, 0 redrawn** while
+walking (the field's movement is in the 3D camera plane, not in the 2D
+layers), drawer 2.70 → **0.89 ms/frame**, core 0 idle 41.1% → 51.9% and
+core 1 idle 6.5% → 8.7% (the compositor shares core 1 with the geometry
+worker: 56 fewer composes a window means less preemption for it). The
+**OFF build agrees** (drawer 2.72 → 0.87 ms/frame, and its own log carries
+the flatskip line): the skip is a behaviour change, not instrumentation.
+The plan's scroll-only follow-up is **not needed** for this scene — there
+are no scroll-only frames.
 
 **One soundness fix, found by reading the wiki's case study of this port:
 the retained VRAM signature was taken *after* the draw.** The tiles are read
@@ -42,9 +51,11 @@ picture up. The signature is now taken **before** the draw, as the legacy
 path does; a draw that captured none keeps no signature. The A0 diagnostic
 build now hashes the referenced range before and after every flat draw and
 counts the passes where the game wrote VRAM in between: the plan's P4
-question. Open: that count (P4 says stop and ask if it is non-zero at
-rest), the walk script's skip rate, the OFF pair, and the single hardware
-run (four packets). Records:
+question — **measured 0, at rest and walking**, so P4's "stop and ask if
+the count is non-zero at rest" does not trigger. Open: the walk A/B's
+`geom_ms` difference (0.8%, reported as a secondary effect of the freed
+core-1 time, not a geometry win), and the single hardware run (four
+packets, staged and manifest-checked). Records:
 [000.md results](agent-notes/2026-11-10-o3ds-000-results.md),
 [P3 claim sheet](../bench/claims/2026-11-10-p3-flat-skip.md),
 [session notes](agent-notes/2026-11-11-session-issues-and-fixes.md).
