@@ -1,14 +1,16 @@
 # Current state
 
 **2026-11-11: P2 closed; P3 (drawer flat-picture skip) implemented and
-measured — the skip does not fire, and the reason is a register that
-changes every pass.** P2c's walk A/B finished (all metrics overlap; the
-mixer never measurably executes in Azahar: `[perf] audio` 0.0 ms / 0
-dropped of 0, no `[sndprof]` line in any log), so P2 is closed: **P2a
-reverted** (the four geometry flags together drop composes 28-33%), **P2b
-reverted** (no front-region BG3 commit exists in either frozen script),
-**P2c deferred pending hardware** (bit-identical on the host, no functional
-regression, but the accept needs the console). No default was flipped.
+measured — the skip fires on 100% of the top passes at rest, and the
+drawer's wall falls 2.69 → 0.88 ms/frame.** P2c's walk A/B finished (all
+metrics overlap; the mixer never measurably executes in Azahar: `[perf]
+audio` 0.0 ms / 0 dropped of 0, no `[sndprof]` line in any log), so P2 is
+closed: **P2a reverted** (the four geometry flags together drop composes
+28-33%), **P2b reverted** (no front-region BG3 commit exists in either
+frozen script), **P2c deferred pending hardware** (bit-identical on the
+host, no functional regression, but the accept needs the console). No
+default was flipped.
+
 P3 landed at `845cae5`: the flat branch of
 `NitroPort_Render2DSplitIfChanged()` keeps the small+layout signature, the
 referenced-range VRAM signature (no full-864 KB-hash fallback) and the
@@ -16,16 +18,33 @@ committed BGs' scroll, and skips the pass when all three match; the
 `refHashDiag` diagnostic compares what the pass publishes against the
 retained picture; the counters (skipped / redrawn / not-modelled /
 disagreements, plus which input differed) are printed as `[perf] flatskip:`
-and parsed by `tools/bench_report.py`. Tool tests: 525 tests with the same
-54 environment failures as the stashed-tree baseline — zero new. Measured
-in Azahar at the field: **0 skipped, 600 redrawn per 600-tick window**, every
-one "why small"; the A0 attribution splits it — the *registers* change on
-every pass while the layout, palettes, OAM and per-line registers are
-stable. The field's top pass is flat as the premise says (`0 lines, 0
-empty, rows 0/0`, `gpubg taken 1200`), so the blocker is one register word,
-not the picture. Open: which word, and therefore whether P3 can be kept
-as the plan specifies; the P3 A/B on both scripts; the diagnostic run; and
-the single hardware run (four packets). Records:
+and parsed by `tools/bench_report.py`. The first measurement was 0 skipped /
+600 redrawn: the A0 attribution said the *registers* change on every pass.
+The register-word diff named the word — `every 0x00000002`, the 0x04-0x07
+block, and the byte mask says VCOUNT's low byte — so **DISPSTAT and VCOUNT
+are now left out of the change-detection hash** (`fc2a19b`): they draw
+nothing, the renderer never reads them, and the per-line registers already
+leave them out for the same reason. Measured after that: **600 skipped, 0
+redrawn per 600-tick window (100%)**, key bytes 7,372,800/115,200 → **0/0**,
+`take` 706 → 0 ms, `flatfill` 122 → 0 ms, drawer 2.69 → **0.88 ms/frame**.
+The A/B (3 × 240 s, frames 9000+): frame ms and geom ms overlap, late 0,
+dropped 0, lag 4; `composes/s` 20.95 → 17.75 and `publishes/s` 60 → 0 are
+the skip working (the compositor's cause census: `scene 176 set 31` →
+`scene 177 set 0` — the 3D's presentation rate is unchanged). The
+diagnostic run reports **0 flat disagreements** over boot → title → field.
+
+**One soundness fix, found by reading the wiki's case study of this port:
+the retained VRAM signature was taken *after* the draw.** The tiles are read
+live (only the registers, palettes and OAM are snapshotted at the
+handover), so a signature taken after the draw can describe tiles the
+picture on screen does not have — the skip would then keep that stale
+picture up. The signature is now taken **before** the draw, as the legacy
+path does; a draw that captured none keeps no signature. The A0 diagnostic
+build now hashes the referenced range before and after every flat draw and
+counts the passes where the game wrote VRAM in between: the plan's P4
+question. Open: that count (P4 says stop and ask if it is non-zero at
+rest), the walk script's skip rate, the OFF pair, and the single hardware
+run (four packets). Records:
 [000.md results](agent-notes/2026-11-10-o3ds-000-results.md),
 [P3 claim sheet](../bench/claims/2026-11-10-p3-flat-skip.md),
 [session notes](agent-notes/2026-11-11-session-issues-and-fixes.md).

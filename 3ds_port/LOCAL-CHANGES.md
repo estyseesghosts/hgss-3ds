@@ -31,12 +31,30 @@ Boundaries, on purpose:
 - The skip needs the same under/over/overAlpha buffers the picture was drawn
   into, like the existing reuse branch.
 - A committed BG whose scroll moved is **not** unchanged: that pass redraws.
+- **DISPSTAT and VCOUNT (0x04-0x07) are left out of the change-detection
+  hash.** They draw nothing (the per-line registers already leave them out
+  for exactly that reason: "they draw nothing, and the V-count is each
+  line's own"), and the renderer never reads them -- but the V-count in the
+  snapshot moves with how much the game did since the V-blank, so hashing it
+  made every frame look changed and the skip never fired. Every other
+  register in the 0x70-byte block is still hashed.
+- **The retained VRAM signature is the one taken before the draw.** The
+  registers, palettes and OAM are snapshotted at the handover, but the tiles
+  are read live: the game's thread writes VRAM while the display thread
+  draws. A signature taken *after* the draw can describe tiles the picture
+  on screen does not contain, and the skip would then keep that stale
+  picture up. A draw that captured no pre-draw signature (the legacy path's)
+  keeps no signature at all: the next pass redraws once and captures its
+  own.
 - The skip is in both builds: it is a behaviour change, not instrumentation
   (the OFF build is the timing build).
 - The diagnostic (`refHashDiag`) always runs the pass and compares what it
   published with what the last flat pass published (quad count, quad
   contents, slot keys, backdrop, has3d, scroll3d, tint3d, eva/evb/evy, flat
   flag); any disagreement is counted and logged.
+- The A0 diagnostic build also hashes the referenced range before and after
+  each flat draw and counts the passes where the game wrote VRAM in
+  between: the live-VRAM race, the plan's P4 question.
 
 `NitroPort_Render2DFlatStats()` exposes the counters (skipped, redrawn,
 not-modelled, disagreements, and which input differed when a pass did not

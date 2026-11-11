@@ -13,6 +13,8 @@ the shape faster. The previous session's issues are in
 | 22 | New diagnostic code compared a pointer with a byte | `((const u8 *)sFlatLastRegs)[b]`; caught by the check from issue 21 |
 | 23 | A run manifest said `dirty` although the artifact was byte-identical to a clean one | Read the artifact's SHA-256 in the manifest: `dirty` describes the tree, not the build |
 | 24 | The first P3 measurement was "0 skipped", with no way to say why | Per-reason counters in the first implementation, plus the A0 redraw attribution that already existed |
+| 25 | The skip still did not fire: one register word changes on every pass | A register-word diff (the AND over the per-pass masks) named it: VCOUNT. It draws nothing, so it is left out of the hash — proved, not assumed |
+| 26 | The retained VRAM signature was taken *after* the draw, so the skip could certify a stale picture | The signature is now taken before the draw (as the legacy path does); the race is measured (P4's question) |
 
 ## 1. A multi-line command stops after its first statement
 
@@ -105,6 +107,60 @@ with one A0-only line of new code.
 says "no, and this is why" is. When a packet's accept is "the path fires",
 the counters that decide it have to name the blocker.
 
+## 6. A register that changes every pass: name the word, then prove it
+
+**Symptom.** After issue 25's fix the skip still did not fire — still "why
+small" on every pass, but now the *same* word every time.
+
+**Fix.** A diagnostic that compares the register block of this pass with the
+one the last flat render used, keeping the **AND** over the per-pass masks
+(the words that differ on *every* pass, not the OR over all of them):
+
+```
+[a0] flat regdiff: 15858 passes, word mask 0x01000083, bytes0-7 0x42, VRAMCNT 0, POWCNT1 0, every 0x00000002, dispcnt1 0x07 (was 0x07)
+```
+
+`every 0x00000002` is word 1 alone — the 0x04-0x07 block — and the byte
+mask says the high byte of DISPSTAT never changes, so it is VCOUNT's low
+byte: the beam counter, whose value in the snapshot moves with how much the
+game did since the V-blank.
+
+**Rule.** The OR over the per-pass masks answers "which words ever differ";
+the AND answers "which word always differs". The first is a list to read;
+the second is the answer. And a register that always differs is a *claim*
+that needs proof before it can be left out of a hash — not a licence to
+mask it. The proof for DISPSTAT/VCOUNT: they draw nothing (the port's own
+per-line registers leave them out for exactly that reason), the renderer
+never reads them (`grep` finds only the masking lines), and nothing else
+depends on them. The wiki's case study of this port says it plainly: "Do
+not mask a changing register merely to increase hits: first prove which
+pixels, metadata and future states depend on it."
+
+## 7. A signature taken after the draw certifies a picture that is not there
+
+**Symptom.** None — this one was found by reading, not by a failure. The
+wiki's case study of this port lists it as an open question ("A signature
+may cover the right bytes but race a writer between hashing and rendering"),
+and the plan's P4 packet asks for the measurement. Reading the code
+confirmed it: `RememberSplit()` runs at the *end* of the draw, so the VRAM
+signature `FlatStore()` kept described the tiles as they were *after* the
+picture was drawn. The game writes tiles from its own thread while the
+display thread draws (only the registers, palettes and OAM are taken at the
+handover), so a write landing in that window made the stored signature
+newer than the picture: the next pass's fresh signature equalled it, the
+skip fired, and the stale picture stayed up until the game's next write.
+
+**Fix.** The referenced-range signature is now taken **before** the draw, in
+the flat branch, and that one value is both what the skip compares and what
+the draw retains. The legacy path already did this (`last[e].vram = vram;`
+then `Render(...)`), which is why the bug was P3's alone.
+
+**Rule.** When a signature stands in for "the picture is the same", it must
+be taken at a time that is *not newer* than the picture. A hash taken
+after the work is a hash of the future. Ask of every retained signature:
+"does this describe the state the pixels on the screen came from?" — and if
+it does not, take it earlier.
+
 ## What went right (keep doing)
 
 - **The premise was checked before the change.** The field's top pass really
@@ -123,3 +179,15 @@ the counters that decide it have to name the blocker.
   result (every metric overlapping, the mixer never measurably executing in
   the emulator) is recorded as a *deferred* verdict, not as a pass or a
   failure.
+- **The wiki was read for the code, not for the report.** The case study of
+  this port names the live-VRAM race as an open question for this project;
+  reading the code against that sentence found the stale-picture bug in the
+  new skip before it was ever measured. The owner's "read the wiki" rule
+  (`AGENTS.md`) earns its keep here.
+- **The A/B's own counters were explained instead of waved away.** The table
+  said "base better" for `composes/s` and `publishes/s`, which looked like a
+  regression. The compositor's cause census (`cause scene 176 set 31` vs
+  `cause scene 177 set 0`) showed the falling numbers were the set-driven
+  composes — the ones that existed only because the 2D kept changing. The
+  scene-driven rate (the 3D being presented) was unchanged. A number that
+  falls is either a win or a loss; the cause counters say which.
