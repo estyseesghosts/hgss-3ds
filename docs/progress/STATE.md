@@ -1,5 +1,24 @@
 # Current state
 
+**2026-11-11 (later): P5 measured — no code change needed; the cause was
+already removed by P3.** The plan's premise ("about 51 of 123 composes per
+window have no new scene yet clear the target and re-record the whole 3D")
+is visible in the base's publish profile — `publish-A: calls 600 reuse 600`:
+every publication took the unchanged fast path and still marked the layer
+set as new. With P3 the drawer publishes nothing at all, so the composes
+with no content change are **0 per window**, in both scripts, in all six
+trials (the base: 26-34 at rest, 41-48 walking). The remaining
+set-driven composes are *real* changes (the menu 69 in its window, the
+title screen 200, the fade-in 83) and are left alone, as the plan says.
+`end` is the **queue submit** (89-92% of it in Azahar, 64% on the console;
+xfer/flight/lock ≈ 0) — the plan's instruction for that case is "report it
+and stop". The accept: composes with no content change are zero at rest
+✅, a fade and the pause menu present on time (late 0, dropped 0; the
+fade's two late composes are identical in both arms) ✅, built scenes/s does
+not fall (30.0 → 30.1) ✅. A field *text box* could not be scripted (the
+signpost answers neither A nor being walked into; only X opens anything),
+and it would be on the touch screen, which the skip does not touch.
+
 **2026-11-11: P2 closed; P3 (drawer flat-picture skip) implemented and
 measured — the skip fires on 100% of the top passes at rest, and the
 drawer's wall falls 2.69 → 0.88 ms/frame.** P2c's walk A/B finished (all
