@@ -19,6 +19,11 @@ it. The point is the next session recognising the shape faster.
 | 12 | The `py` launcher follows the script shebang to MSYS Python | Invoke `C:\Program Files\Python315\python.exe` explicitly |
 | 13 | Windows Python resolves `DEVKITARM=/opt/...` to `C:\opt\...` | Export `DEVKITPRO`/`DEVKITARM` in `C:\` form for the build |
 | 14 | 3 lobby/pokewalker objects fail: objcopy/readelf must be on PATH | Prepend `devkitARM/bin` to `PATH` |
+| 15 | A campaign-kept flag bundle fails its own A/B (P2a revert) | Re-verify inherited flags; revert as a bundle, record it |
+| 16 | A counter double-counts its own sub-part (take ⊃ flatfill) | Define partition boundaries before summing; disjoint timers |
+| 17 | Hardware logs attributed without checking the banner | Grep every log's runtime banner; key findings by file+console |
+| 18 | 96 missing-header failures with identical flags | Print the compiler's `-E -v` search list first |
+| 19 | Baseline artifacts overwritten by later rebuilds | Fresh `--out` dirs per experiment; stage packets promptly |
 
 ## 1. No git identity
 
@@ -161,3 +166,98 @@ files needing object aliasing reach that step, so the failure is a confusing
 **Rule.** Prepend `C:\devkitPro\devkitARM\bin` to `PATH` in every build shell.
 Full recipe: explicit Windows Python + `C:\`-form `DEVKITPRO`/`DEVKITARM` +
 `devkitARM/bin` on `PATH`.
+
+## 15. A campaign-kept flag bundle that fails its own A/B
+
+**Symptom.** Four geometry flags the Azahar campaign kept (`LISTCACHE`,
+`STATEDEDUP`, `FUSEHASH`, `LAZYINSERT`) drop composes 28–33% when enabled
+together: built scenes 176 → 150 per window, ms/built 46 → 52.5.
+
+**Cause.** The flags engage correctly (9,238 list-cache hits, audits clean,
+zero fuse mismatches), but their per-scene bookkeeping (tags, audits,
+census, lazy filter, evict traffic) pushes the saturated geometry worker over
+the skip cliff: fewer scenes built, fewer composes. "Kept by the campaign"
+describes the campaign's scene and binaries, not a guarantee — the plan's
+accept (per-built-scene work falls) is the verdict, and it failed.
+
+**Rule.** Re-verify inherited flags with a matched A/B before flipping any
+default; a bundle that fails reverts as a bundle (no per-flag fishing when
+the packet scoped the bundle). Record kept-but-failing explicitly — negative
+results are deliverables (P2a claim sheet).
+
+## 16. A counter that double-counts its own sub-part
+
+**Symptom.** Top-pass parts summed to 112% of the drawer wall — over 100%,
+which is impossible for same-clock active-vs-wall accounting.
+
+**Cause.** `takeTicks` spans take-evaluation through commit, which *includes*
+the two flat-plane fills that `flatFillTicks` also measures, plus the SortObjs
+time already counted in `objTicks`. Summing take + flatfill + obj counts the
+same ticks two or three times.
+
+**Rule.** Define partition boundaries before claiming closure: take *includes*
+flatfill and SortObjs, so the honest sum is parts + take (not parts + take +
+flatfill). Prefer disjoint timers by construction (stop the take clock around
+the fills); where overlap is structural, subtract and document it. The
+corrected sum closed at ~97% of wall.
+
+## 17. Attributing logs to hardware without checking the banner
+
+**Symptom.** Two fresh hardware logs were assumed to be the Old 3DS pair the
+packets were staged for — until the owner pointed out New 3DS runs existed
+and the folder also held old SoulSilver N3DS logs with a similar shape.
+
+**Cause.** The build banner (`Old 3DS: 268 MHz` vs `New 3DS: 804 MHz`) is a
+*runtime* detection (`main_3ds.c`, `isNew3ds`), but it was read once and then
+assumed for every file in the folder. Filenames date from the console clock
+(which is unset) and the rotation name comes from the *current* boot, not the
+log's contents — neither identifies the console.
+
+**Rule.** Grep every new log for its banner line before any analysis, and
+report findings keyed by file+build+console. Do not infer the console from
+speed alone (an Old 3DS build on New 3DS hardware is still the Old 3DS
+configuration).
+
+## 18. Proving a dropped include dir with `-E -v`
+
+**Symptom.** 96 game sources failed with missing `dwc/` headers under MSYS
+Python while 996 compiled fine with identical flags.
+
+**Cause.** The mingw gcc silently drops an `-idirafter /home/...` directory
+(POSIX form untranslated); `-E -v` prints the *resolved* search list, where
+the directory is simply absent, while the `C:/` form appears and
+preprocesses cleanly.
+
+**Rule.** When a header is present but unfound, print the compiler's resolved
+search list before theorizing about flags — it distinguishes a bad path from
+a dropped one in one step.
+
+## 19. Baselines that evaporate under rebuilds
+
+**Symptom.** The P0 baseline `.3dsx` files (referenced by manifests and trial
+logs) were overwritten by later builds into the same `--out` directories.
+
+**Cause.** Rebuilding in place destroys the artifact the evidence points to.
+Manifests pin SHAs, but the bytes were gone; only the logs survived.
+
+**Rule.** Treat a built baseline artifact as read-only: fresh `--out`
+directories per experiment (`build/game-3ds-p2{a,b,c}`), and stage packets
+(`stage_bench.py` + manifest + `--check-manifest`) promptly after the build
+that produced them. Never rebuild into a directory whose artifact is cited
+anywhere.
+
+## What went right (keep doing)
+
+- **Claim sheet before code** (P1, P2a/b/c, P3): writing the hypothesis,
+  acceptance bars and revert triggers first kept every packet to one question
+  and made the P2a revert a one-line verdict instead of an investigation.
+- **Stashed-tree baselines**: tool-test failures were judged against a stashed
+  run, not the raw count — zero mine-only failures, proven, in one diff.
+- **Mechanical accepts**: `p1check.py` turned "sums close" from eyeballing
+  into 11/11, 9/9, 8/8 assertions (and caught the take⊃flatfill double count
+  when the wall ratio came out impossible).
+- **Artifact identity**: manifests pinning artifact/save/script/ini SHAs plus
+  `--check-manifest` meant the line-ending normalization, the dirty-tree stop
+  and the log-rotation confusion were all decidable from hashes, not memory.
+- **Negative results as deliverables**: P2a's revert and the open hardware
+  questions went into the record with the same care as the wins.
