@@ -298,21 +298,26 @@ artifact is cropped when it is saved.
 the screen; it must not *take* it. Never activate a window to look at it,
 and never take the whole screen for a windowed app.
 
-## 13. A START press that does nothing (open, not fixed)
+## 13. A START press that does nothing — not a defect after all
 
-**Symptom.** A scripted START at frame 14000 — the pause menu — changed no
-counter at all: the OAM counts, the 2D counters and the drawer's "drawn"
-count are identical at 13800 and 14400, and the capture at frame 27000
-still shows the field.
+**Symptom.** A scripted START at frame 14000 changed no counter at all:
+the OAM counts, the 2D counters and the drawer's "drawn" count are
+identical at 13800 and 14400, and the capture at frame 27000 still shows
+the field. It looked like a broken input path.
 
-**What is known.** The presses *do* reach the game: the title screen is
-drawn every frame through frame 8400 and the field is up by 9000, exactly
-after the scripted A presses at 8000-8049. So the injection path works.
-Either HGSS does not open its menu with START, or the port's START needs
-something else (a longer hold, a release edge, the game's own key
-mapping).
+**Resolution.** The owner: *the game does not use START for any menus, it
+uses X.* So the menu did not open because START is not the menu button in
+this game — the measurement was right and my expectation was wrong. The
+input path is fine, and the proof stands: the title screen is drawn every
+frame through frame 8400 and the field is up by 9000, exactly after the
+scripted A presses at 8000-8049.
 
-**Status.** Open, and not needed for P3. Recorded rather than guessed at.
+**Rule.** "The scripted press did nothing" has three possible causes —
+the input path is broken, the button is not the one the game listens for,
+or the game ignores it in that state — and the cheap way to tell them
+apart is to ask what the game *does* use. (And to check the effect the
+press was supposed to have: a press with no effect cannot be told apart
+from a press that was never delivered.)
 
 ## Wiki feedback (what the coffeepot wiki still lacks, from this session)
 
