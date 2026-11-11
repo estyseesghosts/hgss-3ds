@@ -1,0 +1,45 @@
+# HeartGold: cold boot with a save -> CONTINUE -> Goldenrod field, then walk
+# UP into the signpost the player stands under, which opens the sign's
+# text box, and press A to dismiss it.
+#
+# The player is directly below the sign (see the captures), so holding UP
+# walks into it. The text box is up from about frame 12050 until the A
+# press at 13500; the captures are at 11400 (the field), 12600 and 13200
+# (the text box) and 13800 (the field again).
+every: 10
+0 -
+5000 START
+5010 START
+5020 START
+5030 START
+5040 START
+5050 START
+5060 START
+5070 START
+5080 START
+5090 START
+5100 START
+5110 START
+5120 START
+5130 START
+5140 START
+5150 START
+8000 A
+8020 A
+8040 A
+12000 UP
+12010 UP
+12020 UP
+12030 UP
+12040 UP
+12050 UP
+12100 UP
+12110 UP
+12120 UP
+12130 UP
+12140 UP
+12150 UP
+12200 UP
+12210 UP
+13500 A
+end: 15000

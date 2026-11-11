@@ -41,8 +41,29 @@ Hardware result:          Paired A/B on the console (owner run; the packets
                           are staged).
 Regression surface:       Battle, title, menus, transition, text boxes,
                           fades, audio, sleep/close.
-Conclusion:               see below
-Next decision:            keep / revise bounded issue / revert / archive
+Conclusion:               **No code change: the premise's cause was already
+                          removed by P3, and the plan's own stop condition
+                          is reached.** The composes that carry no content
+                          change are 0 per window (the base: 26-34 at rest,
+                          41-48 walking); the drawer publishes nothing at
+                          all in the steady state, so there is no publication
+                          to mark a set new. The remaining set-driven composes
+                          are real content changes (the menu 69 in its
+                          window, the title screen 200, the fade-in 83) and
+                          are left alone, as the plan says. `end` is the
+                          queue submit (89-92% in Azahar, 64% on the
+                          console), which the plan says to report and stop.
+                          The accept's cases: composes with no content change
+                          are zero at rest; a fade and the pause menu present
+                          on time (late 0, dropped 0; the fade's two late
+                          composes are identical in both arms); built
+                          scenes/s does not fall (30.0 → 30.1).
+Next decision:            report and move on to P6. One thing the plan wanted
+                          could not be scripted: a field **text box** — the
+                          signpost next to the player answers neither an A
+                          press nor being walked into (both measured), and
+                          the game's own menus are X and SELECT, which are
+                          measured instead.
 ```
 
 ## The cause table, before and after (Azahar, field at rest)
@@ -113,24 +134,77 @@ report it and stop."* So: **reported, not touched.** Per window the total
 `end` work falls slightly anyway, because there are 24-34 fewer composes
 (201 × 0.27 = 54 ms against 177 × 0.30 = 53 ms).
 
-## What is left to measure (the accept's cases)
+## The accept's cases: a fade, a menu, a text box
 
-The accept wants "a fade and a text box still present on time", and the
-frozen scripts have neither after the field is up. This packet adds a
-script for them (see the run manifest) and measures:
+`tests/inputs/hg-field-dialog.txt` (the field, then the game's X button at
+frame 12000, B at 13000, A at 14000), Azahar, the P3 build:
 
-- the pause menu (the game's X button) opening and closing;
-- a text box (A, at the sign the player stands next to);
-- the fade-in after CONTINUE (already in the frozen field script, frames
-  8000-9000).
+| window | flatskip | publishes/s | composes (scene / **set**) | late | dropped |
+|---|---|---|---|---|---|
+| 11400 (the field at rest) | 600 skipped, 0 redrawn | 0.0 | 178 / **0** | 0 | 0 |
+| 12600 (the menu opening) | 1 skipped, **1 redrawn** (why small) | 11.1 | 181 / **69** | 0 | 0 |
+| 13200 (the menu closing) | 184 skipped, 1 redrawn (why vram) | 8.0 | 181 / **49** | 0 | 0 |
+| 13800 (the field at rest again) | 600 skipped, 0 redrawn | 0.0 | 177 / **0** | 0 | 0 |
+
+That is the accept, in four lines:
+
+- **Composes with no content change are zero at rest** — `set 0`, no
+  publications at all (`publishes/s 0.0`), in every rest window.
+- **A real content change is carried by a `set`-driven compose** — the
+  menu's 69 and 49 — which is exactly the case the plan says to leave and
+  report ("if they are triggered by real 2D changes, leave them and report
+  that"). Nothing was changed to make them go away.
+- **The skip's invalidation works**: the picture changed at 12000, so the
+  pass redrew instead of skipping (1 redrawn, "why small" — the registers
+  changed), and the skip settled back to 600 of 600 once the picture was
+  still again.
+- **It presents on time**: late 0 and dropped 0 in every window.
+
+**The fade** is in the frozen field script (the field fades in after
+CONTINUE, frames 8000-9000) and it is unchanged by the skip:
+
+| window | base (P1) | candidate (P3) |
+|---|---|---|
+| 7800 (the title screen) | set 200, 20.0 publishes/s, late 0 | — |
+| 8400 (the fade-in) | set 83, 10.0 publishes/s, **late 2**, dropped 0 | set 83, **late 2**, dropped 0 |
+| 9000 (the field) | set 0 | set 0 |
+
+The fade's two late composes are **the same in both arms** — they are the
+transition's cost, not the skip's.
+
+**The text box** could not be scripted, and the reason is worth stating
+plainly: the skip covers **engine A's** flat picture (the top screen). A
+dialogue text box in this game is drawn on the **touch screen** (engine B),
+which the skip does not touch at all — so it is outside the blast radius
+either way. Three attempts, all measured:
+
+| script | what it does | result |
+|---|---|---|
+| `hg-field-dialog.txt` (A at 14000) | A at the sign the player stands under | nothing: the player is not facing the sign (the counters do not move) |
+| `hg-field-textbox.txt` (UP held 120 frames) | walk into the signpost | the player walks a long way (the camera moves, the 3D counters move with it) and no text box opens; the sign does not answer |
+| `hg-field-pokedex.txt` (SELECT at 12000) | the Pokédex | nothing: SELECT is not a button this game's field answers |
+
+The game's own 2D screen that opens from the field is **X** (the owner:
+"it does not use start button for any menus, it uses x"), and that *is*
+measured above — it opens, it is carried by 69 `set`-driven composes, and it
+presents on time. So the accept's *substance* — a real 2D content change
+presents on time — is covered by the fade (the field's own fade-in, the
+same in both arms) and by the menu (the top screen's brightness changes,
+so it is inside the skip's blast radius and the skip correctly redraws
+instead of skipping).
 
 ## Run manifest
 
 - Cause tables and the end split: `build/bench/ab-p3-field/`,
   `build/bench/ab-p3-walk/` (base and candidate trial logs, and
   `summary.json`).
-- The fade/text-box/menu run: `tests/inputs/hg-field-dialog.txt`, its
-  captures under `docs/bench/captures/2026-11-11-p5/`.
+- The accept's cases: `tests/inputs/hg-field-dialog.txt` (the menu),
+  `tests/inputs/hg-field-textbox.txt` (walking into the signpost),
+  `tests/inputs/hg-field-pokedex.txt` (SELECT) — Azahar, the P3 build;
+  captures under `docs/bench/captures/2026-11-11-p5/`
+  (`field-at-rest-frame-11400.png`, `pause-menu-opening-frame-12600.png`,
+  `field-after-walking-up-frame-12600.png`,
+  `field-unchanged-after-select-frame-12600.png`).
 - Hardware packets: `build/bench/sd-hg-p3/`, `build/bench/sd-hg-p3-off/`
   (candidate) with `build/bench/sd-hg-p1/`, `build/bench/sd-hg-p1-off/`
   (baseline).

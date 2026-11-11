@@ -1,0 +1,30 @@
+# HeartGold: cold boot with a save -> CONTINUE -> Goldenrod field, then open
+# the game's other 2D screen (SELECT: the Pokedex), and close it with B.
+#
+# The signpost next to the player did not answer an A press or being walked
+# into, so this script uses the game's own text-heavy screen instead: the
+# accept wants a real 2D content change to present on time.
+every: 10
+0 -
+5000 START
+5010 START
+5020 START
+5030 START
+5040 START
+5050 START
+5060 START
+5070 START
+5080 START
+5090 START
+5100 START
+5110 START
+5120 START
+5130 START
+5140 START
+5150 START
+8000 A
+8020 A
+8040 A
+12000 SELECT
+13500 B
+end: 15000
