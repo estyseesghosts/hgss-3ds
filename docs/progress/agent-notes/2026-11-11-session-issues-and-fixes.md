@@ -161,8 +161,44 @@ after the work is a hash of the future. Ask of every retained signature:
 "does this describe the state the pixels on the screen came from?" — and if
 it does not, take it earlier.
 
-## What went right (keep doing)
+## Wiki feedback (what the coffeepot wiki still lacks, from this session)
 
+The wiki's CTR section was re-read after the owner's new commits (`30f8c93`,
+`9582a97`, `56a8dc7`, `869bb68`) and the new material agrees with P3: the
+"worked invalidation and scanline plan" (2D rendering) asks for exactly what
+P3 does — key the cache by content, invalidate conservatively, keep the
+software path as the oracle — and the testing page's "record attempts,
+successful takes, rejection reasons and work removed" is the discipline the
+flatskip counters follow.
+
+Three things the wiki could take from this session:
+
+1. **The pre-draw-hash rule.** The case study of this port lists the
+   live-VRAM race as an open question ("the notes do not establish its
+   frequency or a safe general fix"). Both are now answered: the frequency
+   is **0** (3 draws hashed before and after, 0 writes landed in between, at
+   rest and walking), and the general fix is an ordering rule: *a signature
+   that stands in for "the picture is unchanged" must be taken no later than
+   the draw, never after it* — a hash taken after the work describes the
+   future, can match the next pass's fresh hash, and then certifies a
+   picture that is one write behind. The same rule applies to any DS port:
+   the tiles are written by the game's thread while a renderer reads them.
+2. **A register block that contains a counter or a status flag cannot be
+   hashed whole.** The DS's DISPSTAT/VCOUNT (and the 3DS's equivalents) hold
+   values that depend on *when* they are read, not on what was drawn; hashing
+   them makes every frame look changed. Hash only the registers that
+   describe the drawing, and prove the rest is never read (this port's
+   per-line registers already exclude 0x04-0x07 for that reason). The wiki's
+   2D page says this about textures ("key every cached texture by tile data
+   and effective palette"); the same rule for the *register block* is not
+   stated anywhere.
+3. **The case study's P3 entry is now stale.** It says the changing
+   register's significance and the race's frequency "remain open". The
+   register was VCOUNT, its significance is "none — it draws nothing", the
+   skip now fires on 100% of the top passes at rest, and the race count is
+   0. The hardware gain is still open (the run is pending).
+
+## What went right (keep doing)
 - **The premise was checked before the change.** The field's top pass really
   is flat (`0 lines, 0 empty, 0 blend, rows 0/0`, `gpubg taken 1200`,
   `region 0/600`), so "the skip does not fire" means the blocker is
@@ -191,3 +227,12 @@ it does not, take it earlier.
   composes — the ones that existed only because the 2D kept changing. The
   scene-driven rate (the 3D being presented) was unchanged. A number that
   falls is either a win or a loss; the cause counters say which.
+- **The wiki was re-read when it grew, and the new text was checked against
+  the code.** The owner's new commits (a `case-studies/` split, the
+  "worked invalidation and scanline plan" section in the 2D page, the
+  "attempted / admitted / presented" capture discipline in the testing
+  page) agree with what P3 does; the one place the wiki is now out of date
+  is the P3 entry in the case study, which still says the changing register
+  and the race's frequency are open. Both are answered now — the register
+  was VCOUNT and the race count is 0 — and that is the wiki feedback to
+  hand back.
