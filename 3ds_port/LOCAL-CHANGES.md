@@ -4,6 +4,38 @@
 at the commit in `platinum.lock` (GPL-3.0). Everything here is Platinum's
 except the changes below.
 
+## 6. The H-blank walk's line compare (`nitro/src/port_os.c`)
+
+Added 2026-11-11 from the Old-3DS hardware logs: the emulated H-blank walk
+took 2.6 ms of the game's 2.8 ms of active frame time on an Old 3DS, and
+0.77 ms of it was a pass over all 192 lines' register blocks *after* the
+walk, to answer one question: do any two lines differ?
+
+That pass read the whole 43 KB array back from RAM (the array is larger
+than the 16 KB L1) and compared 112 bytes per line with `memcmp` — 384
+byte-at-a-time comparisons, about 330 ARM11 cycles each.
+
+The comparison now happens as each line is kept, against the line before
+it: the line before's copy is still in cache, and the compare is a word at
+a time. "Some line differs from the first" and "some line differs from the
+one before it" are the same question, because the array is a sequence.
+
+Boundaries, on purpose:
+
+- **The register array is unchanged**: the same `KeepLine()` calls, in the
+  same order, so the renderer reads exactly what it read before.
+- **The compare stops at the first difference**, as the old scan did.
+- The word at 0x04 (DISPSTAT and VCOUNT) is skipped: it is zeroed in
+  every copy, so it never differs.
+- The A0 diagnostic build computes both answers on every walk and counts
+  the disagreements (must be none).
+
+What this does **not** do: the per-line copy itself (0.48 ms on an Old
+3DS) is still made for every line, whether the scene needs it or not.
+Skipping it needs a different representation (the distinct states in a
+small table plus a per-line index), which touches the renderer and the
+display-state snapshot: a separate claim sheet.
+
 ## 5. Flat-picture skip (`nitro/src/port_render2d.c`)
 
 Added 2026-11-10 from the Old-3DS hardware logs (the drawer's top pass was

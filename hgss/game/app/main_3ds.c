@@ -139,6 +139,11 @@ void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq);
 /* P1: the H-blank parts outside keep/dma/irq (port_os.c). */
 void NitroPort_HBlankSplit2(u64 *refresh, u64 *sw, u64 *cmp);
 #endif
+#ifdef HGSS_A0_DIAG
+/* P6: the walks where the fused per-line compare and the old scan over all
+ * the lines were compared, and the ones where they differed (port_os.c). */
+void NitroPort_HBlankScanCheck(u64 *walks, u64 *mismatch);
+#endif
 /* Slice S4: H-blank attribution counters (3ds_port/nitro, diagnostics only).
  * The walk's interrupt handlers, one entry per IRQ bit (layout mirrors
  * nitro_port.h's NitroPortIrqTime, which this file cannot include next to
