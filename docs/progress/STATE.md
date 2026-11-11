@@ -1,5 +1,28 @@
 # Current state
 
+**2026-11-10 (later): 000.md packets P0–P1 done in Azahar; hardware run pending.**
+P0 baseline rebuilt clean at `59603bc` (PROFILE `8a982f70…` / OFF `a5e5a0a5…`,
+default flags): Goldenrod at rest 20–21 composes/s, 60 publishes/s, drawer
+2.7 ms, geometry ~30.6 ms/scene in Azahar shape; trial spread ±3.5%.
+P1 instrumentation landed (same commit): built-vs-skipped geometry split,
+idle % per core, game-thread accounting, drawer drop/latency counters,
+top-pass tick splits + map/tile byte counters, compose causes + end-phase
+split, H-blank refresh/switch/compare split, 2x2 boot-string fix, and
+`bench_report.py` coverage with 11 new tests. Azahar A/B (both scripts):
+PROFILE vs OFF overlap everywhere (cost ≈ 0 ±1%, under the 3% bar); every
+sample closes built+skipped==done and causes==draws; top-pass parts reach
+~95% of the drawer wall. Counts, code and claim sheets:
+[000.md](../../000.md),
+[results](agent-notes/2026-11-10-o3ds-000-results.md),
+[P1 claim](bench/claims/2026-11-10-p1-instrumentation.md).
+Correction, per 000.md §1: geometry builds about **6 scenes/s** on the Old 3DS
+(log-0: ~73 built per window), not 27 — the old denominator counted skipped
+scenes too, and the new `built N (ms/built)` field prices built scenes alone
+(~46 ms vs ~31 ms blended in Azahar shape). Open: the single hardware run
+(four packets: PROFILE+OFF at `59603bc` plus PROFILE+OFF baselines), the
+PROFILE-vs-OFF hardware cost, all P3–P8 packets, and pixel captures at fixed
+script frames (no Windows RPC screenshot client exists).
+
 **2026-11-10: first Old 3DS hardware baseline of the remaster path; one
 claim corrected.** Two matched Goldenrod runs (`hgss-private/log-0`,
 `b3024a0` / `b3024a0-profoff`, same save/script/ini) measure 8.6-9.8
