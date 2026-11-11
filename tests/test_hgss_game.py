@@ -2911,17 +2911,41 @@ class FlatSkipTests(unittest.TestCase):
 
     def test_flat_branch_needs_both_signatures(self):
         text, branch = self.branch()
-        self.assertIn("FlatUnchanged(engine, split, &why)", branch)
+        self.assertIn("FlatUnchanged(engine, split, &why, vramKnown, vramNow)", branch)
         self.assertIn("FLAT_COUNT_ADD(sFlatSkip[e]);", branch)
         # Every other case renders as before.
         self.assertIn("Render(engine, under, split, R2D_TRY_FLAT);", branch)
+        # The branch computes the VRAM signature it compares with.
+        self.assertIn("FlatVramSignature(engine, split, &vramNow)", branch)
         unchanged = text[text.index("static int FlatUnchanged("):
                          text.index("static int FlatMetaDiffers(")]
-        self.assertIn("EngineReferencedOnly(", unchanged)
         self.assertIn("EngineSmallSignature(", unchanged)
+        # The referenced-range hash is the one the helper computes: the
+        # referenced range only, never the whole 864 KB.
+        helper = text[text.index("static int FlatVramSignature("):
+                      text.index("static void FlatStore(")]
+        self.assertIn("EngineReferencedOnly(", helper)
+        self.assertNotIn("EngineFullVramSignature", helper)
         # A scrolled committed BG is a new picture: the scroll is checked
         # on its own, not folded into the signatures.
         self.assertIn("Rd32(io, 0x10 + bg * 4) != f->scroll[bg]", unchanged)
+
+    def test_the_retained_signature_is_the_one_taken_before_the_draw(self):
+        """The game writes VRAM from its own thread while this thread draws
+        (only the registers, palettes and OAM are taken at the handover), so
+        a signature taken *after* the draw can describe tiles the picture on
+        screen does not have: the skip would then keep that stale picture
+        up. The retained signature must be the one taken before."""
+        text = (self.NITRO / "port_render2d.c").read_text()
+        _, branch = self.branch()
+        self.assertLess(branch.index("FlatVramSignature(engine, split, &vramNow)"),
+                        branch.index("Render(engine, under, split, R2D_TRY_FLAT);"))
+        # The store keeps that value and does not hash VRAM again: a hash
+        # there would be taken after the draw.
+        store = text[text.index("static void FlatStore("):
+                     text.index("static int FlatUnchanged(")]
+        self.assertIn("sFlatVramSig[e]", store)
+        self.assertNotIn("EngineReferencedOnly(", store)
 
     def test_referenced_signature_has_no_full_hash_fallback(self):
         text = (self.NITRO / "port_render2d.c").read_text()

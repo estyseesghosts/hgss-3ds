@@ -208,6 +208,10 @@ typedef struct NitroRedrawStats {
     uint64_t layoutChanged, regsChanged, paletteChanged, oamChanged, miscChanged;
     uint64_t vramChanged, unchanged;
     uint64_t vramBytes, scanlines, smallBytes;
+    /* P3: the flat draws whose VRAM was compared before and after the draw
+     * (flatRaceDraws), and how many of those saw the game's own write
+     * land in between (flatRaceChanges): the live-VRAM race. */
+    uint64_t flatRaceDraws, flatRaceChanges;
 } NitroRedrawStats;
 void NitroPort_Render2DRedrawStats(int engine, NitroRedrawStats *out);
 #endif

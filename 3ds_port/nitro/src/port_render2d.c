@@ -7851,22 +7851,57 @@ void NitroPort_Render2DFlatRegEvery(uint32_t *every, unsigned *byte1Or,
 }
 #endif
 
+/* P3: the VRAM signature a flat picture is retained with, and whether it is
+ * one that was taken *before* the draw that produced the picture.
+ *
+ * The order matters. The game writes VRAM from its own thread while the
+ * display thread draws: only the registers, the palettes and the OAM are
+ * taken at the handover (NitroPort_Render2DTakeState), not the tiles. A
+ * signature taken *after* a draw can therefore describe tiles that the
+ * picture on screen does not have, and the skip would then keep that stale
+ * picture up until the game's next write. The legacy path stores its
+ * pre-draw hash for the same reason (the VRAM branch of
+ * NitroPort_Render2DSplitIfChanged: the hash is taken before the draw and
+ * kept). */
+static u32 sFlatVramSig[2];
+static int sFlatVramSigValid[2];
+
+/* The referenced-range VRAM signature (P3): the ranges the picture really
+ * reads, not the whole 864 KB. */
+static int FlatVramSignature(int engine, const NitroRender2DSplit *split, u32 *out)
+{
+    int e = engine ? 1 : 0;
+    const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
+    const u8 *oam = split->snapshot ? sState[e].oam : NitroPort_Oam;
+    u32 vram = 0;
+
+    if (!EngineReferencedOnly(e, io + (e ? 0x1000 : 0), oam, &vram)) {
+        return 0;
+    }
+    *out = vram;
+    return 1;
+}
+
 static void FlatStore(int engine, u32 layout, int snapshot, u32 mask)
 {
     int e = engine ? 1 : 0;
     FlatReuse *f = &sFlatReuse[e];
     const u8 *io = snapshot ? sState[e].io : NitroPort_IoReg;
-    const u8 *oam = snapshot ? sState[e].oam : NitroPort_Oam;
-    u32 vram = 0;
     int bg;
 
     f->valid = 1;
     f->mask = mask;
     f->small = (EngineSmallSignature(e, snapshot, mask, 0, 0) * 31u) ^ layout;
-    f->vramValid = sRefHashA &&
-                   EngineReferencedOnly(e, io + (e ? 0x1000 : 0), oam, &vram);
-    if (f->vramValid) {
-        f->vram = vram;
+    /* P3: the retained VRAM signature is the pre-draw one (see
+     * sFlatVramSig). A draw that captured none (the legacy path's draws)
+     * keeps no signature: the next pass redraws once and captures its own.
+     * Hashing here instead would be after the draw, which is the race the
+     * pre-draw hash exists to avoid. */
+    if (sFlatVramSigValid[e]) {
+        f->vram = sFlatVramSig[e];
+        f->vramValid = 1;
+    } else {
+        f->vramValid = 0;
     }
     for (bg = 1; bg < 4; bg++) {
         f->scroll[bg] = Rd32(io, 0x10 + bg * 4);
@@ -7883,14 +7918,20 @@ static void FlatStore(int engine, u32 layout, int snapshot, u32 mask)
  * Every input the flat picture depends on is covered by the two
  * signatures or by the scroll check (the dependency list is in the
  * claim sheet, docs/bench/claims/2026-11-10-p3-flat-skip.md). *why says
- * which input differed (0: the picture is the same). */
-static int FlatUnchanged(int engine, const NitroRender2DSplit *split, int *why)
+ * which input differed (0: the picture is the same).
+ *
+ * vram/vramKnown are the referenced-range VRAM signature taken by the
+ * caller *before* this pass's draw: the same value is the one the draw
+ * retains (see sFlatVramSig), so the signature that certifies "the
+ * picture is the same" and the signature that is kept are one and the
+ * same, both older than the picture. */
+static int FlatUnchanged(int engine, const NitroRender2DSplit *split, int *why,
+                          int vramKnown, u32 vram)
 {
     int e = engine ? 1 : 0;
     FlatReuse *f = &sFlatReuse[e];
     const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
-    const u8 *oam = split->snapshot ? sState[e].oam : NitroPort_Oam;
-    u32 small, vram = 0;
+    u32 small;
     int bg;
 
     *why = FLAT_WHY_NONE;
@@ -7907,7 +7948,10 @@ static int FlatUnchanged(int engine, const NitroRender2DSplit *split, int *why)
         return 0;
     }
     *why = FLAT_WHY_VRAM;
-    if (!EngineReferencedOnly(e, io + (e ? 0x1000 : 0), oam, &vram)) {
+    if (!vramKnown) {
+        /* The referenced range could not be worked out (the picture reads
+         * something the signature does not model): the pass cannot be
+         * certified as unchanged. */
         FLAT_COUNT_ADD(sFlatNotModelled[e]);
         return 0;
     }
@@ -8025,6 +8069,10 @@ static struct {
     u64 vramChanged[2], unchanged[2];
     u64 vramBytes[2], scanlines[2], smallBytes[2];
     u32 lastLayout[2], lastRegs[2], lastPal[2], lastOam[2];
+    /* P3: the flat draws whose VRAM was hashed before and after the draw,
+     * and how many of those saw the game's own write land in between (the
+     * live-VRAM race: the picture on screen is then one write behind). */
+    u64 flatRaceDraws, flatRaceChanges;
 } sA0Redraw;
 
 static void A0SubHashes(int e, int snapshot, NitroRender2DSplit *split,
@@ -8115,6 +8163,8 @@ void NitroPort_Render2DRedrawStats(int engine, NitroRedrawStats *out)
     out->vramBytes = sA0Redraw.vramBytes[e];
     out->scanlines = sA0Redraw.scanlines[e];
     out->smallBytes = sA0Redraw.smallBytes[e];
+    out->flatRaceDraws = sA0Redraw.flatRaceDraws;
+    out->flatRaceChanges = sA0Redraw.flatRaceChanges;
 }
 #endif
 
@@ -8161,9 +8211,19 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
          * scanlines run. Never skip using last frame's emptiness. */
         int why = FLAT_WHY_NONE;
         int same;
+        u32 vramNow = 0;
+        int vramKnown = 0;
 
         if (r->under == under && r->over == split->over && r->alpha == split->overAlpha) {
-            same = FlatUnchanged(engine, split, &why);
+            /* P3: the referenced-range VRAM signature is taken here, before
+             * this pass's draw: it is both what the skip compares and what
+             * the draw retains (see sFlatVramSig). Taking it after the
+             * draw would let the game write VRAM in between and the skip
+             * would then certify a picture that is one write behind. */
+            if (sRefHashA) {
+                vramKnown = FlatVramSignature(engine, split, &vramNow);
+            }
+            same = FlatUnchanged(engine, split, &why, vramKnown, vramNow);
         } else {
             same = 0;
             why = FLAT_WHY_BUFFERS;
@@ -8233,7 +8293,29 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
             sFlatScratch = sFlatMeta;
         }
         FLAT_COUNT_ADD(sFlatRedraw[e]);
+        /* P3: the draw retains this pass's pre-draw VRAM signature (the
+         * store runs inside the draw). */
+        sFlatVramSig[e] = vramNow;
+        sFlatVramSigValid[e] = vramKnown;
         Render(engine, under, split, R2D_TRY_FLAT);
+        sFlatVramSigValid[e] = 0;   /* consumed: a later draw must not use it */
+#ifdef HGSS_A0_DIAG
+        if (vramKnown) {
+            /* How often the game wrote VRAM while this thread drew: the
+             * signature taken before the draw and the one taken after it
+             * differ exactly then. (The write is the game's own thread
+             * writing tiles; only the registers, palettes and OAM are
+             * taken at the handover.) */
+            u32 after = 0;
+
+            if (FlatVramSignature(engine, split, &after)) {
+                sA0Redraw.flatRaceDraws++;
+                if (after != vramNow) {
+                    sA0Redraw.flatRaceChanges++;
+                }
+            }
+        }
+#endif
         if (same && sRefHashDiagnostic && sFlatMetaValid) {
             /* The diagnostic: the pass ran, so compare what it published
              * with what the last flat pass published. A difference means

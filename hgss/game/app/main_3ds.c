@@ -2333,6 +2333,9 @@ static void PerfLog(u64 now)
                 NitroPort_Log("[a0] flat regdiff: %u passes, word mask 0x%08x, bytes0-7 0x%02x, VRAMCNT %u, POWCNT1 %u, every 0x%08x, dispcnt1 0x%02x (was 0x%02x)",
                               passes, mask, first8, vramCnt, powcnt, every, b1or, b1b);
             }
+            NitroPort_Log("[a0] flat vram race: %llu draws hashed before and after, %llu saw the game write VRAM during the draw",
+                          (unsigned long long)r0.flatRaceDraws,
+                          (unsigned long long)r0.flatRaceChanges);
             NitroPort_Log("[a0] partialB whole: shared %llu rest %llu extpal %llu obj-wide %llu bg-kind %llu bg-regs %llu bg-lines %llu bg-char %llu bg-no-map %llu bg-no-band %llu bg-wide %llu mixed %llu",
                           (unsigned long long)p.shared, (unsigned long long)p.rest, (unsigned long long)p.extPal,
                           (unsigned long long)p.objWide, (unsigned long long)p.bgKind,
