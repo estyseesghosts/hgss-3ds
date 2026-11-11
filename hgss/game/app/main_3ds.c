@@ -433,6 +433,31 @@ static void AudioStop(void);
 /* Below, next to the other exits: START+SELECT's direct jump to hbmenu. */
 static void ExitToLauncher(void);
 
+#ifdef HGSS_BENCH
+/* Automated benchmark chainloading (test builds only, docs/autobench.md).
+ *
+ * Normal builds never define HGSS_BENCH, so none of this compiles into
+ * them: no ini keys, no stop-frame check, no hb:ldr use. A bench build
+ * with no bench keys in port.ini behaves exactly like a normal build.
+ *
+ * A bench packet sets in port.ini:
+ *   bench_stop=<frame>   stop and chainload once sFrame reaches it
+ *   bench_next=<path>    next .3dsx (sdmc:/3ds/... or /3ds/...), launched
+ *                        after this run completes
+ * On completion the game writes DATA_DIR/bench.done, selects bench_next
+ * through Luma's hb:ldr, requests the self-chainload, and leaves via the
+ * game thread so the main thread's normal teardown runs and libctru's
+ * exit performs the transition (the smoke-tested path in
+ * bench/chainload-smoke/main.c). Without both keys set, the game runs
+ * normally and never chainloads. */
+static long sBenchStopFrame = 0;
+static char sBenchNext[256];
+static bool sBenchActive = false;
+static bool sBenchDone = false;
+static void BenchReadConfig(void);
+static void BenchFinishAndChainload(void);
+#endif
+
 #ifdef HGSS_A0_DIAG
 static void A0ThreadRunning(const char *role);
 #endif
@@ -2717,7 +2742,135 @@ void NitroPort_OnFrame(void)
     /* Last, after both blits and the swap: this is what spaces frame starts
      * when the display work finishes early. */
     WaitForFrameCap(frameStart);
+#ifdef HGSS_BENCH
+    /* Automated benchmark stop (test builds only). The check sits after the
+     * frame's diagnostics and handoff above, so the final sample is logged
+     * before the run ends. Without bench keys this compiles to nothing at
+     * runtime: sBenchActive is false and the branch never fires. */
+    if (sBenchActive && !sBenchDone && sBenchStopFrame > 0 &&
+        (long)sFrame >= sBenchStopFrame) {
+        BenchFinishAndChainload();
+    }
+#endif
 }
+
+#ifdef HGSS_BENCH
+/* IniValue is defined with the other ini readers below; declared here so the
+ * bench config reader above it can use it. */
+static int IniValue(const char *key, char *value, size_t size);
+/* Read bench_stop/bench_next from the active port.ini. Both must be present
+ * for the run to be a bench run; otherwise the build behaves normally. */
+static void BenchReadConfig(void)
+{
+    char value[256];
+    char *end;
+    long stop;
+
+    sBenchStopFrame = 0;
+    sBenchNext[0] = '\0';
+    sBenchActive = false;
+    if (!IniValue("bench_stop", value, sizeof(value))) {
+        return;
+    }
+    stop = strtol(value, &end, 10);
+    while (*end == ' ' || *end == '\t') {
+        end++;
+    }
+    if (*end != '\0' || stop <= 0) {
+        NitroPort_Log("[bench] bench_stop=%s is not a positive frame; bench mode off", value);
+        return;
+    }
+    if (!IniValue("bench_next", value, sizeof(value))) {
+        NitroPort_Log("[bench] bench_stop set but bench_next missing; bench mode off");
+        return;
+    }
+    snprintf(sBenchNext, sizeof(sBenchNext), "%s", value);
+    sBenchStopFrame = stop;
+    sBenchActive = true;
+    NitroPort_Log("[bench] automated run: stop frame %ld, next %s (build %s)",
+                  sBenchStopFrame, sBenchNext, HGSS_BUILD_ID);
+}
+
+/* One hb:ldr command (Luma's loader; same IPC as bench/chainload-smoke). */
+static Result BenchHblCommand(Handle h, unsigned id, const void *data, size_t size)
+{
+    u32 *cmdbuf = getThreadCommandBuffer();
+
+    cmdbuf[0] = IPC_MakeHeader(id, 0, 2);
+    cmdbuf[1] = IPC_Desc_StaticBuffer(size, id == 2 ? 0 : 1);
+    cmdbuf[2] = (u32)data;
+    return svcSendSyncRequest(h);
+}
+
+/* Stop at the bench frame, mark completion, and chainload the next .3dsx.
+ * Runs on the game thread; never returns. The main thread's normal
+ * teardown (WaitForGame + stops + log close + gfxExit + return) then runs,
+ * and libctru's exit performs the hb:ldr transition. */
+static void BenchFinishAndChainload(void)
+{
+    static u32 args[0x400 / sizeof(u32)];
+    static char target[0x400];
+    Handle h = 0;
+    Result rc;
+    FILE *done;
+    char tmp[256];
+    char final[256];
+
+    sBenchDone = true;
+    NitroPort_Log("[bench] reached stop frame %ld (frame %lu); completing to %s",
+                  sBenchStopFrame, sFrame, sBenchNext);
+    FlushLog();
+    NitroPort_CardFlush();
+    /* Atomic completion marker: the runner only advances on bench.done, so
+     * a crash before this point preserves the log and halts the batch. */
+    snprintf(tmp, sizeof(tmp), DATA_DIR "/bench.tmp");
+    snprintf(final, sizeof(final), DATA_DIR "/bench.done");
+    done = fopen(tmp, "w");
+    if (done != NULL) {
+        fprintf(done, "done frame=%lu stop=%ld build=%s next=%s\n",
+                sFrame, sBenchStopFrame, HGSS_BUILD_ID, sBenchNext);
+        if (fclose(done) == 0) {
+            rename(tmp, final);
+        }
+    } else {
+        NitroPort_Log("[bench] could not write %s; stopping without advancing", tmp);
+    }
+    FlushLog();
+    /* Select the next program through hb:ldr, argv first so a failure never
+     * leaves a new target selected. */
+    memset(target, 0, sizeof(target));
+    snprintf(target, sizeof(target), "%s", sBenchNext);
+    memset(args, 0, sizeof(args));
+    args[0] = 1;
+    snprintf((char *)&args[1], sizeof(args) - sizeof(u32), "sdmc:%s", target);
+    rc = svcConnectToPort(&h, "hb:ldr");
+    if (R_SUCCEEDED(rc)) {
+        rc = BenchHblCommand(h, 3, args, sizeof(args));
+        if (R_SUCCEEDED(rc)) {
+            rc = BenchHblCommand(h, 2, target, sizeof(target));
+        }
+        svcCloseHandle(h);
+    }
+    if (R_FAILED(rc)) {
+        NitroPort_Log("[bench] hb:ldr chainload to %s failed: %08lx; ending run without advancing",
+                      sBenchNext, (unsigned long)rc);
+        FlushLog();
+        sQuit = true;
+        threadExit(0);
+        for (;;) {
+            svcSleepThread(100 * 1000000LL);
+        }
+    }
+    aptSetChainloaderToSelf();
+    NitroPort_Log("[bench] chainloading %s", sBenchNext);
+    FlushLog();
+    sQuit = true;
+    threadExit(0);
+    for (;;) {
+        svcSleepThread(100 * 1000000LL);
+    }
+}
+#endif
 
 /* Exit to the Homebrew Launcher (START+SELECT held 2 s). Deliberately NOT
  * the HOME-menu close path: no APT handling, no sQuit, no WaitForGame
@@ -3750,6 +3903,11 @@ int main(int argc, char **argv)
      * are fixed for the whole run. */
     ReadFrameCap();
     ReadDisplayOptions();
+#ifdef HGSS_BENCH
+    /* Test builds only: without bench keys this leaves bench mode off and
+     * the build behaves like a normal one. */
+    BenchReadConfig();
+#endif
     if (!sNew3ds) {
         /* The Old 3DS profile is fixed at launch: no runtime filter cycle
          * (its presets would reallocate layer sets and 2-4x texture memory

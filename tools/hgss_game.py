@@ -220,6 +220,13 @@ def port_cflags(target: str, cxx: bool = False) -> list[str]:
     # tools/hgss_nitro.py also injects it (see its sdk_includes callers).
     if os.environ.get("HGSS_PROFILE") == "off":
         flags += ["-DHGSS_PROFILE_OFF"]
+    # Automated benchmark builds only (docs/autobench.md): HGSS_BENCH=1
+    # compiles the hb:ldr chainload path in hgss/game/app/main_3ds.c.
+    # Normal builds never define it, so the chainloading code cannot end
+    # up in a release artifact. 3DS-only: the path uses libctru/hb:ldr
+    # and does not compile against the host libc.
+    if target == "3ds" and os.environ.get("HGSS_BENCH") == "1":
+        flags += ["-DHGSS_BENCH"]
     # Diagnostic build only: never enable texture timing in normal releases.
     if target == "3ds" and os.environ.get("HGSS_TEXTURE_PROFILE") == "1":
         flags += ["-DHGSS_TEXTURE_PROFILE=1"]
@@ -1040,6 +1047,7 @@ def experiment_build_id(short: str, dirty: bool) -> str:
                              ("HGSS_GX3D_LAZYINSERT", "-lazy"),
                              ("HGSS_GX3D_BG3SLOT", "-slot3"),
                              ("HGSS_SND_ADPCM", "-adpcm"),
+                             ("HGSS_BENCH", "-bench"),
                              ("HGSS_A0_DIAG", "-a0diag")):
         if os.environ.get(variable) == "1":
             tag += suffix
@@ -1097,6 +1105,7 @@ def write_build_info(dsx: Path, game: str, target: str,
              f"gx3d_lazyinsert: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_LAZYINSERT') == '1' else 'no'}\n"
              f"gx3d_bg3slot: {'yes' if target == '3ds' and os.environ.get('HGSS_GX3D_BG3SLOT') == '1' else 'no'}\n"
              f"snd_adpcm: {'yes' if target == '3ds' and os.environ.get('HGSS_SND_ADPCM') == '1' else 'no'}\n"
+             f"bench: {'yes' if target == '3ds' and os.environ.get('HGSS_BENCH') == '1' else 'no'}\n"
              f"a0_diag: {'yes' if target == '3ds' and os.environ.get('HGSS_A0_DIAG') == '1' else 'no'}\n"
             f"build: {experiment_build_id(short, dirty)}\n"
             f"sha: {full}\n"
@@ -1476,6 +1485,20 @@ def profile_mode_matches(out: Path) -> bool:
     return marker.is_file() and marker.read_text().strip() == profile_mode()
 
 
+def bench_mode() -> str:
+    """The automated-benchmark mode compiled into the 3DS shell.
+
+    HGSS_BENCH=1 builds a test artifact with the hb:ldr chainload path
+    (docs/autobench.md). Anything else builds the normal shell with no
+    chainloading code at all."""
+    return "bench" if os.environ.get("HGSS_BENCH") == "1" else "normal"
+
+
+def bench_mode_matches(out: Path) -> bool:
+    marker = out / ".bench-mode"
+    return marker.is_file() and marker.read_text().strip() == bench_mode()
+
+
 def build_libraries(root: Path, target: str, out: Path, jobs: int) -> tuple[bool, list[Path]]:
     """libnitro.a and libnitrosystem.a through tools/hgss_nitro.py.
 
@@ -1677,6 +1700,19 @@ def main(argv: list[str] | None = None) -> int:
               "potentially stale archive (PROFILE and OFF must never share "
               "one libnitro.a)", file=sys.stderr)
         return 1
+    if args.target == "3ds":
+        # The bench chainload path lives only in main_3ds.o. Make does not
+        # track the HGSS_BENCH toggle, so drop that object when the mode
+        # changes: a normal and a bench artifact must never share it.
+        mode = bench_mode()
+        marker = out / ".bench-mode"
+        if not marker.is_file() or marker.read_text().strip() != mode:
+            (out / "app" / "main_3ds.o").unlink(missing_ok=True)
+        marker.write_text(mode + "\n")
+    elif os.environ.get("HGSS_BENCH") == "1":
+        print("hgss_game: HGSS_BENCH=1 is 3DS only; refusing a host32 bench build",
+              file=sys.stderr)
+        return 2
 
     print("== overlay table", flush=True)
     proc = subprocess.run(overlay_command(root, out, tools["objcopy"]),

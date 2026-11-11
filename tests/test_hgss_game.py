@@ -108,6 +108,17 @@ class FlagTests(unittest.TestCase):
             self.assertIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("3ds"))
             self.assertNotIn("-DHGSS_TEXTURE_HINT=1", hg.port_cflags("host32"))
 
+    def test_bench_chainload_is_opt_in_and_3ds_only(self):
+        # The hb:ldr chainload path must never compile into normal builds.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HGSS_BENCH", None)
+            self.assertNotIn("-DHGSS_BENCH", hg.port_cflags("3ds"))
+        with patch.dict(os.environ, {"HGSS_BENCH": "0"}):
+            self.assertNotIn("-DHGSS_BENCH", hg.port_cflags("3ds"))
+        with patch.dict(os.environ, {"HGSS_BENCH": "1"}):
+            self.assertIn("-DHGSS_BENCH", hg.port_cflags("3ds"))
+            self.assertNotIn("-DHGSS_BENCH", hg.port_cflags("host32"))
+
     def test_bg3slot_reaches_every_port_object(self):
         # BG3SLOT gates NITRO_GPU_BG_SLOTS in a shared header: lib and
         # app objects must agree or the split structs corrupt across the
@@ -2437,6 +2448,9 @@ class BuildIdTests(unittest.TestCase):
         with patch.dict(os.environ, {"HGSS_PROFILE": "profile"}):
             self.assertEqual(hg.experiment_build_id("abc1234", True),
                              "abc1234-dirty")
+        with patch.dict(os.environ, {"HGSS_BENCH": "1"}):
+            self.assertEqual(hg.experiment_build_id("abc1234", False),
+                             "abc1234-bench")
 
     def test_header_written_only_on_change(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2969,6 +2983,56 @@ class FlatSkipTests(unittest.TestCase):
         self.assertIn("NitroPort_Render2DFlatStats(", text)
         header = self.HEADER.read_text()
         self.assertIn("void NitroPort_Render2DFlatStats(", header)
+
+
+class BenchChainloadTests(unittest.TestCase):
+    """Automated benchmark chainloading lives only in HGSS_BENCH test builds.
+
+    A normal build (no HGSS_BENCH) must contain no hb:ldr use, no
+    chainloader request, and no bench ini keys. Every bench symbol in the
+    shell must sit inside an `#ifdef HGSS_BENCH` region."""
+
+    APP = REPO / "hgss" / "game" / "app"
+
+    MARKERS = ("hb:ldr", "BenchFinishAndChainload", "BenchReadConfig",
+               "BenchHblCommand", "sBenchActive", "sBenchStopFrame",
+               "sBenchNext", "sBenchDone", "bench_stop", "bench_next",
+               "bench.done", "aptSetChainloaderToSelf")
+
+    def guarded_regions(self, text):
+        regions = []
+        depth = 0
+        bench_depth = None
+        start = 0
+        for i, line in enumerate(text.splitlines()):
+            stripped = line.strip()
+            if stripped.startswith("#ifdef HGSS_BENCH"):
+                if bench_depth is None:
+                    bench_depth = depth
+                    start = i
+                depth += 1
+            elif stripped.startswith("#ifndef HGSS_BENCH"):
+                depth += 1
+            elif stripped.startswith("#if"):
+                depth += 1
+            elif stripped.startswith("#endif"):
+                depth = max(0, depth - 1)
+                if bench_depth is not None and depth == bench_depth:
+                    regions.append((start, i))
+                    bench_depth = None
+        return regions
+
+    def test_bench_symbols_only_in_bench_regions(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        regions = self.guarded_regions(text)
+        self.assertTrue(regions, "no #ifdef HGSS_BENCH region found")
+        lines = text.splitlines()
+        for marker in self.MARKERS:
+            hits = [i for i, line in enumerate(lines) if marker in line]
+            self.assertTrue(hits, f"{marker} not found at all")
+            for i in hits:
+                inside = any(s <= i <= e for s, e in regions)
+                self.assertTrue(inside, f"{marker} at line {i + 1} is outside #ifdef HGSS_BENCH")
 
 
 class RomHeaderTests(unittest.TestCase):
