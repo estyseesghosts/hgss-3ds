@@ -1,5 +1,35 @@
 # Current state
 
+**2026-11-11: P2 closed; P3 (drawer flat-picture skip) implemented and
+measured — the skip does not fire, and the reason is a register that
+changes every pass.** P2c's walk A/B finished (all metrics overlap; the
+mixer never measurably executes in Azahar: `[perf] audio` 0.0 ms / 0
+dropped of 0, no `[sndprof]` line in any log), so P2 is closed: **P2a
+reverted** (the four geometry flags together drop composes 28-33%), **P2b
+reverted** (no front-region BG3 commit exists in either frozen script),
+**P2c deferred pending hardware** (bit-identical on the host, no functional
+regression, but the accept needs the console). No default was flipped.
+P3 landed at `845cae5`: the flat branch of
+`NitroPort_Render2DSplitIfChanged()` keeps the small+layout signature, the
+referenced-range VRAM signature (no full-864 KB-hash fallback) and the
+committed BGs' scroll, and skips the pass when all three match; the
+`refHashDiag` diagnostic compares what the pass publishes against the
+retained picture; the counters (skipped / redrawn / not-modelled /
+disagreements, plus which input differed) are printed as `[perf] flatskip:`
+and parsed by `tools/bench_report.py`. Tool tests: 525 tests with the same
+54 environment failures as the stashed-tree baseline — zero new. Measured
+in Azahar at the field: **0 skipped, 600 redrawn per 600-tick window**, every
+one "why small"; the A0 attribution splits it — the *registers* change on
+every pass while the layout, palettes, OAM and per-line registers are
+stable. The field's top pass is flat as the premise says (`0 lines, 0
+empty, rows 0/0`, `gpubg taken 1200`), so the blocker is one register word,
+not the picture. Open: which word, and therefore whether P3 can be kept
+as the plan specifies; the P3 A/B on both scripts; the diagnostic run; and
+the single hardware run (four packets). Records:
+[000.md results](agent-notes/2026-11-10-o3ds-000-results.md),
+[P3 claim sheet](../bench/claims/2026-11-10-p3-flat-skip.md),
+[session notes](agent-notes/2026-11-11-session-issues-and-fixes.md).
+
 **2026-11-10 (later): 000.md packets P0–P1 done in Azahar; hardware run pending.**
 P0 baseline rebuilt clean at `59603bc` (PROFILE `8a982f70…` / OFF `a5e5a0a5…`,
 default flags): Goldenrod at rest 20–21 composes/s, 60 publishes/s, drawer
