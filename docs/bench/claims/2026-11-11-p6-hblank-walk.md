@@ -40,8 +40,20 @@ Hardware result:          Paired A/B on the console (owner run).
 Regression surface:       Battle (the line-slides-apart transition), the
                           field's poison wave, window wipes, the title
                           screen, audio, sleep/close.
-Conclusion:               see below
-Next decision:            keep / revise bounded issue / revert / archive
+Conclusion:               **Beneficial in Azahar; the hardware gain is a
+                          prediction.** The H-blank phase falls 2406 → 2175
+                          µs (−9.6%) and the hand-off 2513 → 2281 µs, with
+                          the separate scan gone (473 → 0) and the
+                          dispatches, the handlers and the thread switch
+                          untouched. The A0 diagnostic answered "do the
+                          lines differ?" both ways on 7,826 walks: 0
+                          disagreements. The per-line copies (the other
+                          half, 430-483 µs) are not touched.
+Next decision:            keep. The copy elimination is a separate claim
+                          sheet (a different representation, not a
+                          different measurement). The host tests are still
+                          owed on a Linux checkout: they cannot link on this
+                          machine.
 ```
 
 ## The premise, measured
@@ -107,6 +119,61 @@ still in cache:
 - the walk's copy timer covers the compare as well, so the sub-timer split
   stays honest and no extra timer reads are added.
 
+## Measured (Azahar, the same script and the same session, two builds)
+
+`hg-continue-field.txt`, frames 9000+, the P3 build against the P6 build,
+one run each (the FRAMETIME line's own numbers, ARM11 ticks):
+
+| per frame | P3 (baseline) | P6 | change |
+|---|---|---|---|
+| `hblank_us` — the H-blank phase | 2406 | **2175** | **−231 µs (−9.6%)** |
+| `hb_keep_us` — the per-line copies and the compare | 430 | 673 | +243 (the compare moved here) |
+| `hb_cmp_us` — the separate scan over all 192 lines | **473** | **0** | the pass is gone |
+| `hb_irq_us` — the dispatches and the handlers | 866 | 866 | unchanged |
+| `hb_sw_us` — the deferred thread switch | 92 | 92 | unchanged |
+| `hb_ref_us` — the per-walk refresh | 1 | 1 | unchanged |
+| `state_us` — the whole hand-off | 2513 | **2281** | **−232 µs** |
+
+The whole saving lands in the hand-off ✅ — the game's own work
+(`game_us`) moves with the scene ✅.
+
+**The correctness proof.** The A0 diagnostic build computes *both* answers
+on every walk — the fused compare and the old scan over all 192 lines —
+and counts the disagreements. A full run:
+
+```
+[15600] [a0] hblank scan check: 7826 walks, 0 disagreements
+```
+
+7,826 walks, **0 disagreements** ✅ — the two ways of asking "do the lines
+differ?" agree every time, in the real game, on every walk.
+
+The host test's H-blank cases (`3ds_port/nitro/tests/test_nitro.c`) cover
+the two halves directly — a handler that writes per line (the lines differ
+and the effect is kept) and a handler that writes nothing drawn (no line
+differs) — but **they cannot be run on this checkout**: the host32 link
+needs a 32-bit toolchain the machine does not have (the msys2 gcc is
+64-bit), and the 64-bit host build fails the SDK's 32-bit layout
+assertions. That gate is therefore still owed on a Linux checkout, and the
+A0 diagnostic is what stands in for it here.
+
+## The hardware prediction (a prediction, from the console's own numbers)
+
+Old 3DS (log-1, frame 25200): the H-blank phase is **2639 µs of the game's
+2826 µs of active frame time** — the rest of the 17.5 ms frame is the game
+pacing itself to sleep ✅. Of the phase, the scan was **768 µs** (29%).
+
+Azahar's split has the same shape but a smaller scan (473 of 2406 = 19.7%):
+the console's RAM is slower, so its scan cost more ✅. The fused compare
+cost 243 µs in Azahar (11% of the phase).
+
+**Prediction.** The console's phase falls by roughly **0.4 ms of its
+2.64 ms (about 15%)**, and the game's active frame time by a similar
+share — the copy's 483 µs and the dispatch's 831 µs are untouched. What
+the console's numbers say that Azahar's cannot: how much of the scan was
+cache misses rather than instructions ✅ (the console's array is further
+from its cache ✅).
+
 ## What it does not do (and what that would take)
 
 The **copy** itself (483 µs) is the other half. Skipping it needs the
@@ -118,6 +185,36 @@ per-line index (192 bytes per engine) instead of 192 full copies, and let
 the renderer read `regs[same[y]]`. That touches the renderer (four places)
 and the display-state snapshot (which copies the whole 43 KB array too).
 It is a separate claim sheet, not part of this packet.
+
+## Why this is safe (and what the wiki says)
+
+The wiki's advice for exactly this kind of change
+(`coffeepot/ctr/engineering/threading.md`, "for a port that emulates a burst
+of scanline interrupts, measure handler execution and scheduling
+separately... validate event ordering and all intermediate-state
+requirements") and its case study of this port ("Time dispatch, work and
+scheduling separately before changing them"; "verify handler ordering,
+visibility and any code that depends on a switch between events") are
+followed here:
+
+- **The dispatch is untouched.** The walk still calls `HBlank(y, irq, dma)`
+  for all 192 lines, in the same order, with the same arguments; the
+  interrupt is still taken on every line the game armed; the handler is
+  still the game's own code. The plan's "avoid: skipping dispatches" and
+  "changing interrupt order or what the game observes" are both respected.
+- **What the game observes is unchanged.** `KeepLine()` is called at the
+  same point in the walk (before the line's dispatch), with the same
+  arguments; the register array holds the same values in the same order —
+  the renderer reads exactly what it read before.
+- **Only the moment of the decision changes.** "Do any two lines differ?"
+  was answered after the walk; it is now answered during it. The two
+  questions are the same ("some line differs from the first" ≡ "some line
+  differs from the one before it", because the array is a sequence), and
+  the A0 diagnostic computes **both** answers on every walk and counts the
+  disagreements.
+- **The schedule is unchanged**: the snapshot of the display state
+  (`NitroPort_Render2DTakeState`) is taken after the walk, in the same
+  hand-off, so it sees the same value of `active` as before.
 
 ## Run manifest
 

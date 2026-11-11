@@ -46,6 +46,7 @@ faster. The previous session's issues are in
 | 29 | The "walk" measurement did not walk: a button line is held for **six frames**, so the frozen script's legs are taps | Read the script's own format; a second script (`hg-field-walk2.txt`) holds each direction for 120 frames, and the walking case is measured with it |
 | 30 | The capture runner lost the comma between two frame numbers and waited for a frame that never comes | Take the frames as one string and split them inside the script; read the runner's own output |
 | 31 | The capture stole the owner's focus by activating the emulator window | `PrintWindow` reads the window without activating it; no fullscreen, no focus change |
+| 32 | The A0 build failed with "implicit declaration of NitroPort_HBlankScanCheck" | The shell declares the port's functions locally, not through `nitro_port.h`: the declaration goes there too |
 
 ## 1. A multi-line command stops after its first statement
 
@@ -423,3 +424,17 @@ Three things the wiki could take from this session:
   the legacy reuse record's same-shaped exposure (a pre-existing path, not
   touched), the hardware gain (not measured) — each says so in the place a
   reader would look for it, instead of being quietly dropped.
+- **P6 followed the wiki's own instruction for this kind of change.** "Time
+  dispatch, work and scheduling separately before changing them" — the
+  sub-timers already existed (P1), so the packet started by *reading* the
+  split rather than by guessing: the scan, not the dispatch, was the part
+  that could go. The change then touched nothing the wiki warns about: no
+  dispatch skipped, no interrupt reordered, nothing the game observes
+  changed, and the register array's contents are bit-for-bit what they were
+  (the A0 diagnostic computes both ways of answering the question on every
+  walk: 7,826 walks, 0 disagreements).
+- **The measurement that decides a packet was found before the code was
+  written.** P6's claim sheet was written from the console's own sub-timers
+  (irq 831 / cmp 768 / keep 483 of a 2639 µs phase), and the change was
+  aimed at the second number. It was then measured against a baseline run
+  in the same session, not against a number from an earlier one.

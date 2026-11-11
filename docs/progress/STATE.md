@@ -1,5 +1,24 @@
 # Current state
 
+**2026-11-11 (later still): P6 implemented and measured — the H-blank walk
+decides "do the lines differ?" as it keeps them.** The plan's premise
+holds: on an Old 3DS the emulated H-blank phase is **2639 µs of the game's
+2826 µs of active frame time** (the rest of the 17.5 ms frame is pacing
+sleep), and its sub-timers say where it goes — irq 831 (the dispatches plus
+the game's own handler, 450), **cmp 768** (a pass over all 192 lines'
+register blocks *after* the walk: 43 KB read back from RAM), keep 483 (the
+per-line copies), sw 69. The comparison now happens inside the copy loop,
+against the line before (still in cache), a word at a time; the register
+array's contents are unchanged and no dispatch is skipped. Measured in
+Azahar, same script and session: the phase **2406 → 2175 µs (−9.6%)**, the
+hand-off **2513 → 2281 µs**, `hb_cmp_us` **473 → 0**, irq/sw/ref
+unchanged. The A0 diagnostic answered the question both ways on **7,826
+walks: 0 disagreements**. The per-line copies (the other half) are a
+separate claim sheet. `make port-tests` **cannot run on this checkout**
+(the host32 link needs a 32-bit toolchain; the 64-bit host build fails the
+SDK's 32-bit layout assertions) — that gate is still owed on a Linux
+checkout.
+
 **2026-11-11 (later): P5 measured — no code change needed; the cause was
 already removed by P3.** The plan's premise ("about 51 of 123 composes per
 window have no new scene yet clear the target and re-record the whole 3D")
