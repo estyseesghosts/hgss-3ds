@@ -27,10 +27,26 @@ Correctness proof:        `make port-tests` gx3d suites bit-identical
                           script frames unchanged from baseline.
 Hardware result:          Paired A/B on the console (owner run).
 Regression surface:       Battle, title, menus, transition, audio, sleep/close.
-Conclusion:               not established (code not built).
-Next decision:            keep (flip all four defaults) / revert per flag if
-                          its census stays zero or OFF disagrees / stop and ask
-                          if any list-cache audit or verify counter is non-zero.
+Field result (Azahar, rest): REVERT the bundle. Baseline 176 built @
+                          46.1 ms/built, 124 skipped; bundle 150 built @ 52.5
+                          ms/built (+14% per built scene), 150 skipped.
+                          Composes 20.85 [20.30..21.50] vs 15.00 [15.00..15.10]
+                          (-28%, non-overlapping). The flags engage (list-cache
+                          28311 lookups / 9238 hits / 551 inserts, audits 4 fail
+                          0, fuse-mismatch 0), but per-scene overhead (tags,
+                          audits, census, lazy filter, evict traffic) pushes the
+                          saturated worker over the skip cliff: fewer scenes
+                          built, fewer composes. No audit/verify failures
+                          (no stop). Walk A/B confirms: composes 22.45 [21.90..22.80] vs 15.05
+                          [15.00..15.30] (base better, -33%); geom_ms 31.10
+                          vs 29.96 (blended-denominator effect). Bundle
+                          reverted on both scripts; no default flip.
+Conclusion:               harmful to throughput in Azahar (revert as a bundle;
+                          no per-flag fishing). Hardware could differ, but the
+                          plan accepts on the Azahar work proof + OFF agreement,
+                          and the work proof fails here.
+Next decision:            revert (no default flip). Do not weaken the flag
+                          tests. Record the walk outcome below when it lands.
 ```
 
 ## Run manifest
