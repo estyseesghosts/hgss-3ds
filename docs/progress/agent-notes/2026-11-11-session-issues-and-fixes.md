@@ -2,9 +2,35 @@
 
 The second half of the 2026-11-10 Old-3DS performance session
 (`000.md`): finishing P2c, then implementing and measuring P3 (the drawer's
-flat-picture skip). The point of this note is the next session recognising
-the shape faster. The previous session's issues are in
+flat-picture skip), then answering P4's question and staging the hardware
+packets. The point of this note is the next session recognising the shape
+faster. The previous session's issues are in
 [2026-11-10-session-issues-and-fixes.md](2026-11-10-session-issues-and-fixes.md).
+
+## What this session did
+
+- **P2 closed.** P2c's walk A/B finished (all metrics overlap; the mixer
+  never measurably executes in Azahar), so P2 is closed: P2a **reverted**
+  (the four geometry flags together drop composes 28-33%), P2b **reverted**
+  (no front-region BG3 commit exists in either frozen script), P2c
+  **deferred pending hardware** (bit-identical on the host, no functional
+  regression, but the accept needs the console). No default was flipped.
+- **P3 implemented, and kept.** The flat-picture skip
+  (`845cae5`), the VCOUNT proof (`fc2a19b`), the pre-draw VRAM signature
+  (`0c00d78`). Measured in Azahar: **600 skipped, 0 redrawn per 600-tick
+  window at rest (100%)**, key bytes 7,372,800/115,200 → 0/0, drawer wall
+  **2.69 → 0.88 ms/frame**, core 0 idle 41.1% → 51.9%. Four clean A/Bs
+  (PROFILE and OFF, field and walk) agree: 2.69-2.72 → 0.87-0.89 ms.
+  The diagnostic reports **0 flat disagreements** over boot → title → field.
+- **P4 answered early.** The live-VRAM race count is **0** at rest and
+  walking (3 draws hashed before and after, 0 writes landed in between),
+  so P4's "stop and ask if the count is non-zero at rest" does not trigger.
+- **The hardware packets are staged**: four SD layouts with manifests, all
+  `--check-manifest` clean, PROFILE and OFF from one clean commit
+  (`9759707`) plus the matching P1 baseline pair.
+- **Two claims were corrected** rather than left standing: the frozen walk
+  script's legs do not walk the player (issue 10), and the OFF numbers
+  quoted mid-session came from a contaminated run (issue 9).
 
 | # | Issue | Fixed by |
 |---|---|---|
@@ -17,6 +43,9 @@ the shape faster. The previous session's issues are in
 | 26 | The retained VRAM signature was taken *after* the draw, so the skip could certify a stale picture | The signature is now taken before the draw (as the legacy path does); the race is measured (P4's question) |
 | 27 | An A/B labelled "off-field" ran the *walk* script: the runner matched the literal string "field" | Match the whole label, and read the script's hash in the manifest before quoting the numbers |
 | 28 | Two emulators ran at once, sharing one `log.txt`: the trial logs and the timings were contaminated | One measurement at a time, a stray-kill before and after each, and a distinct output directory per pair |
+| 29 | The "walk" measurement did not walk: a button line is held for **six frames**, so the frozen script's legs are taps | Read the script's own format; a second script (`hg-field-walk2.txt`) holds each direction for 120 frames, and the walking case is measured with it |
+| 30 | The capture runner lost the comma between two frame numbers and waited for a frame that never comes | Take the frames as one string and split them inside the script; read the runner's own output |
+| 31 | The capture stole the owner's focus by activating the emulator window | `PrintWindow` reads the window without activating it; no fullscreen, no focus change |
 
 ## 1. A multi-line command stops after its first statement
 
@@ -203,6 +232,88 @@ convention. Check the process list before trusting a run's numbers — and
 when the owner spots it, say so plainly: the numbers were contaminated and
 are being re-measured.
 
+## 10. A "walk" script that does not walk
+
+**Symptom.** The walk A/B came back with the same numbers as the rest
+A/B, and the 3D geometry counters were byte-identical across every leg of
+the walk window:
+
+```
+[5794]  [gx3d] 120 scenes: 1683600 vtx, 539520 polys -> 113520 tris ...; lost: 482280 clipped, 12960 culled
+[12262] [gx3d] 120 scenes: 1683600 vtx, 539520 polys -> 113520 tris ...; lost: 482280 clipped, 12960 culled
+```
+
+The camera never moved, so the "walking" measurement was a second rest
+measurement — and the session had already reported it as a walking one.
+
+**Cause.** `hgss/game/app/3ds_input.h` documents the format: *"A button
+line holds its buttons for six frames, exactly like the PC runner's
+--press. `every` is ignored on the 3DS (it only controls how often the PC
+writes screenshots) but is kept so the same file works on both."* The
+frozen walk script's `every: 10` is a PC-runner setting; on the 3DS each
+leg is a **6-frame tap** (0.1 s). A D-pad tap in a DS game turns the
+player; it does not walk them.
+
+**Fix.** A second script, `tests/inputs/hg-field-walk2.txt`, holds each
+direction for 120 frames (twelve entries ten frames apart). With that the
+player walks: the clipped and culled counts move with the camera and the
+translucent triangle count rises (the characters move), and the captures at
+frames 11400 and 17400 show two different parts of Goldenrod. The frozen
+script stays frozen and is reported as what it is; the walking case gets
+its own script and its own numbers. The result: **the skip still fires on
+600 of 600 passes while walking** (the field's ground and characters are
+3D, so the top screen's 2D layers do not change — `why scroll 0`).
+
+**Rule.** Before measuring "what happens while X happens", check that X
+happens in the measurement. A script that reads as a walk on the page (a
+direction per leg) can be a tap. The tell is a counter that *should* move
+and does not.
+
+## 11. A runner parameter that lost its comma
+
+**Symptom.** The capture watcher printed `MISSED frame 1380014400` — it
+had been asked for one frame, 1380014400, which of course never comes.
+
+**Cause.** The two frame numbers were passed as one argument and arrived
+joined. The script's own output said exactly what was wrong; the mistake
+was not reading it before concluding that the capture was broken.
+
+**Fix.** Take the frames as one string and split them inside the script
+(`$FrameList = $Frames.Split(',')`), and read the runner's output when a
+capture does not appear.
+
+## 12. The capture stole the owner's focus
+
+**Symptom.** The capture helper called `SetForegroundWindow` on the
+emulator before grabbing the screen — on a machine the owner was using for
+other work. The owner's instruction: never fullscreen it.
+
+**Fix.** `PrintWindow` asks a window to render itself into a bitmap
+without being activated: no focus change, no fullscreen, the owner's
+windows and work untouched. The image comes out with the emulator's render
+surface in the lower right (the window is wider than the surface), so the
+artifact is cropped when it is saved.
+
+**Rule.** A measurement harness runs on someone's desktop. It may *read*
+the screen; it must not *take* it. Never activate a window to look at it,
+and never take the whole screen for a windowed app.
+
+## 13. A START press that does nothing (open, not fixed)
+
+**Symptom.** A scripted START at frame 14000 — the pause menu — changed no
+counter at all: the OAM counts, the 2D counters and the drawer's "drawn"
+count are identical at 13800 and 14400, and the capture at frame 27000
+still shows the field.
+
+**What is known.** The presses *do* reach the game: the title screen is
+drawn every frame through frame 8400 and the field is up by 9000, exactly
+after the scripted A presses at 8000-8049. So the injection path works.
+Either HGSS does not open its menu with START, or the port's START needs
+something else (a longer hold, a release edge, the game's own key
+mapping).
+
+**Status.** Open, and not needed for P3. Recorded rather than guessed at.
+
 ## Wiki feedback (what the coffeepot wiki still lacks, from this session)
 
 The wiki's CTR section was re-read after the owner's new commits (`30f8c93`,
@@ -249,7 +360,11 @@ Three things the wiki could take from this session:
   attribution answered "which input changed" without a new framework.
 - **The tool-test baseline was measured on a stashed tree**, not assumed:
   517 tests / 54 environment failures before, 525 tests / the same 54 after
-  — zero new failures, proven by name, not by counting.
+  — zero new failures, proven by name, not by counting. (The later
+  re-measurement, after the race fix, says 526 tests and **47** distinct
+  failing names: the same set by name — the earlier "54" also counted four
+  stderr lines that a case-insensitive `Select-String` swept up. The names
+  are the comparison; the count is not.)
 - **One change per commit.** P2c's verdict (documentation) and P3's
   behaviour change are separate commits, so the P3 artifact is cited against
   a clean parent.
@@ -278,3 +393,28 @@ Three things the wiki could take from this session:
   and the race's frequency are open. Both are answered now — the register
   was VCOUNT and the race count is 0 — and that is the wiki feedback to
   hand back.
+- **The owner's doubt was checked instead of defended.** "I have no idea if
+  your simulated button presses are actually working" led to reading the
+  script's own format, finding the six-frame hold, and **correcting a
+  measurement that had already been reported** — the claim sheet, the
+  results record and STATE.md all say now that the frozen walk script does
+  not walk the player. A correction that goes into the documents is worth
+  more than a defence.
+- **The proof that the presses work does not depend on the window.** The
+  title screen → field transition is in the log, at the frame the script
+  says it should be. The owner could not see it in the emulator window
+  (Azahar's menu bar, a small render surface); the log could be checked
+  by anyone, at any time.
+- **The walking case got its own script, not a reinterpretation.** The
+  frozen script stays frozen and is reported for what it is; `hg-field-walk2`
+  is a separate, committed input with its own numbers, its own captures and
+  its own answer (the skip still fires on 600 of 600 passes).
+- **The hardware run is one copy-paste away.** Four SD layouts, staged
+  with the repo's own tools, each with a manifest that names the artifact's
+  SHA-256, the commit and the exact save/script/ini — and
+  `tools/bench_report.py --check-manifest` passes for all four. The owner
+  does not have to rebuild anything to run them.
+- **The open items are named as open.** The START press that does nothing,
+  the legacy reuse record's same-shaped exposure (a pre-existing path, not
+  touched), the hardware gain (not measured) — each says so in the place a
+  reader would look for it, instead of being quietly dropped.
