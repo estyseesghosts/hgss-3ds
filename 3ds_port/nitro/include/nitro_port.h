@@ -195,6 +195,13 @@ extern int NitroPort_IrqSwitchWanted;
  * (src/port_os.c) */
 void NitroPort_HBlankSplit(u64 *keep, u64 *dma, u64 *irq);
 
+#ifdef HGSS_A0_DIAG
+/* P6: the walks where the fused per-line compare and the old scan over all
+ * the lines were compared, and the ones where the two answers differed
+ * (must be none). (src/port_os.c) */
+void NitroPort_HBlankScanCheck(u64 *walks, u64 *mismatch);
+#endif
+
 /* The last NitroPort_HBlankLines walk's interrupt handlers, one entry per
  * IRQ bit (the DS's 8 low interrupt bits: 0 V-blank, 1 H-blank, 2 V-count,
  * 3-6 the timers), in ARM11 ticks and call count. Only dispatches inside the

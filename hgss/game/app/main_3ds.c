@@ -2336,6 +2336,15 @@ static void PerfLog(u64 now)
             NitroPort_Log("[a0] flat vram race: %llu draws hashed before and after, %llu saw the game write VRAM during the draw",
                           (unsigned long long)r0.flatRaceDraws,
                           (unsigned long long)r0.flatRaceChanges);
+            {
+                /* P6: the H-blank walk's fused compare against the old scan
+                 * over all the lines: the two answers must agree. */
+                uint64_t walks, mismatch;
+
+                NitroPort_HBlankScanCheck(&walks, &mismatch);
+                NitroPort_Log("[a0] hblank scan check: %llu walks, %llu disagreements",
+                              (unsigned long long)walks, (unsigned long long)mismatch);
+            }
             NitroPort_Log("[a0] partialB whole: shared %llu rest %llu extpal %llu obj-wide %llu bg-kind %llu bg-regs %llu bg-lines %llu bg-char %llu bg-no-map %llu bg-no-band %llu bg-wide %llu mixed %llu",
                           (unsigned long long)p.shared, (unsigned long long)p.rest, (unsigned long long)p.extPal,
                           (unsigned long long)p.objWide, (unsigned long long)p.bgKind,

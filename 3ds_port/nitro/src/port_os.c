@@ -122,6 +122,11 @@ static u64 sHBlankKeepTicks, sHBlankDmaTicks, sHBlankIrqTicks;
  * thread-switch step, and the line compare scan. */
 static u64 sHBlankRefreshTicks, sHBlankSwitchTicks, sHBlankCmpTicks;
 #endif
+#ifdef HGSS_A0_DIAG
+/* P6: the walks checked (the fused compare against the old scan) and the
+ * ones where the two answers differed. */
+static u64 sHBlankScans, sHBlankScanMismatch;
+#endif
 
 /* A line's registers; not DISPSTAT and VCOUNT (0x04-0x07: they draw
  * nothing, and the V-count is each line's own: every frame with the
@@ -132,6 +137,28 @@ static void KeepLine(int y)
     memcpy(NitroPort_LineRegs.regs[1][y], NitroPort_IoReg + 0x1000, NITRO_LINE_REGS);
     memset(NitroPort_LineRegs.regs[0][y] + 4, 0, 4);
     memset(NitroPort_LineRegs.regs[1][y] + 4, 0, 4);
+}
+
+/* P6: do two lines' register blocks differ? The word at 0x04 (DISPSTAT and
+ * VCOUNT) is zeroed in every copy, so it never differs and is skipped; the
+ * rest is compared a word at a time, not byte at a time: the same question,
+ * a tenth of the instructions (a 112-byte memcmp is about 330 ARM11 cycles,
+ * and the scan this replaces did 384 of them per walk). */
+static int LineRegsDiffer(int engine, int y, int y0)
+{
+    const u32 *a = (const u32 *)NitroPort_LineRegs.regs[engine][y];
+    const u32 *b = (const u32 *)NitroPort_LineRegs.regs[engine][y0];
+    int i;
+
+    if (a[0] != b[0]) {
+        return 1;
+    }
+    for (i = 2; i < NITRO_LINE_REGS / 4; i++) {
+        if (a[i] != b[i]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* One H-blank, of line `line` (the V-count the game reads meanwhile, and
@@ -203,9 +230,23 @@ void NitroPort_HBlankLines(void)
      * the H-blank of the line before did. */
     sHBlankWalking = 1;
     HBlank(262, irq, FALSE);
+    /* P6: whether the lines differ is decided during the walk, below. */
+    NitroPort_LineRegs.active = 0;
     for (y = 0; y < NITRO_PORT_SCREEN_H; y++) {
         t0 = PORT_NOW();
         KeepLine(y);
+        /* P6: "do the lines differ?" is answered here, as each line is
+         * kept: the line before's copy is still in cache, so this is a
+         * cheap compare instead of the separate pass over all 192 lines
+         * that followed the walk (43 KB read back from RAM: 0.77 ms of
+         * the 2.6 ms the H-blank phase took on an Old 3DS). "Some line
+         * differs from the first" and "some line differs from the one
+         * before it" are the same question, and the compare stops at the
+         * first difference, as the old scan did. */
+        if (!NitroPort_LineRegs.active && y > 0) {
+            NitroPort_LineRegs.active = LineRegsDiffer(0, y, y - 1) ||
+                                        LineRegsDiffer(1, y, y - 1);
+        }
         t1 = PORT_NOW();
         sHBlankKeepTicks += t1 - t0;
         HBlank(y, irq, dma);   /* (the last one's: for the DMAs' source, as on the DS) */
@@ -225,16 +266,23 @@ void NitroPort_HBlankLines(void)
     }
     reg_GX_DISPSTAT &= (u16)~REG_GX_DISPSTAT_HBLK_MASK;
     reg_GX_VCOUNT = vcount;
-    NitroPort_LineRegs.active = 0;
-#ifndef HGSS_PROFILE_OFF
-    { u64 tC = PORT_NOW();
-#endif
-    for (y = 1; y < NITRO_PORT_SCREEN_H && !NitroPort_LineRegs.active; y++) {
-        NitroPort_LineRegs.active = memcmp(NitroPort_LineRegs.regs[0][y], NitroPort_LineRegs.regs[0][0], NITRO_LINE_REGS) != 0 ||
-                                    memcmp(NitroPort_LineRegs.regs[1][y], NitroPort_LineRegs.regs[1][0], NITRO_LINE_REGS) != 0;
+#ifdef HGSS_A0_DIAG
+    /* P6: the fused compare and the old scan over all the lines must
+     * agree, on every walk: the old way is computed here and the two
+     * answers compared. (The line-register array itself is unchanged by
+     * the change: the same KeepLine calls, in the same order.) */
+    {
+        int differ = 0;
+
+        for (y = 1; y < NITRO_PORT_SCREEN_H && !differ; y++) {
+            differ = memcmp(NitroPort_LineRegs.regs[0][y], NitroPort_LineRegs.regs[0][0], NITRO_LINE_REGS) != 0 ||
+                     memcmp(NitroPort_LineRegs.regs[1][y], NitroPort_LineRegs.regs[1][0], NITRO_LINE_REGS) != 0;
+        }
+        sHBlankScans++;
+        if (differ != NitroPort_LineRegs.active) {
+            sHBlankScanMismatch++;
+        }
     }
-#ifndef HGSS_PROFILE_OFF
-      sHBlankCmpTicks += PORT_NOW() - tC; }
 #endif
 }
 
@@ -253,6 +301,15 @@ void NitroPort_HBlankSplit2(u64 *refresh, u64 *sw, u64 *cmp)
     if (refresh != NULL) *refresh = sHBlankRefreshTicks;
     if (sw != NULL) *sw = sHBlankSwitchTicks;
     if (cmp != NULL) *cmp = sHBlankCmpTicks;
+}
+#endif
+#ifdef HGSS_A0_DIAG
+/* P6: the walks where the fused compare and the old scan were compared,
+ * and the ones where they disagreed (must be none). */
+void NitroPort_HBlankScanCheck(u64 *walks, u64 *mismatch)
+{
+    if (walks != NULL) *walks = sHBlankScans;
+    if (mismatch != NULL) *mismatch = sHBlankScanMismatch;
 }
 #endif
 

@@ -2993,3 +2993,44 @@ class RomHeaderTests(unittest.TestCase):
         spec.loader.exec_module(verify_rom)
         self.assertEqual(verify_rom.GAME_CODES["IPKE"], "Pokémon HeartGold (USA)")
         self.assertEqual(verify_rom.GAME_CODES["IPGE"], "Pokémon SoulSilver (USA)")
+
+
+class HBlankWalkTests(unittest.TestCase):
+    """P6: the emulated H-blank walk decides "do the lines differ?" as it
+    keeps them, instead of in a separate pass over all 192 lines afterwards
+    (that pass read the whole 43 KB array back from RAM: 0.77 ms of the
+    2.6 ms the phase took on an Old 3DS)."""
+
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+
+    def walk(self):
+        text = (self.NITRO / "port_os.c").read_text()
+        start = text.index("void NitroPort_HBlankLines(void)")
+        end = text.index("\n}\n", start)
+        return text, text[start:end]
+
+    def test_the_compare_is_fused_into_the_copy_loop(self):
+        text, walk = self.walk()
+        # each line is compared with the line before it, as it is kept
+        self.assertIn("LineRegsDiffer(0, y, y - 1)", walk)
+        self.assertIn("LineRegsDiffer(1, y, y - 1)", walk)
+        # the separate scan over all the lines afterwards is gone
+        self.assertNotIn("NITRO_PORT_SCREEN_H && !NitroPort_LineRegs.active", walk)
+        # the copies themselves are unchanged: the renderer reads the same
+        # array as before
+        self.assertIn("KeepLine(y);", walk)
+        self.assertIn("memcpy(NitroPort_LineRegs.regs[0][y], NitroPort_IoReg, NITRO_LINE_REGS);", text)
+
+    def test_the_compare_skips_the_cleared_word(self):
+        # DISPSTAT and VCOUNT (0x04-0x07) are zeroed in every copy, so they
+        # never differ and are not compared
+        text, _ = self.walk()
+        helper = text[text.index("static int LineRegsDiffer("):]
+        helper = helper[:helper.index("\n}\n")]
+        self.assertIn("a[0] != b[0]", helper)
+        self.assertIn("for (i = 2;", helper)
+
+    def test_the_diagnostic_compares_both_ways(self):
+        text, _ = self.walk()
+        self.assertIn("sHBlankScanMismatch", text)
+        self.assertIn("NitroPort_HBlankScanCheck", text)
