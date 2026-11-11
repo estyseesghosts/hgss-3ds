@@ -1,0 +1,83 @@
+# HeartGold: cold boot with a save -> CONTINUE -> Goldenrod field -> walk.
+#
+# The frozen walk script (hg-field-walk.txt) holds each direction for one
+# "every" step, and a button line is held for six frames on the 3DS
+# (hgss/game/app/3ds_input.h), so its legs are taps: they turn the player
+# without walking them. This script holds each direction for 120 frames
+# (twelve entries ten frames apart), so the player actually walks and the
+# camera moves with them.
+#
+# The legs cancel out in direction (down, left, up, right) but not in
+# distance, so the player ends up a few tiles from where they started --
+# enough for the scene to be different, which is what the captures at
+# frames 11400 and 17400 show.
+every: 10
+0 -
+5000 START
+5010 START
+5020 START
+5030 START
+5040 START
+5050 START
+5060 START
+5070 START
+5080 START
+5090 START
+5100 START
+5110 START
+5120 START
+5130 START
+5140 START
+5150 START
+8000 A
+8020 A
+8040 A
+12000 DOWN
+12010 DOWN
+12020 DOWN
+12030 DOWN
+12040 DOWN
+12050 DOWN
+12060 DOWN
+12070 DOWN
+12080 DOWN
+12090 DOWN
+12100 DOWN
+12110 DOWN
+13500 LEFT
+13510 LEFT
+13520 LEFT
+13530 LEFT
+13540 LEFT
+13550 LEFT
+13560 LEFT
+13570 LEFT
+13580 LEFT
+13590 LEFT
+13600 LEFT
+13610 LEFT
+15000 UP
+15010 UP
+15020 UP
+15030 UP
+15040 UP
+15050 UP
+15060 UP
+15070 UP
+15080 UP
+15090 UP
+15100 UP
+15110 UP
+16500 RIGHT
+16510 RIGHT
+16520 RIGHT
+16530 RIGHT
+16540 RIGHT
+16550 RIGHT
+16560 RIGHT
+16570 RIGHT
+16580 RIGHT
+16590 RIGHT
+16600 RIGHT
+16610 RIGHT
+end: 18000

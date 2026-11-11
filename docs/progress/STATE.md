@@ -32,15 +32,30 @@ dropped 0, lag 4; `composes/s` 21.00 → 17.70 and `publishes/s` 60 → 0 are
 the skip working (the compositor's cause census: `scene 176 set 31` →
 `scene 177 set 0` — the 3D's presentation rate is unchanged). The
 diagnostic run reports **0 flat disagreements** over boot → title → field.
-The walk script gives the same picture: **600 skipped, 0 redrawn** while
-walking (the field's movement is in the 3D camera plane, not in the 2D
-layers), drawer 2.70 → **0.89 ms/frame**, core 0 idle 41.1% → 51.9% and
-core 1 idle 6.5% → 8.7% (the compositor shares core 1 with the geometry
-worker: 56 fewer composes a window means less preemption for it). The
-**OFF build agrees** (drawer 2.72 → 0.87 ms/frame, and its own log carries
-the flatskip line): the skip is a behaviour change, not instrumentation.
-The plan's scroll-only follow-up is **not needed** for this scene — there
-are no scroll-only frames.
+The walk script gives the same skip rate (595-600 skipped, 0 redrawn per
+600-tick window), drawer 2.70 → **0.89 ms/frame**, core 0 idle 41.1% →
+51.9% and core 1 idle 6.5% → 8.7% (the compositor shares core 1 with the
+geometry worker: 56 fewer composes a window means less preemption for
+it). The **OFF build agrees** (drawer 2.72 → 0.87 ms/frame on both
+scripts, and its own log carries the flatskip line): the skip is a
+behaviour change, not instrumentation.
+
+**A correction the walk numbers needed.** A button line is held for only
+**six frames** on the 3DS (`hgss/game/app/3ds_input.h`; the script's
+`every:` is ignored), so the frozen walk script's legs are *taps*: they
+turn the player without walking them — the 3D geometry counters are
+byte-identical across every leg. The frozen walk A/B is therefore a second
+*rest* measurement over frames 12000-15000, and is reported as such. A
+second script (`tests/inputs/hg-field-walk2.txt`, 120-frame holds) really
+walks the player — the camera moves, the geometry counters move with it,
+captures at frames 11400 and 17400 show two different parts of Goldenrod
+(`docs/bench/captures/2026-11-11-p3/`) — and **the skip still fires on
+600 of 600 passes**: the field's ground and characters are 3D, so the top
+screen's 2D layers do not change when the player walks (`why scroll 0`
+throughout). The plan's scroll-only follow-up is therefore **not needed**
+for this scene. The scripted presses themselves are proven to reach the
+game: the title screen is drawn every frame through frame 8400 and the
+field is up by 9000, exactly after the scripted A presses at 8000-8040.
 
 **One soundness fix, found by reading the wiki's case study of this port:
 the retained VRAM signature was taken *after* the draw.** The tiles are read
