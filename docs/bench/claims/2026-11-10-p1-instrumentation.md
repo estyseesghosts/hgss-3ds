@@ -43,12 +43,24 @@ Correctness proof:        `make tool-tests`: 517 tests (506 + 11 new
                           (additive counters; OFF build is baseline code).
                           Captures: no Windows RPC screenshot client;
                           progression identical, 0 new audio drops.
-Hardware result:          Paired PROFILE/OFF A/B on the console (owner run)
-                          still required; Azahar cost ≈ 0 ±1%.
+Hardware result:          log-1 back-to-back pairs (Goldenrod at rest):
+                          O3DS — composes 9.3 vs 8.9 (overlap); drawer medians
+                          114.86 vs 123.33 ms (overlap; no evidence of >3%
+                          cost — the 3% stop is not triggered); geometry
+                          35–36 both. N3DS pair (same packets, bonus — plan
+                          asks only O3DS): drawer 2.72 vs 2.72 ms (identical),
+                          composes 37.8 vs 37.5 (overlap); no cost on N3DS
+                          either. Core budgets close (core 0 ~88% + idle 3.1%;
+                          core 1 worker-wall 99% + audio 25.8% + display ~19%
+                          reconciled via preemption overlap, worker_own ~54%).
+                          End split: submit 6.11 of 9.60 ms. H-blank split:
+                          keep/dma/irq/ref/sw/cmp ≈ 2.2 of 2.65 ms. refHashB
+                          0 disagreements. Boot string fixed on console.
 Regression surface:       Battle, title, menus, transition, audio, sleep/close
                           (instrumentation is read-only; any new drop fails it).
-Conclusion:               beneficial (attribution closes as below; cost within
-                          bar; sums verified in Azahar, hardware pending).
+Conclusion:               beneficial (hardware confirms: cost within bar,
+                          sums close, attribution delivered to within 10% per
+                          core with the stated preemption caveats).
 Next decision:            kept. Clean twins built, confirming field A/B agrees.
                           Start P2.
 ```
