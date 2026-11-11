@@ -50,6 +50,13 @@ PHASE_NEW = PHASE_OLD.replace(
     "end 0.21; skip",
     "end 0.21 (xfer 0.05 flight 0.10 lock 0.03 submit 0.02); skip") + \
     "; cause scene 100 set 20 forced 0 other 5"
+FLAT_LINE = (
+    "[1200] [perf] flatskip: 540 skipped, 60 redrawn, 0 not-modelled, 0 disagreements"
+)
+FLAT_LINE_WHY = (
+    "[1200] [perf] flatskip: 540 skipped, 60 redrawn, 0 not-modelled, 0 disagreements, "
+    "why small 50 vram 5 scroll 5 buffers 0"
+)
 
 
 def sample(*lines):
@@ -132,6 +139,38 @@ class NewLineTests(unittest.TestCase):
         self.assertEqual(
             new["cause_scene"] + new["cause_set"] + new["cause_forced"] + new["cause_other"],
             125)
+
+
+class FlatSkipTests(unittest.TestCase):
+    """P3: the flat picture's passes (skipped / redrawn / not-modelled)."""
+
+    def test_old_log_has_no_flat_fields(self):
+        row = sample(OLD_FRAMETIME)
+        self.assertNotIn("flat_skip", row)
+        self.assertIsNone(bench_report.row_values(row)["flat_skip"])
+
+    def test_flat_line_parses(self):
+        row = sample(OLD_FRAMETIME, FLAT_LINE)
+        self.assertEqual(row["flat_skip"], 540)
+        self.assertEqual(row["flat_redraw"], 60)
+        self.assertEqual(row["flat_not_modelled"], 0)
+        self.assertEqual(row["flat_disagree"], 0)
+
+    def test_flat_fields_in_row_values(self):
+        values = bench_report.row_values(sample(OLD_FRAMETIME, FLAT_LINE))
+        self.assertEqual(values["flat_skip"], 540)
+        self.assertEqual(values["flat_redraw"], 60)
+        self.assertEqual(values["flat_not_modelled"], 0)
+        self.assertEqual(values["flat_disagree"], 0)
+        self.assertIsNone(values["flat_why_small"])
+
+    def test_flat_why_fields(self):
+        values = bench_report.row_values(sample(OLD_FRAMETIME, FLAT_LINE_WHY))
+        self.assertEqual(values["flat_skip"], 540)
+        self.assertEqual(values["flat_why_small"], 50)
+        self.assertEqual(values["flat_why_vram"], 5)
+        self.assertEqual(values["flat_why_scroll"], 5)
+        self.assertEqual(values["flat_why_buffers"], 0)
 
 
 class ReportTests(unittest.TestCase):

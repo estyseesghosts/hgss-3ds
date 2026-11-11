@@ -110,6 +110,36 @@ typedef struct SplitReuse {
 static SplitReuse sSplitReuse[2];
 static u32 sCommittedTextOnly[2];
 static u32 sSplitPictureSerial[2];
+/* P3: the flat picture's change-detection state. A flat picture (every
+ * layer a GPU take or proven transparent) is re-rendered on every pass
+ * today; the pair of signatures below and the committed BGs' scroll say
+ * when it is the same picture, so the pass can be skipped. The full-VRAM
+ * hash is not a fallback here: a pass the referenced set cannot model
+ * keeps today's path (that hash is the cost this packet removes). */
+typedef struct FlatReuse {
+    int valid;       /* a flat render stored the pair */
+    int vramValid;   /* the referenced-range signature modelled the frame */
+    u32 small, vram;
+    u32 mask;        /* the committed text BGs (their scroll is checked apart) */
+    u32 scroll[4];
+} FlatReuse;
+static FlatReuse sFlatReuse[2];
+/* P3: what the flat passes did, and what the diagnostic found. Read by
+ * the shell from another thread: added atomically, read as a delta. */
+static unsigned sFlatSkip[2], sFlatRedraw[2], sFlatNotModelled[2], sFlatDisagree[2];
+/* Why a flat pass did not skip: the picture changed (small = registers,
+ * palettes, OAM, layout; vram = the bytes the frame's layers can read;
+ * scroll = a committed BG moved; buffers = the drawer's buffers changed). */
+static unsigned sFlatWhySmall[2], sFlatWhyVram[2], sFlatWhyScroll[2], sFlatWhyBuffers[2];
+/* Why a flat pass did not skip. */
+enum {
+    FLAT_WHY_NONE = 0,
+    FLAT_WHY_SMALL,      /* the registers, palettes, OAM or the layout */
+    FLAT_WHY_VRAM,       /* the bytes the frame's layers can read */
+    FLAT_WHY_SCROLL,     /* a committed BG moved */
+    FLAT_WHY_BUFFERS     /* the drawer's buffers changed */
+};
+#define FLAT_COUNT_ADD(counter) __atomic_fetch_add(&(counter), 1u, __ATOMIC_RELAXED)
 /* IfChanged may resolve an empty software picture after authoritative GPU
  * commit. Forced Split renders retain the scanline reference implementation. */
 #define R2D_TRY_FLAT 0x80000000u
@@ -6639,6 +6669,24 @@ static u32 EngineVramSignature(int engine, const u8 *io, const u8 *oam)
     return EngineFullVramSignature(engine, io);
 }
 
+/* P3: the referenced-range signature only. Unlike EngineVramSignature this
+ * never falls back to the full-VRAM hash: a frame the referenced set does
+ * not model is reported as "not modelled" and the caller keeps today's
+ * path (hashing 864 KB to prove "nothing changed" costs as much as the
+ * pass it would replace). */
+static int EngineReferencedOnly(int engine, const u8 *io, const u8 *oam, u32 *out)
+{
+    const u8 *pltt = oam == sState[engine].oam ? sState[engine].pltt : NitroPort_Pltt;
+    int modelled = 1;
+    u32 ref = EngineReferencedSignature(engine, io, oam, pltt, &modelled);
+
+    if (!modelled) {
+        return 0;
+    }
+    *out = ref;
+    return 1;
+}
+
 /* L3: engine B's reference set.  This deliberately follows the same address
  * calculations as the rasterizer: map extents, the tiles named by those
  * maps, enabled extended palettes, and graphics for visible OAM entries.
@@ -7691,6 +7739,36 @@ void NitroPort_Render2DRefHashStats(u64 *refBytes, u64 *fullBytes, unsigned *dis
     if (disagreements) *disagreements = sRefHashDisagreements;
 }
 
+/* P3: what the flat passes did. skipped: the picture was the same and the
+ * pass was skipped. redrawn: it changed, or the frame was not modelled by
+ * the referenced-range signature (notModelled counts those). The
+ * diagnostic's disagreements: a pass that published something else than
+ * the picture the skip would have kept. The why* fields say which input
+ * differed when a pass did not skip. Cumulative: the caller differences
+ * them. */
+void NitroPort_Render2DFlatStats(NitroFlatStats *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->skipped = __atomic_load_n(&sFlatSkip[0], __ATOMIC_RELAXED) +
+                   __atomic_load_n(&sFlatSkip[1], __ATOMIC_RELAXED);
+    out->redrawn = __atomic_load_n(&sFlatRedraw[0], __ATOMIC_RELAXED) +
+                   __atomic_load_n(&sFlatRedraw[1], __ATOMIC_RELAXED);
+    out->notModelled = __atomic_load_n(&sFlatNotModelled[0], __ATOMIC_RELAXED) +
+                       __atomic_load_n(&sFlatNotModelled[1], __ATOMIC_RELAXED);
+    out->disagreements = __atomic_load_n(&sFlatDisagree[0], __ATOMIC_RELAXED) +
+                         __atomic_load_n(&sFlatDisagree[1], __ATOMIC_RELAXED);
+    out->whySmall = __atomic_load_n(&sFlatWhySmall[0], __ATOMIC_RELAXED) +
+                    __atomic_load_n(&sFlatWhySmall[1], __ATOMIC_RELAXED);
+    out->whyVram = __atomic_load_n(&sFlatWhyVram[0], __ATOMIC_RELAXED) +
+                   __atomic_load_n(&sFlatWhyVram[1], __ATOMIC_RELAXED);
+    out->whyScroll = __atomic_load_n(&sFlatWhyScroll[0], __ATOMIC_RELAXED) +
+                     __atomic_load_n(&sFlatWhyScroll[1], __ATOMIC_RELAXED);
+    out->whyBuffers = __atomic_load_n(&sFlatWhyBuffers[0], __ATOMIC_RELAXED) +
+                      __atomic_load_n(&sFlatWhyBuffers[1], __ATOMIC_RELAXED);
+}
+
 static u32 EngineSignature(int engine)
 {
     return (EngineSmallSignature(engine, 0, 0, 0, 0) * 31u) ^
@@ -7720,6 +7798,115 @@ static u32 SplitLayoutSignature(int engine, const NitroRender2DSplit *split)
     return h;
 }
 
+/* P3: keep the pair that says "this flat picture is unchanged". The small
+ * signature covers the registers (the committed BGs' scroll left out),
+ * the palettes, the OAM, the VRAM bank control, the per-line registers
+ * and the layout; the VRAM signature covers the bytes the frame's layers
+ * can read. The scroll is stored apart: a scrolled BG is a new picture. */
+static void FlatStore(int engine, u32 layout, int snapshot, u32 mask)
+{
+    int e = engine ? 1 : 0;
+    FlatReuse *f = &sFlatReuse[e];
+    const u8 *io = snapshot ? sState[e].io : NitroPort_IoReg;
+    const u8 *oam = snapshot ? sState[e].oam : NitroPort_Oam;
+    u32 vram = 0;
+    int bg;
+
+    f->valid = 1;
+    f->mask = mask;
+    f->small = (EngineSmallSignature(e, snapshot, mask, 0, 0) * 31u) ^ layout;
+    f->vramValid = sRefHashA &&
+                   EngineReferencedOnly(e, io + (e ? 0x1000 : 0), oam, &vram);
+    if (f->vramValid) {
+        f->vram = vram;
+    }
+    for (bg = 1; bg < 4; bg++) {
+        f->scroll[bg] = Rd32(io, 0x10 + bg * 4);
+    }
+}
+
+/* P3: is the flat picture the same as the one the last flat pass drew?
+ * Every input the flat picture depends on is covered by the two
+ * signatures or by the scroll check (the dependency list is in the
+ * claim sheet, docs/bench/claims/2026-11-10-p3-flat-skip.md). *why says
+ * which input differed (0: the picture is the same). */
+static int FlatUnchanged(int engine, const NitroRender2DSplit *split, int *why)
+{
+    int e = engine ? 1 : 0;
+    FlatReuse *f = &sFlatReuse[e];
+    const u8 *io = split->snapshot ? sState[e].io : NitroPort_IoReg;
+    const u8 *oam = split->snapshot ? sState[e].oam : NitroPort_Oam;
+    u32 small, vram = 0;
+    int bg;
+
+    *why = FLAT_WHY_NONE;
+    if (!f->valid || !sRefHashA) {
+        /* Nothing stored, or the referenced-range signature is off (the
+         * skip rides refHashA: without it there is no VRAM signature that
+         * could stand in for the full hash, which must not be paid here). */
+        return 0;
+    }
+    small = (EngineSmallSignature(e, split->snapshot, f->mask, 0, 0) * 31u) ^
+            SplitLayoutSignature(e, split);
+    if (small != f->small) {
+        *why = FLAT_WHY_SMALL;
+        return 0;
+    }
+    *why = FLAT_WHY_VRAM;
+    if (!EngineReferencedOnly(e, io + (e ? 0x1000 : 0), oam, &vram)) {
+        FLAT_COUNT_ADD(sFlatNotModelled[e]);
+        return 0;
+    }
+    if (!f->vramValid || vram != f->vram) {
+        *why = FLAT_WHY_VRAM;
+        return 0;
+    }
+    *why = FLAT_WHY_SCROLL;
+    for (bg = 1; bg < 4; bg++) {
+        if ((f->mask & (1u << bg)) && Rd32(io, 0x10 + bg * 4) != f->scroll[bg]) {
+            return 0;
+        }
+    }
+    *why = FLAT_WHY_NONE;
+    return 1;
+}
+
+/* P3: the diagnostic's comparison: what this pass would publish against
+ * what the last flat pass published. A difference means the skip would
+ * have left a stale picture on the screen. */
+static int FlatMetaDiffers(const NitroRender2DSplit *a, const NitroRender2DSplit *b)
+{
+    int slot;
+
+    if (a->nGpuQuads != b->nGpuQuads || a->gpuQuadsBehind != b->gpuQuadsBehind ||
+        a->has3d != b->has3d || a->scroll3d != b->scroll3d ||
+        a->scroll3dLines != b->scroll3dLines || a->tint3d != b->tint3d ||
+        a->eva != b->eva || a->evb != b->evb || a->evy != b->evy ||
+        a->backdrop != b->backdrop || a->flatCpuPlanes != b->flatCpuPlanes) {
+        return 1;
+    }
+    for (slot = 0; slot < NITRO_GPU_BG_SLOTS; slot++) {
+        if (a->gpuBgKey[slot] != b->gpuBgKey[slot] ||
+            a->gpuBgSlotBg[slot] != b->gpuBgSlotBg[slot] ||
+            a->gpuBgW[slot] != b->gpuBgW[slot] || a->gpuBgH[slot] != b->gpuBgH[slot] ||
+            a->gpuBgWrap[slot] != b->gpuBgWrap[slot]) {
+            return 1;
+        }
+    }
+    if (a->nGpuQuads > 0 &&
+        memcmp(a->gpuQuads, b->gpuQuads,
+               (size_t)a->nGpuQuads * sizeof(a->gpuQuads[0])) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+/* P3: what the last flat pass published, and a copy of it to compare
+ * against (the diagnostic only; the flat path is engine A's). */
+static NitroRender2DSplit sFlatMeta;
+static NitroRender2DSplit sFlatScratch;
+static int sFlatMetaValid;
+
 static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *split,
                          u32 layout, int snapshot)
 {
@@ -7728,6 +7915,13 @@ static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *spli
     const u8 *io = snapshot ? sState[e].io : NitroPort_IoReg;
     u32 mask = sCommittedTextOnly[e];
 
+    if (sRefHashDiagnostic && e == 0) {
+        /* P3: what this pass published (the diagnostic compares it with
+         * the next pass's). Kept whatever the picture is: a flat picture
+         * that stops being flat must not be compared against a stale one. */
+        sFlatMeta = *split;
+        sFlatMetaValid = 1;
+    }
     if (!mask || e != 0) {
         return;
     }
@@ -7738,7 +7932,10 @@ static void RememberSplit(int engine, u16 *under, const NitroRender2DSplit *spli
     if (r->flat) {
         /* The next call will freshly validate/resolve this picture, NOT
          * reuse its pixels or infer that VRAM is unchanged. No full-VRAM
-         * signature is needed to certify an unchanged-memory claim here. */
+         * signature is needed to certify an unchanged-memory claim here.
+         * P3: the pair that says "the same flat picture" is kept, so the
+         * next pass can skip the whole validation when nothing changed. */
+        FlatStore(engine, layout, snapshot, mask);
         r->valid = 1;
         return;
     }
@@ -7898,15 +8095,56 @@ int NitroPort_Render2DSplitIfChanged(int engine, u16 *under, NitroRender2DSplit 
     }
 
     if (r->valid && r->flat) {
-        /* Always rebuild current metadata and refill the software planes.
-         * New text, OAM, layout, windows, effects or buffer identities go
-         * through the full current validators; if flat admission fails the
-         * normal scanlines run. Never skip using last frame's emptiness. */
+        /* P3: the flat picture (every layer a GPU take or proven
+         * transparent) is the same when its two signatures and the
+         * committed BGs' scroll are the same: the pass is then skipped
+         * and the retained layers stay on screen (the caller publishes
+         * them again). Otherwise the pass runs as before: current
+         * metadata is rebuilt and the software planes refilled. New text,
+         * OAM, layout, windows, effects or buffer identities go through
+         * the full current validators; if flat admission fails the normal
+         * scanlines run. Never skip using last frame's emptiness. */
+        int why = FLAT_WHY_NONE;
+        int same;
+
+        if (r->under == under && r->over == split->over && r->alpha == split->overAlpha) {
+            same = FlatUnchanged(engine, split, &why);
+        } else {
+            same = 0;
+            why = FLAT_WHY_BUFFERS;
+        }
+        if (!same) {
+            switch (why) {
+            case FLAT_WHY_SMALL: FLAT_COUNT_ADD(sFlatWhySmall[e]); break;
+            case FLAT_WHY_VRAM: FLAT_COUNT_ADD(sFlatWhyVram[e]); break;
+            case FLAT_WHY_SCROLL: FLAT_COUNT_ADD(sFlatWhyScroll[e]); break;
+            case FLAT_WHY_BUFFERS: FLAT_COUNT_ADD(sFlatWhyBuffers[e]); break;
+            default: break;
+            }
+        }
+        if (same && !sRefHashDiagnostic) {
+            FLAT_COUNT_ADD(sFlatSkip[e]);
+            return 0;
+        }
 #ifdef HGSS_A0_DIAG
         sA0Redraw.flat[e]++;
         sA0Redraw.scanlines[e] += 192;
 #endif
+        if (same && sRefHashDiagnostic && sFlatMetaValid) {
+            sFlatScratch = sFlatMeta;
+        }
+        FLAT_COUNT_ADD(sFlatRedraw[e]);
         Render(engine, under, split, R2D_TRY_FLAT);
+        if (same && sRefHashDiagnostic && sFlatMetaValid) {
+            /* The diagnostic: the pass ran, so compare what it published
+             * with what the last flat pass published. A difference means
+             * the skip would have left a stale picture on the screen. */
+            if (FlatMetaDiffers(&sFlatScratch, split)) {
+                FLAT_COUNT_ADD(sFlatDisagree[e]);
+                NitroPort_Log("[2d] flat disagreement #%u: the pass published something else",
+                              (unsigned)__atomic_load_n(&sFlatDisagree[e], __ATOMIC_RELAXED));
+            }
+        }
         return 1;
     }
     if (r->valid && r->under == under && r->over == split->over && r->alpha == split->overAlpha) {

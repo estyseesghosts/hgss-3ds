@@ -215,6 +215,23 @@ void NitroPort_Render2DRedrawStats(int engine, NitroRedrawStats *out);
  * signature vs the full-hash path, and diagnostic disagreements. */
 void NitroPort_Render2DRefHashStats(uint64_t *refBytes, uint64_t *fullBytes,
                                     unsigned *disagreements);
+/* P3: the flat picture's passes: skipped (the picture was the same), and
+ * redrawn (it changed, or the frame was not modelled by the
+ * referenced-range signature: notModelled counts those). The diagnostic's
+ * disagreements: a pass that published something else than the picture the
+ * skip would have kept. The why* fields say which input differed when a
+ * pass did not skip. Cumulative: the caller differences them. */
+typedef struct NitroFlatStats {
+    uint32_t skipped;
+    uint32_t redrawn;
+    uint32_t notModelled;
+    uint32_t disagreements;
+    uint32_t whySmall;    /* the registers, palettes, OAM or the layout */
+    uint32_t whyVram;     /* the bytes the frame's layers can read */
+    uint32_t whyScroll;   /* a committed BG moved */
+    uint32_t whyBuffers;  /* the drawer's buffers changed */
+} NitroFlatStats;
+void NitroPort_Render2DFlatStats(NitroFlatStats *out);
 
 /* Slice S5 reject reasons: why a text BG stays on the software path.
  * Indices into NitroRender2DProfile.gpuBgReject (GpuBgOf's checks, in

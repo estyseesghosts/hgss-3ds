@@ -4,6 +4,44 @@
 at the commit in `platinum.lock` (GPL-3.0). Everything here is Platinum's
 except the changes below.
 
+## 5. Flat-picture skip (`nitro/src/port_render2d.c`)
+
+Added 2026-11-10 from the Old-3DS hardware logs (the drawer's top pass was
+50 ms of a core with zero rasterised lines: it re-validated an unchanged
+picture every pass).
+
+In the field every layer of the top screen is a GPU take or proven
+transparent ("flat"), so the drawer's CPU planes are the backdrop and an
+empty overlay: the picture's *pixels* do not change. What the pass did was
+re-walk every text BG's map and tiles, re-decode the edge pixels and refill
+the two planes -- all of it to arrive at the same picture.
+
+`NitroPort_Render2DSplitIfChanged()` now keeps the pair of signatures that
+says "the same picture" (`EngineSmallSignature` with the committed text BGs
+plus `SplitLayoutSignature`, and the referenced-range VRAM signature) and the
+committed BGs' scroll, and skips the pass when all three are unchanged. The
+retained layers stay on screen and the caller publishes them again.
+
+Boundaries, on purpose:
+
+- The referenced-range signature is used **only** when it models the frame;
+  there is no full-VRAM fallback here (hashing 864 KB to prove "nothing
+  changed" costs as much as the pass it replaces). A frame it cannot model
+  keeps today's path.
+- The skip needs the same under/over/overAlpha buffers the picture was drawn
+  into, like the existing reuse branch.
+- A committed BG whose scroll moved is **not** unchanged: that pass redraws.
+- The skip is in both builds: it is a behaviour change, not instrumentation
+  (the OFF build is the timing build).
+- The diagnostic (`refHashDiag`) always runs the pass and compares what it
+  published with what the last flat pass published (quad count, quad
+  contents, slot keys, backdrop, has3d, scroll3d, tint3d, eva/evb/evy, flat
+  flag); any disagreement is counted and logged.
+
+`NitroPort_Render2DFlatStats()` exposes the counters (skipped, redrawn,
+not-modelled, disagreements, and which input differed when a pass did not
+skip); the shell prints them as `[perf] flatskip:`.
+
 ## 4. Referenced-range change detection (`nitro/src/port_render2d.c`)
 
 Added 2026-11-10 from the first Old-3DS hardware logs. Two engines, two

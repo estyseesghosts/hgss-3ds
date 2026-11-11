@@ -64,6 +64,9 @@ COMPOSEPHASE = re.compile(
     r"(?: \(xfer ([\d.]+) flight ([\d.]+) lock ([\d.]+) submit ([\d.]+)\))?"
     r"; skip ([\d.]+) ms/pass(?:; cause scene (\d+) set (\d+) forced (\d+) other (\d+))?")
 GPUBG = re.compile(r"\[perf\] gpubg: taken (\d+),")
+FLATSKIP = re.compile(
+    r"\[perf\] flatskip: (\d+) skipped, (\d+) redrawn, (\d+) not-modelled, "
+    r"(\d+) disagreements(?:, why small (\d+) vram (\d+) scroll (\d+) buffers (\d+))?")
 MEM = re.compile(
     r"\[perf\] mem: linear_free=(\d+) KB game_heap_used=(\d+) KB")
 MEM_LOW = re.compile(r"\[perf\] mem: linear low-water (\d+) KB")
@@ -196,6 +199,18 @@ def parse_log(text: str) -> list[dict[str, object]]:
         if match:
             current["gpubg_taken"] = int(match.group(1))
             continue
+        match = FLATSKIP.search(line)
+        if match:
+            current["flat_skip"] = int(match.group(1))
+            current["flat_redraw"] = int(match.group(2))
+            current["flat_not_modelled"] = int(match.group(3))
+            current["flat_disagree"] = int(match.group(4))
+            if match.group(5) is not None:
+                current["flat_why_small"] = int(match.group(5))
+                current["flat_why_vram"] = int(match.group(6))
+                current["flat_why_scroll"] = int(match.group(7))
+                current["flat_why_buffers"] = int(match.group(8))
+            continue
         match = MEM.search(line)
         if match:
             current["linear_free_kb"] = int(match.group(1))
@@ -254,6 +269,7 @@ COLUMNS = (
     ("idle_c1", "idle c1%"),
     ("offers_dropped", "offers drop"),
     ("cause_scene", "cause scene"),
+    ("flat_skip", "flat skip"),
 )
 
 
@@ -299,6 +315,15 @@ def row_values(row: dict[str, object]) -> dict[str, object]:
         "cause_set": row.get("cause_set"),
         "cause_forced": row.get("cause_forced"),
         "cause_other": row.get("cause_other"),
+        # P3: the flat picture's passes (None in older logs).
+        "flat_skip": row.get("flat_skip"),
+        "flat_redraw": row.get("flat_redraw"),
+        "flat_not_modelled": row.get("flat_not_modelled"),
+        "flat_disagree": row.get("flat_disagree"),
+        "flat_why_small": row.get("flat_why_small"),
+        "flat_why_vram": row.get("flat_why_vram"),
+        "flat_why_scroll": row.get("flat_why_scroll"),
+        "flat_why_buffers": row.get("flat_why_buffers"),
     }
     if values["drawer_ms"] is not None:
         values["drawer_ms"] = round(float(values["drawer_ms"]), 2)

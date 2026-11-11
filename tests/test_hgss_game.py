@@ -2895,6 +2895,58 @@ class ThreeDsxValidationTests(unittest.TestCase):
                     os.environ["DEVKITPRO"] = old
 
 
+class FlatSkipTests(unittest.TestCase):
+    """P3: the drawer's flat picture (every layer a GPU take or proven
+    transparent) is skipped when nothing it depends on changed. On an Old
+    3DS that validation was the drawer's 50 ms a pass."""
+
+    NITRO = REPO / "3ds_port" / "nitro" / "src"
+    HEADER = REPO / "3ds_port" / "nitro" / "include" / "nitro_port_render2d.h"
+    APP = REPO / "hgss" / "game" / "app"
+
+    def branch(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        return text, text[text.index("if (r->valid && r->flat) {"):
+                          text.index("if (r->valid && r->under == under")]
+
+    def test_flat_branch_needs_both_signatures(self):
+        text, branch = self.branch()
+        self.assertIn("FlatUnchanged(engine, split, &why)", branch)
+        self.assertIn("FLAT_COUNT_ADD(sFlatSkip[e]);", branch)
+        # Every other case renders as before.
+        self.assertIn("Render(engine, under, split, R2D_TRY_FLAT);", branch)
+        unchanged = text[text.index("static int FlatUnchanged("):
+                         text.index("static int FlatMetaDiffers(")]
+        self.assertIn("EngineReferencedOnly(", unchanged)
+        self.assertIn("EngineSmallSignature(", unchanged)
+        # A scrolled committed BG is a new picture: the scroll is checked
+        # on its own, not folded into the signatures.
+        self.assertIn("Rd32(io, 0x10 + bg * 4) != f->scroll[bg]", unchanged)
+
+    def test_referenced_signature_has_no_full_hash_fallback(self):
+        text = (self.NITRO / "port_render2d.c").read_text()
+        helper = text[text.index("static int EngineReferencedOnly("):
+                      text.index("/* L3: engine B's reference set.")]
+        self.assertNotIn("EngineFullVramSignature", helper)
+        self.assertIn("if (!modelled) {", helper)
+
+    def test_both_builds_skip(self):
+        # The skip is a behaviour change, not instrumentation: the OFF build
+        # (the timing build) must skip too, or the two builds would not
+        # agree on the picture.
+        _, branch = self.branch()
+        self.assertNotIn("HGSS_PROFILE_OFF", branch)
+
+    def test_shell_reports_the_flat_passes(self):
+        text = (self.APP / "main_3ds.c").read_text()
+        self.assertIn('"[perf] flatskip: %u skipped, %u redrawn, %u not-modelled,'
+                      ' %u disagreements, why small %u vram %u scroll %u buffers %u"',
+                      text)
+        self.assertIn("NitroPort_Render2DFlatStats(", text)
+        header = self.HEADER.read_text()
+        self.assertIn("void NitroPort_Render2DFlatStats(", header)
+
+
 class RomHeaderTests(unittest.TestCase):
     """The cartridge header the shell hands the game."""
 

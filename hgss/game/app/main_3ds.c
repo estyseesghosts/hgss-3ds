@@ -1570,6 +1570,8 @@ static unsigned sPerfDrawDropped;
 #endif
 static PerfDisplay sPerfDisplay;
 static PerfGeometry sPerfGeometry;
+/* P3: the flat picture's pass baselines (see the [perf] flatskip line). */
+static NitroFlatStats sPerfFlat;
 #if defined(HGSS_A0_DIAG) || !defined(HGSS_PROFILE_OFF)
 /* P1: idle-probe baselines (see the [perf] idle line). */
 static u64 sPerfIdleCount[2], sPerfIdleSpan;
@@ -2231,6 +2233,24 @@ static void PerfLog(u64 now)
             NitroPort_Render2DRefHashStats(&refB, &fullB, &disag);
             NitroPort_Log("[perf] refHashB: %llu referenced bytes, %llu full-hash bytes, %u disagreements",
                           (unsigned long long)refB, (unsigned long long)fullB, disag);
+        }
+        /* P3: the flat picture's passes. skipped: the picture was the same
+         * and the pass was skipped; redrawn: it changed, or the frame was
+         * not modelled by the referenced-range signature (not-modelled
+         * counts those); disagreements: the diagnostic's; why: which input
+         * differed when a pass did not skip. */
+        {
+            NitroFlatStats fs;
+
+            NitroPort_Render2DFlatStats(&fs);
+            NitroPort_Log("[perf] flatskip: %u skipped, %u redrawn, %u not-modelled, %u disagreements, why small %u vram %u scroll %u buffers %u",
+                          fs.skipped - sPerfFlat.skipped, fs.redrawn - sPerfFlat.redrawn,
+                          fs.notModelled - sPerfFlat.notModelled,
+                          fs.disagreements - sPerfFlat.disagreements,
+                          fs.whySmall - sPerfFlat.whySmall, fs.whyVram - sPerfFlat.whyVram,
+                          fs.whyScroll - sPerfFlat.whyScroll,
+                          fs.whyBuffers - sPerfFlat.whyBuffers);
+            sPerfFlat = fs;
         }
         /* Half-A L4/L5: band takes vs whole renders; uploaded bytes. */
         if (sIniPartialB || sIniPartialBDiag) {
