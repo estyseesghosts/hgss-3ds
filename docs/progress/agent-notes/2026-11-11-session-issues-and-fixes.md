@@ -47,6 +47,7 @@ faster. The previous session's issues are in
 | 30 | The capture runner lost the comma between two frame numbers and waited for a frame that never comes | Take the frames as one string and split them inside the script; read the runner's own output |
 | 31 | The capture stole the owner's focus by activating the emulator window | `PrintWindow` reads the window without activating it; no fullscreen, no focus change |
 | 32 | The A0 build failed with "implicit declaration of NitroPort_HBlankScanCheck" | The shell declares the port's functions locally, not through `nitro_port.h`: the declaration goes there too |
+| 33 | Six capture PNGs broke the repository's content gate ("image/audio not on the allowlist") | They are the game's pixels: keep them out of the tree, keep the script (`tools/capture_bench_frames.ps1`) and the descriptions, and say so |
 
 ## 1. A multi-line command stops after its first statement
 
@@ -319,6 +320,25 @@ or the game ignores it in that state — and the cheap way to tell them
 apart is to ask what the game *does* use. (And to check the effect the
 press was supposed to have: a press with no effect cannot be told apart
 from a press that was never delivered.)
+
+## 10. A screenshot of the game is game content
+
+**Symptom.** The repository's own content gate (`tools/check_repo_content.py`)
+failed the six capture PNGs with "image/audio not on the allowlist" — the
+allowlist is for original Platinum/shell assets, "not game content".
+
+**Resolution.** The captures *are* the game's pixels (the field's tiles, the
+party HUD), so the rule says what it says: they do not go in the tree. They
+were removed from the index and from the working copy; the script that
+takes them (`tools/capture_bench_frames.ps1`) and the descriptions of what
+each one shows went in instead, so the evidence is reproducible on demand
+rather than stored.
+
+**Rule.** "The plan wants captures" does not override the repository's
+content gate — the gate is there so the tree never holds the game's assets.
+When the two disagree, the evidence goes *outside* the tree (a script, a
+description, a log line) and the gate stays. Run `tools/check_repo_content.py`
+before committing anything binary.
 
 ## Wiki feedback (what the coffeepot wiki still lacks, from this session)
 

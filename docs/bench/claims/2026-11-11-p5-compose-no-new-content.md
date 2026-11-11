@@ -201,10 +201,8 @@ instead of skipping).
 - The accept's cases: `tests/inputs/hg-field-dialog.txt` (the menu),
   `tests/inputs/hg-field-textbox.txt` (walking into the signpost),
   `tests/inputs/hg-field-pokedex.txt` (SELECT) — Azahar, the P3 build;
-  captures under `docs/bench/captures/2026-11-11-p5/`
-  (`field-at-rest-frame-11400.png`, `pause-menu-opening-frame-12600.png`,
-  `field-after-walking-up-frame-12600.png`,
-  `field-unchanged-after-select-frame-12600.png`).
+  captures with `tools/capture_bench_frames.ps1` (the images are game
+  content, so the repository's content gate keeps them out of the tree).
 - Hardware packets: `build/bench/sd-hg-p3/`, `build/bench/sd-hg-p3-off/`
   (candidate) with `build/bench/sd-hg-p1/`, `build/bench/sd-hg-p1-off/`
   (baseline).
