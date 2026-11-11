@@ -390,7 +390,9 @@ Three things the wiki could take from this session:
   re-measurement, after the race fix, says 526 tests and **47** distinct
   failing names: the same set by name — the earlier "54" also counted four
   stderr lines that a case-insensitive `Select-String` swept up. The names
-  are the comparison; the count is not.)
+  are the comparison; the count is not.) The last measurement of this
+  session: **529 tests, the same 47 failing names** (the four extra are
+  P3's and P6's own tests).
 - **One change per commit.** P2c's verdict (documentation) and P3's
   behaviour change are separate commits, so the P3 artifact is cited against
   a clean parent.
